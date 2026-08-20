@@ -34,6 +34,12 @@ func TestHTTPServerPeerRouting(t *testing.T) {
 	t.Logf("status=%d body=%s", rec.Code, rec.Body.String())
 }
 
+func TestWebUIFormControlsFitTheirContainers(t *testing.T) {
+	if !strings.Contains(webUIHTML, ".form select,.form input,.form textarea{width:100%;min-width:0}") {
+		t.Fatal("form controls do not opt into the form column width")
+	}
+}
+
 func TestHTTPServerWebUI(t *testing.T) {
 	cfg, err := config.Load("../../test/router-a.yaml")
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -97,22 +98,20 @@ func main() {
 		}
 	}()
 
-	// Preload startup models.
-	r.Preload()
-
 	handler := router.NewHandler(r, logger)
-	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           handler,
-		ReadHeaderTimeout: 30 * time.Second,
+	srv, _, errCh, err := startHTTPServer(cfg.Listen, handler, logger)
+	if err != nil {
+		logger.Errorf("server: %v", err)
+		os.Exit(1)
 	}
 
-	errCh := make(chan error, 1)
-	go func() {
-		logger.Infof("model-router listening on %s (node %s, %d stanzas, %d peers)",
-			cfg.Listen, nodeName, len(cfg.Stanzas), len(cfg.Peers))
-		errCh <- srv.ListenAndServe()
-	}()
+	// Start the HTTP surface before preloading so operators can watch status,
+	// metrics, and logs while slow models are starting or failing.
+	preloadDone := runPreload(func() {
+		logger.Infof("preload starting (%d models)", len(cfg.Preload))
+		r.Preload()
+		logger.Infof("preload complete")
+	})
 
 	// Signal handling for graceful shutdown.
 	sigCh := make(chan os.Signal, 1)
@@ -131,10 +130,38 @@ func main() {
 	// Graceful: stop all managed backends.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutdownCancel()
-	srv.Shutdown(shutdownCtx)
+	_ = srv.Shutdown(shutdownCtx)
 	cancel()
+	<-preloadDone
 	for _, id := range cfg.StanzaIDs() {
 		r.Unload(id)
 	}
 	fmt.Fprintln(os.Stderr, "shutdown complete")
+}
+
+func startHTTPServer(addr string, handler http.Handler, logger *router.Logger) (*http.Server, net.Listener, <-chan error, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+	}
+	errCh := make(chan error, 1)
+	logger.Infof("model-router listening on %s", addr)
+	go func() {
+		errCh <- srv.Serve(listener)
+	}()
+	return srv, listener, errCh, nil
+}
+
+func runPreload(preload func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		preload()
+	}()
+	return done
 }
