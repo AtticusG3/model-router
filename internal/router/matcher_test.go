@@ -120,6 +120,57 @@ func TestMatchPathDefault(t *testing.T) {
 	}
 }
 
+func TestMatchFirstPrefixWins(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+stanzas:
+  - model_id: sd-first
+    command: "x --port {port}"
+    match:
+      path_prefix: /sdapi/v1
+  - model_id: sd-second
+    command: "x --port {port}"
+    match:
+      path_prefix: /sdapi/v1
+`))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	req := newReq("POST", "http://x/sdapi/v1/txt2img", "application/json", `{"prompt":"cat"}`)
+	ref, err := matchRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if ref.Local != "sd-first" {
+		t.Errorf("first prefix = %q, want sd-first", ref.Local)
+	}
+}
+
+func TestMatchPathDefaultNotFirst(t *testing.T) {
+	cfg, err := config.Parse([]byte(`
+stanzas:
+  - model_id: sd-plain
+    command: "x --port {port}"
+    match:
+      path_prefix: /sdapi/v1
+  - model_id: sd-default
+    command: "x --port {port}"
+    match:
+      path_prefix: /sdapi/v1
+      path_default: true
+`))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	req := newReq("POST", "http://x/sdapi/v1/txt2img", "application/json", `{"prompt":"cat"}`)
+	ref, err := matchRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if ref.Local != "sd-default" {
+		t.Errorf("path default = %q, want sd-default", ref.Local)
+	}
+}
+
 func TestMatchPathWithBodyModelWins(t *testing.T) {
 	cfg := testConfig(t)
 	// Body model wins over path default.

@@ -58,20 +58,19 @@ func resolveRef(raw string, cfg *config.Config) ModelRef {
 
 // matchRequest resolves an incoming request to a ModelRef.
 //
-// Order (llama-swap compatible, then SPEC's path_prefix):
+// The body is always fully read (and restored) before matching. Model id
+// extraction is one pass over those bytes plus query/form keys:
 //  1. JSON body field named by each stanza's match.body_field (default
 //     "model"), or query "model" for GETs / form bodies.
-//  2. Stanza path_prefix match; if several stanzas share the prefix, the one
-//     marked path_default wins; otherwise the first declared.
+//  2. Stanza path_prefix match: first matching stanza in config order, unless
+//     a unique path_default for that prefix was set at parse.
 func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 	body, err := readBody(r)
 	if err != nil {
 		return ModelRef{}, err
 	}
-	// Restore the body for downstream proxying.
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
-	// 1. body / query / form model field.
 	if m := modelFromRequest(r, body, cfg); m != "" {
 		ref := resolveRef(m, cfg)
 		if ref.Local == "" && ref.Pool == "" && ref.Peer == "" {
@@ -80,7 +79,6 @@ func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 		return ref, nil
 	}
 
-	// 2. path prefix.
 	if ref, ok := matchPathPrefix(r.URL.Path, cfg); ok {
 		return ref, nil
 	}
@@ -89,35 +87,33 @@ func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 }
 
 // matchPathPrefix finds a stanza whose path_prefix is a prefix of path.
+// First match in config order wins. A stanza marked path_default (unique per
+// prefix at parse) wins over earlier non-default stanzas that share it.
 func matchPathPrefix(path string, cfg *config.Config) (ModelRef, bool) {
-	best := ""
-	bestDefault := false
+	first := ""
 	for _, id := range cfg.StanzaIDs() {
 		s := cfg.Stanza(id)
 		p := s.Match.PathPrefix
-		if p == "" {
+		if p == "" || !strings.HasPrefix(path, p) {
 			continue
 		}
-		if strings.HasPrefix(path, p) {
-			// Prefer a path_default stanza over any plain prefix match.
-			if s.Match.PathDefault {
-				return ModelRef{Local: id}, true
-			}
-			if !bestDefault {
-				best = id
-			}
+		if s.Match.PathDefault {
+			return ModelRef{Local: id}, true
+		}
+		if first == "" {
+			first = id
 		}
 	}
-	if best != "" {
-		return ModelRef{Local: best}, true
+	if first == "" {
+		return ModelRef{}, false
 	}
-	return ModelRef{}, false
+	return ModelRef{Local: first}, true
 }
 
-// modelFromRequest extracts a model id from the request body/query/form,
-// mirroring llama-swap's extractContext: JSON body (per-stanza body_field),
-// urlencoded/multipart form "model", then query "model". GET and form requests
-// use the "model" key, which body_field does not cover.
+// modelFromRequest extracts a model id from the already-read body and query:
+// JSON fields (per-stanza body_field), urlencoded/multipart form "model", then
+// query "model" for GET and form bodies. GET and form use the "model" key,
+// which body_field does not cover.
 func modelFromRequest(r *http.Request, body []byte, cfg *config.Config) string {
 	if r.Method == http.MethodGet {
 		return r.URL.Query().Get("model")
@@ -144,7 +140,7 @@ func modelFromRequest(r *http.Request, body []byte, cfg *config.Config) string {
 		return r.URL.Query().Get("model")
 	}
 	if strings.Contains(ct, "multipart/form-data") {
-		if m := multipartModel(r.Header.Get("Content-Type"), body); m != "" {
+		if m := multipartModel(ct, body); m != "" {
 			return m
 		}
 		return r.URL.Query().Get("model")
@@ -152,9 +148,8 @@ func modelFromRequest(r *http.Request, body []byte, cfg *config.Config) string {
 	return ""
 }
 
-// multipartModel extracts the "model" form field from a multipart body without
-// buffering non-model parts (image uploads can be large). It returns "" when
-// the field is absent or the body is not a well-formed multipart payload.
+// multipartModel reads the "model" field from an already-buffered multipart
+// body. matchRequest ReadAlls the request first; this only parses those bytes.
 func multipartModel(contentType string, body []byte) string {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
@@ -175,7 +170,7 @@ func multipartModel(contentType string, body []byte) string {
 			part.Close()
 			return string(val)
 		}
-		part.Close() // drain and skip this part
+		part.Close()
 	}
 }
 
