@@ -260,3 +260,60 @@ peers:
 		t.Fatalf("proxied model = %q, want daily-model", proxiedModel)
 	}
 }
+
+func TestHTTPSlotsFullSpillToPeerWithFreeSlot(t *testing.T) {
+	var proxiedModel string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		if req.URL.Path == "/_router/load" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"loaded"}`))
+			return
+		}
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		proxiedModel = payload.Model
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-slot"}`))
+	}))
+	defer peer.Close()
+
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwen3.6-35b-a3b
+    command: "x --port {port} --parallel 1"
+    vram_mb: 29000
+    match: {body_field: model}
+peers:
+  - name: nugget
+    kind: router
+    base_url: http://127.0.0.1:9
+    models: [qwen3.6-35b-a3b]
+`)
+	r.cfg.Peer("nugget").BaseURL = peer.URL
+	r.holdOccupancy("qwen3.6-35b-a3b")
+	r.peers.Set("nugget", &Telemetry{
+		Node: "nugget",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 400}},
+		LoadedModels: []LoadedModel{
+			{ID: "qwen3.6-35b-a3b", Slots: 2, InFlight: 1, VramMB: 29000},
+		},
+	})
+
+	h := NewHandler(r, NewLogger(io.Discard, false))
+	body := `{"model":"qwen3.6-35b-a3b","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if proxiedModel != "qwen3.6-35b-a3b" {
+		t.Fatalf("proxied model = %q, want qwen3.6-35b-a3b on nugget", proxiedModel)
+	}
+}

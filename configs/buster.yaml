@@ -6,10 +6,9 @@
 #
 # vram_mb is nvidia-smi used rounded up after a successful ladder load
 # (docs/vram-fit-ladder.md). Chat + image on V100; specialists on 4060.
-# 2026-08-20 used: agents-a1 28437 (256k f16 MTP+mmproj), qwen3.8-27b
-# 28703 (256k q8_0), ornith-quality 28635 (256k f16 MTP+mmproj),
-# qwen3.6-quality 28965 (256k f16 MTP+mmproj), intent 1019 / embed 3419
-# / rerank 1269. Qwen 3.6/3.8 use /opt/ai/config/qwen-fixed-chat-template.jinja.
+# 2026-08-21 per-slot walk: MoE qwen3.6 is 2x256k (--ctx-size 524288
+# --parallel 2, used=29713). Dense chat is one 256k slot. Specialists
+# on 4060 unchanged. Qwen 3.6/3.8 use qwen-fixed-chat-template.jinja.
 
 listen: 0.0.0.0:18080
 start_port: 5901
@@ -27,19 +26,19 @@ stanzas:
     name: "Agents-A1-Uncensored-MTP-APEX-I-Quality (agentic coding)"
     aliases: [daily-driver]
     command: >
-      /home/kevyn/infra/llama.cpp/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /home/kevyn/models/Agents-A1-Uncensored-MTP-APEX-I-Quality.gguf
       --mmproj /home/kevyn/models/mmproj-Agents-A1-Uncensored-MTP-BF16.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
-      --ctx-size 262144 --threads 14 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k f16 --cache-type-v f16
-      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
-      --spec-type draft-mtp --spec-draft-n-max 1
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --spec-type draft-mtp --spec-draft-n-max 4
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 0.85 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 1.1 --repeat-penalty 1.0
       --split-mode none --device CUDA1
-    vram_mb: 29000
+    vram_mb: 27500
     device: 1
     spin_up_seconds: 90
     api_type: chat
@@ -53,7 +52,7 @@ stanzas:
     name: "Qwen3 0.6B Instruct (intent)"
     aliases: [intent-model, intent-router]
     command: >
-      /home/kevyn/infra/llama.cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /home/kevyn/models/llm/intent-model/Qwen3-0.6B-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
@@ -79,7 +78,7 @@ stanzas:
     name: "Qwen3 Embedding 4B"
     aliases: [embed-pool]
     command: >
-      /home/kevyn/infra/llama.cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /home/kevyn/models/Qwen3-Embedding-4B-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
@@ -102,7 +101,7 @@ stanzas:
     name: "Jina Reranker v3.5"
     aliases: [reranker-pool]
     command: >
-      /home/kevyn/infra/llama.cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /home/kevyn/models/jina-reranker-v3-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
@@ -130,14 +129,15 @@ stanzas:
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
       --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k q8_0 --cache-type-v q8_0
-      --cache-reuse 256 --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
-      --reasoning-format deepseek --reasoning-preserve --metrics
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --reasoning-preserve
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
     env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 29200
+    vram_mb: 27000
     device: 1
     spin_up_seconds: 90
     api_type: chat
@@ -157,15 +157,15 @@ stanzas:
       --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
-      --ctx-size 262144 --threads 4 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k f16 --cache-type-v f16
-      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
+      --ctx-size 262144 --threads 6 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
       --spec-type draft-mtp --spec-draft-n-max 4
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
     env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 29200
+    vram_mb: 26600
     device: 1
     spin_up_seconds: 120
     api_type: chat
@@ -185,16 +185,17 @@ stanzas:
       --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 262144 --threads 4 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k f16 --cache-type-v f16
-      --cache-reuse 256 --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
-      --reasoning-format deepseek --reasoning-preserve --metrics
-      --spec-type draft-mtp --spec-draft-n-max 4
+      --ctx-size 524288 --threads 3 --parallel 2 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --reasoning-preserve
+      --spec-type draft-mtp --spec-draft-n-max 2
       --n-predict 65536
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
     env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 29500
+    vram_mb: 30300
     device: 1
     spin_up_seconds: 120
     api_type: chat

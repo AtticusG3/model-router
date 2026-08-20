@@ -1,5 +1,6 @@
 # nomad -- model-router v0.1 staged config (replaces llama-swap on 0.0.0.0:8081)
 # Single model: Qwen3.5-9B Abliterated (TurboQuant vision) on the RTX A2000 8GB.
+# Weights under /opt/ai/models/. 2026-08-21: 49k turbo4 one slot used=6879.
 # Weights under /opt/ai/models/. Chat template:
 # /opt/ai/config/qwen-fixed-chat-template.jinja (froggeric v22.2).
 
@@ -28,10 +29,14 @@ stanzas:
       --ctx-size 49152
       --n-gpu-layers 99
       --flash-attn on
-      --cache-type-k q8_0
+      --cache-type-k turbo4
       --cache-type-v turbo4
       --cache-reuse 256
       --cont-batching
+      --parallel 1
+      --threads 2
+      --batch-size 512
+      --ubatch-size 128
       --mlock
       --metrics
       --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
@@ -43,7 +48,7 @@ stanzas:
       --min-p 0.0
       --repeat-penalty 1.0
       --presence-penalty 0.5
-    vram_mb: 7000          # 5.4GB weights + 0.9GB mmproj + ctx headroom
+    vram_mb: 7400
     device: 0              # RTX A2000 Laptop (nvidia-smi index 0)
     spin_up_seconds: 60
     api_type: chat

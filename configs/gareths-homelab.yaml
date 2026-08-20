@@ -2,9 +2,9 @@
 # (nginx :8081 LLM / :8082 image -> 18080). GPU: RTX 5060 Ti 16GB.
 #
 # vram_mb is nvidia-smi used rounded up after a successful ladder load.
-# 2026-08-20: qwen3.6-35b-a3b needed 128k turbo4, no mmproj, no MTP
-# (used=14764). ornith compact kept 256k f16 MTP+mmproj (used=14660).
-# intent used=1278. qwen3.6 uses /opt/ai/config/qwen-fixed-chat-template.jinja.
+# 2026-08-21: qwen3.6-35b-a3b one 256k turbo4 slot (used=14732).
+# Two 256k slots did not pay real KV on 16GB. ornith one 256k turbo4 slot
+# (used=13808). intent used=1278.
 
 listen: 127.0.0.1:18080
 start_port: 5801
@@ -22,7 +22,7 @@ stanzas:
     name: "Qwen2.5 1.5B Instruct (intent router)"
     aliases: [llm-intent-router-waldron, intent-model, intent-router]
     command: >
-      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/intent-router/qwen2.5-1.5b-instruct-q4_k_m.gguf
       --port {port}
       --host 127.0.0.1
@@ -49,11 +49,11 @@ stanzas:
     name: "Qwen 3.6 35B A3B Compact"
     aliases: [llm-qwen-waldron, daily-driver, daily-model, qwen3.6-35b, qwen3.6-35b-a3b-heretic-quality]
     command: >
-      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Compact.gguf
       --port {port}
       --host 127.0.0.1
-      --ctx-size 131072
+      --ctx-size 262144
       --threads 8
       --parallel 1
       --cont-batching
@@ -79,7 +79,7 @@ stanzas:
     name: "Ornith-1.0-35B Compact"
     aliases: [llm-ornith-waldron, ornith-1.0-35b-compact]
     command: >
-      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf
       --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/mmproj-F16.gguf
       --port {port}
@@ -91,11 +91,11 @@ stanzas:
       --mlock
       --no-mmap
       --flash-attn on
-      --cache-type-k f16
-      --cache-type-v f16
+      --cache-type-k turbo4
+      --cache-type-v turbo4
       --spec-type draft-mtp
       --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-    vram_mb: 15100
+    vram_mb: 14300
     device: 0
     spin_up_seconds: 120
     api_type: chat

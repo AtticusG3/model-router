@@ -49,8 +49,8 @@ func main() {
 			if s.Match.PathPrefix != "" {
 				flags = fmt.Sprintf(" path=%s default=%v", s.Match.PathPrefix, s.Match.PathDefault)
 			}
-			fmt.Printf("  %-28s port=%-5d vram=%-6d dev=%-4s api=%-9s ttl=%-4d unlisted=%v%s\n",
-				s.ModelID, s.Port, s.VramMB, s.Device, s.APIType, s.IdleTTLSeconds, s.Unlisted, flags)
+			fmt.Printf("  %-28s port=%-5d vram=%-6d slots=%-2d dev=%-4s api=%-9s ttl=%-4d unlisted=%v%s\n",
+				s.ModelID, s.Port, s.VramMB, s.SlotCount(), s.Device, s.APIType, s.IdleTTLSeconds, s.Unlisted, flags)
 		}
 		for name, p := range cfg.Pools {
 			fmt.Printf("  pool %-18s spillover=%d targets=%v\n", name, p.Spillover, p.Targets)

@@ -426,3 +426,74 @@ peers:
 		t.Fatal("peer with 20000 MB after idle eviction should fit an 8000 MB model")
 	}
 }
+
+func TestResolveMeshPrefersPeerWithFreeSlot(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+peers:
+  - name: full
+    kind: router
+    base_url: http://192.168.1.1:8081
+    models: [qwen3.6-35b-a3b]
+  - name: free
+    kind: router
+    base_url: http://192.168.1.2:8081
+    models: [qwen3.6-35b-a3b]
+`)
+	r.peers.Set("full", &Telemetry{
+		Node: "full",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 2000}},
+		LoadedModels: []LoadedModel{
+			{ID: "qwen3.6-35b-a3b", Slots: 1, InFlight: 1, VramMB: 29000},
+		},
+	})
+	r.peers.Set("free", &Telemetry{
+		Node: "free",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 2000}},
+		LoadedModels: []LoadedModel{
+			{ID: "qwen3.6-35b-a3b", Slots: 2, InFlight: 1, VramMB: 29000},
+		},
+	})
+	tgt, err := r.resolveMesh("qwen3.6-35b-a3b")
+	if err != nil {
+		t.Fatalf("resolveMesh: %v", err)
+	}
+	if tgt.Peer != "free" {
+		t.Fatalf("target = %+v, want free (slot available), not the full first peer", tgt)
+	}
+}
+
+func TestPeerEligibleWhenLoadedIgnoresLowFreeVRAM(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwen3.6-35b-a3b
+    command: "x --port {port} --parallel 2"
+    vram_mb: 29000
+peers:
+  - name: nugget
+    kind: router
+    base_url: http://192.168.1.62:8081
+    models: [qwen3.6-35b-a3b]
+`)
+	r.peers.Set("nugget", &Telemetry{
+		Node: "nugget",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 400}},
+		LoadedModels: []LoadedModel{
+			{ID: "qwen3.6-35b-a3b", Slots: 2, InFlight: 1, VramMB: 29000},
+		},
+	})
+	if !r.peerEligible("nugget", "qwen3.6-35b-a3b") {
+		t.Fatal("loaded peer with a free slot must be eligible even when nvidia-smi free is below vram_mb")
+	}
+	r.peers.Set("nugget", &Telemetry{
+		Node: "nugget",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 400}},
+		LoadedModels: []LoadedModel{
+			{ID: "qwen3.6-35b-a3b", Slots: 2, InFlight: 2, VramMB: 29000},
+		},
+	})
+	if r.peerEligible("nugget", "qwen3.6-35b-a3b") {
+		t.Fatal("loaded peer with full slots must not be eligible")
+	}
+}

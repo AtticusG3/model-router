@@ -336,3 +336,53 @@ pools:
 		})
 	}
 }
+
+func TestParallelFromCommand(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want int
+	}{
+		{cmd: "llama-server -m a.gguf --port 5900", want: 1},
+		{cmd: "llama-server --parallel 2 --cont-batching", want: 2},
+		{cmd: "llama-server --parallel=3", want: 3},
+		{cmd: "llama-server -np 4 --n-predict 64", want: 4},
+		{cmd: "llama-server -np=2 --n-predict 64", want: 2},
+		{cmd: "llama-server --parallel 1 --parallel 3", want: 3},
+		{cmd: "sd-server --listen-port 1", want: 1},
+	}
+	for _, tt := range tests {
+		if got := parallelFromCommand(tt.cmd); got != tt.want {
+			t.Errorf("parallelFromCommand(%q) = %d, want %d", tt.cmd, got, tt.want)
+		}
+	}
+}
+
+func TestParseDerivesSlotsFromParallel(t *testing.T) {
+	cfg, err := Parse([]byte(`
+stanzas:
+  - model_id: chat
+    command: "llama-server --port {port} --parallel 2"
+  - model_id: embed
+    command: "llama-server --port {port} --parallel=3"
+  - model_id: override
+    command: "llama-server --port {port} --parallel 1"
+    slots: 4
+  - model_id: image
+    command: "sd-server --listen-port ${PORT}"
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Stanza("chat").Slots != 2 {
+		t.Errorf("chat slots = %d, want 2", cfg.Stanza("chat").Slots)
+	}
+	if cfg.Stanza("embed").Slots != 3 {
+		t.Errorf("embed slots = %d, want 3", cfg.Stanza("embed").Slots)
+	}
+	if cfg.Stanza("override").Slots != 4 {
+		t.Errorf("explicit slots = %d, want 4 (must beat --parallel 1)", cfg.Stanza("override").Slots)
+	}
+	if cfg.Stanza("image").Slots != 1 {
+		t.Errorf("image slots = %d, want 1", cfg.Stanza("image").Slots)
+	}
+}

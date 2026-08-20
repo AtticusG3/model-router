@@ -208,10 +208,18 @@ func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 }
 
 // resolveMesh picks a peer that advertises modelID. Local stanzas are
-// resolved before this runs. OpenAI peers are always eligible; router
-// peers need fresh telemetry. Known VRAM is used as a hint; the peer
-// still admits for real.
+// resolved before this runs. Prefers a peer that already has a free slot,
+// then one that can admit a fresh load. A loaded-but-full peer is last
+// resort (that node will queue).
 func (r *Router) resolveMesh(modelID string) (Target, error) {
+	return r.pickPeerForModel(modelID, false)
+}
+
+// pickPeerForModel ranks router peers that advertise modelID.
+// slotSpill skips loaded-but-full peers so the caller can queue locally.
+func (r *Router) pickPeerForModel(modelID string, slotSpill bool) (Target, error) {
+	var admit, full Target
+	haveAdmit, haveFull := false, false
 	for i := range r.cfg.Peers {
 		p := &r.cfg.Peers[i]
 		if !r.peerHasModel(p, modelID) {
@@ -220,10 +228,33 @@ func (r *Router) resolveMesh(modelID string) (Target, error) {
 		if p.Kind == "openai" {
 			return Target{Peer: p.Name, PeerID: modelID}, nil
 		}
+		if !r.peers.Fresh(p.Name) {
+			continue
+		}
+		loaded, free, known := r.peerSlotInfo(p.Name, modelID)
+		if known && loaded && free {
+			return Target{Peer: p.Name, PeerID: modelID}, nil
+		}
+		if known && loaded && !free {
+			if !slotSpill && !haveFull {
+				full = Target{Peer: p.Name, PeerID: modelID}
+				haveFull = true
+			}
+			continue
+		}
 		if !r.peerEligible(p.Name, modelID) {
 			continue
 		}
-		return Target{Peer: p.Name, PeerID: modelID}, nil
+		if !haveAdmit {
+			admit = Target{Peer: p.Name, PeerID: modelID}
+			haveAdmit = true
+		}
+	}
+	if haveAdmit {
+		return admit, nil
+	}
+	if haveFull {
+		return full, nil
 	}
 	return Target{}, fmt.Errorf("no node can serve %q", modelID)
 }
@@ -271,6 +302,29 @@ func (r *Router) holdOccupancy(id string) {
 	r.mu.Unlock()
 }
 
+func (r *Router) occupancyOf(id string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.occupancy[id]
+}
+
+// tryHoldLocalSlot increments occupancy when it is below the stanza's slot
+// cap. False means the local backend is full; the caller should spill or
+// queue.
+func (r *Router) tryHoldLocalSlot(id string) bool {
+	slots := 1
+	if s := r.cfg.Stanza(id); s != nil {
+		slots = s.SlotCount()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.occupancy[id] >= slots {
+		return false
+	}
+	r.occupancy[id]++
+	return true
+}
+
 func (r *Router) localCanServe(s *config.Stanza) bool {
 	if s == nil {
 		return false
@@ -284,8 +338,10 @@ func (r *Router) localCanServe(s *config.Stanza) bool {
 	return r.ledger.CanAdmitEvicting(s, evict)
 }
 
-// peerEligible reports whether a peer is a spillover candidate. Known VRAM is
-// a hint; unknown VRAM still tries a fresh peer and lets that node admit.
+// peerEligible reports whether a peer is a spillover candidate. A peer that
+// already has the model loaded is eligible when it has a free slot (VRAM is
+// already spent). A peer that does not have it loaded uses cached VRAM as a
+// hint. Unknown VRAM still tries a fresh peer and lets that node admit.
 func (r *Router) peerEligible(name, modelID string) bool {
 	p := r.cfg.Peer(name)
 	if p == nil {
@@ -297,11 +353,33 @@ func (r *Router) peerEligible(name, modelID string) bool {
 	if !r.peers.Fresh(name) {
 		return false
 	}
+	loaded, free, known := r.peerSlotInfo(name, modelID)
+	if known && loaded {
+		return free
+	}
 	vram := r.modelVram(modelID)
 	if vram > 0 && !r.peerFits(name, vram) {
 		return false
 	}
 	return true
+}
+
+func (r *Router) peerSlotInfo(name, modelID string) (loaded, free, known bool) {
+	t := r.peers.Snapshot()[name]
+	if t == nil {
+		return false, false, false
+	}
+	for _, m := range t.LoadedModels {
+		if m.ID != modelID {
+			continue
+		}
+		slots := m.Slots
+		if slots <= 0 {
+			slots = 1
+		}
+		return true, m.InFlight < slots, true
+	}
+	return false, false, true
 }
 
 func (r *Router) modelVram(modelID string) int64 {
@@ -355,11 +433,6 @@ func (r *Router) resolvePool(poolName string) (Target, error) {
 }
 
 func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target, error) {
-	limit := pool.Spillover
-	if limit <= 0 {
-		limit = 1
-	}
-
 	for _, target := range pool.Targets {
 		if skip[target] {
 			continue
@@ -376,6 +449,14 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 		}
 		if skip[occupancyKey(cand)] {
 			continue
+		}
+		limit := pool.Spillover
+		if limit <= 0 {
+			if ref.Local != "" {
+				limit = r.cfg.Stanza(ref.Local).SlotCount()
+			} else {
+				limit = 1
+			}
 		}
 		switch {
 		case ref.Local != "":
@@ -448,18 +529,38 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 	switch {
 	case tgt.Local != "":
-		if err := r.proxyLocal(w, req, tgt.Local); err != nil {
-			if req.Header.Get("X-Model-Router-Peer") == "" && r.serveSpill(w, req, tgt.Local) {
-				return
-			}
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		}
+		r.serveLocalTarget(w, req, tgt.Local)
 	case tgt.Peer != "":
 		if err := r.proxyPeer(w, req, tgt.Peer, tgt.PeerID); err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		}
 	default:
 		http.Error(w, "no router for requested model", http.StatusNotFound)
+	}
+}
+
+func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
+	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
+	if !incomingPeer && r.tryHoldLocalSlot(modelID) {
+		err := r.proxyLocalHeld(w, req, modelID)
+		r.releaseOccupancy(Target{Local: modelID})
+		if err == nil {
+			return
+		}
+		if r.serveSpill(w, req, modelID) {
+			return
+		}
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	if !incomingPeer && r.serveSlotSpill(w, req, modelID) {
+		return
+	}
+	if err := r.proxyLocal(w, req, modelID); err != nil {
+		if !incomingPeer && r.serveSpill(w, req, modelID) {
+			return
+		}
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	}
 }
 
@@ -485,7 +586,7 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 		var serveErr error
 		switch {
 		case tgt.Local != "":
-			serveErr = r.proxyLocal(w, req, tgt.Local)
+			serveErr = r.proxyLocalHeld(w, req, tgt.Local)
 		case tgt.Peer != "":
 			serveErr = r.proxyPeer(w, req, tgt.Peer, tgt.PeerID)
 		default:
@@ -530,6 +631,22 @@ func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLoca
 	return r.proxyPeer(w, req, tgt.Peer, tgt.PeerID) == nil
 }
 
+// serveSlotSpill sends a request to a peer that already has a free slot (or
+// can admit a fresh load) when local occupancy is at --parallel. Incoming
+// peer-proxied requests do not bounce. If nothing can take it, the caller
+// queues on the local backend.
+func (r *Router) serveSlotSpill(w http.ResponseWriter, req *http.Request, localID string) bool {
+	if req.Header.Get("X-Model-Router-Peer") != "" {
+		return false
+	}
+	tgt, err := r.pickPeerForModel(localID, true)
+	if err != nil || tgt.Peer == "" {
+		return false
+	}
+	r.logger.Meshf("slot spill %s -> %s", localID, tgt.Peer)
+	return r.proxyPeer(w, req, tgt.Peer, tgt.PeerID) == nil
+}
+
 func (r *Router) spillTargets(failedLocal string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -563,6 +680,10 @@ func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID st
 func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID string) error {
 	r.holdOccupancy(modelID)
 	defer r.releaseOccupancy(Target{Local: modelID})
+	return r.proxyLocalHeld(w, req, modelID)
+}
+
+func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, modelID string) error {
 	if _, err := r.Load(modelID); err != nil {
 		return err
 	}
@@ -806,12 +927,13 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 	idleByGPU := map[int]int64{}
 	r.mu.Lock()
 	type running struct {
-		id string
-		m  *Managed
+		id       string
+		m        *Managed
+		inFlight int
 	}
 	var live []running
 	for id, m := range r.managed {
-		live = append(live, running{id: id, m: m})
+		live = append(live, running{id: id, m: m, inFlight: r.occupancy[id]})
 	}
 	r.mu.Unlock()
 	var loaded []LoadedModel
@@ -828,7 +950,14 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 				staleByGPU[gpu] += vram
 			}
 		}
-		loaded = append(loaded, LoadedModel{ID: item.id, Freshness: freshness, VramMB: vram, GPU: gpu})
+		slots := 1
+		if s := r.cfg.Stanza(item.id); s != nil {
+			slots = s.SlotCount()
+		}
+		loaded = append(loaded, LoadedModel{
+			ID: item.id, Freshness: freshness, VramMB: vram, GPU: gpu,
+			Slots: slots, InFlight: item.inFlight,
+		})
 		if gpu >= 0 {
 			idleByGPU[gpu] += vram
 		}
