@@ -24,9 +24,8 @@ type Telemetry struct {
 
 // GPUPoller runs nvidia-smi on an interval and feeds the ledger.
 type GPUPoller struct {
-	ledger  *Ledger
-	every   time.Duration
-	lastErr error
+	ledger *Ledger
+	every  time.Duration
 }
 
 func NewGPUPoller(ledger *Ledger, every time.Duration) *GPUPoller {
@@ -58,10 +57,8 @@ func (p *GPUPoller) PollOnce() {
 func (p *GPUPoller) pollOnce() {
 	gpus, err := queryGPUs()
 	if err != nil {
-		p.lastErr = err
 		return
 	}
-	p.lastErr = nil
 	p.ledger.SetGPUs(gpus)
 }
 
@@ -132,10 +129,9 @@ func queryGPUs() ([]*GPUState, error) {
 
 // PeerCache holds cached telemetry for each peer with a timestamp.
 type PeerCache struct {
-	mu     sync.Mutex
-	peers  map[string]*peerEntry
-	stale  time.Duration
-	client *http.Client
+	mu    sync.Mutex
+	peers map[string]*peerEntry
+	stale time.Duration
 }
 
 type peerEntry struct {
@@ -146,9 +142,8 @@ type peerEntry struct {
 
 func NewPeerCache(stale time.Duration) *PeerCache {
 	return &PeerCache{
-		peers:  map[string]*peerEntry{},
-		stale:  stale,
-		client: &http.Client{Timeout: 5 * time.Second},
+		peers: map[string]*peerEntry{},
+		stale: stale,
 	}
 }
 
@@ -161,23 +156,6 @@ func (c *PeerCache) Fresh(name string) bool {
 		return false
 	}
 	return time.Since(e.Seen) <= c.stale
-}
-
-// HasFreeVRAM reports whether the peer's cached telemetry shows any GPU with
-// meaningful free VRAM. Unknown peers (stale) are always false.
-func (c *PeerCache) HasFreeVRAM(name string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	e, ok := c.peers[name]
-	if !ok || e.Telemetry == nil || time.Since(e.Seen) > c.stale {
-		return false
-	}
-	for _, g := range e.Telemetry.GPUs {
-		if g.FreeMB > 1024 {
-			return true
-		}
-	}
-	return false
 }
 
 // Set stores a peer snapshot.
@@ -212,16 +190,14 @@ type PeerSyncer struct {
 	cfg    *config.Config
 	cache  *PeerCache
 	every  time.Duration
-	node   string
 	client *http.Client
 }
 
-func NewPeerSyncer(cfg *config.Config, cache *PeerCache, every time.Duration, node string) *PeerSyncer {
+func NewPeerSyncer(cfg *config.Config, cache *PeerCache, every time.Duration) *PeerSyncer {
 	return &PeerSyncer{
 		cfg:    cfg,
 		cache:  cache,
 		every:  every,
-		node:   node,
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
 }
