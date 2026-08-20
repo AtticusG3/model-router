@@ -1,0 +1,561 @@
+# gareths-homelab -- model-router v0.1 staged config (replaces llama-swap on
+# 127.0.0.1:18080; nginx :8081 (LLM) / :8082 (image) -> 18080).
+# GPU: RTX 5060 Ti 16GB. LLM GGUF (TurboQuant builds) + SDXL sd.cpp.
+# Waldron naming convention kept (-waldron suffix).
+#
+# All commands transcribed from llama-swap.yaml (replacing ${PORT} with {port}).
+#
+# nginx: the existing server blocks proxy :8081/:8082 -> 127.0.0.1:18080. Ensure
+# `proxy_buffering off;` is set for /v1/chat/completions (SSE) -- the router
+# also sets X-Accel-Buffering: no as a safeguard.
+
+listen: 127.0.0.1:18080
+start_port: 5801
+
+reserved_ports: [8081, 8082]
+
+telemetry:
+  poll_seconds: 2
+  peer_sync_seconds: 5
+  peer_stale_seconds: 15
+
+preload: [llm-gemma-waldron]   # matches llama-swap's on_startup preload
+
+stanzas:
+  - model_id: llm-gemma-waldron
+    name: "Gemma 4 26B A4B"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma4/mmproj-F16.gguf
+      --model-draft /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma4/mtp-gemma-4-26B-A4B-it-Q8_0.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --flash-attn on
+      --cache-type-k turbo4
+      --cache-type-v turbo2
+      --spec-type draft-mtp
+      --spec-draft-cpu-moe
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 15000        # 26B A4B Q4 fits the 16GB 5060 Ti with room
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5801
+
+  - model_id: llm-laguna-waldron
+    name: "Laguna-S-2.1"
+    command: >
+      env LD_LIBRARY_PATH=/srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/Laguna-S-2.1-UD-Q4_K_M-00001-of-00003.gguf
+      --port {port}
+      --host 127.0.0.1
+      --jinja
+      --flash-attn on
+      --cache-type-k q4_0
+      --cache-type-v q4_0
+      --cont-batching
+      --threads 8
+      --parallel 1
+      --n-cpu-moe 41
+      --n-gpu-layers 999
+      --no-mmap --mlock
+      --ctx-size 32768
+      --reasoning-budget 8192 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5802
+
+  - model_id: llm-qwen-waldron
+    name: "Qwen 3.6 35B A3B"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Compact.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/mmproj.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k turbo4
+      --cache-type-v turbo2
+      --spec-type draft-mtp
+      --spec-draft-cpu-moe
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5803
+
+  - model_id: llm-bonsai-27b-waldron
+    name: "Ternary Bonsai 27B"
+    command: >
+      env LD_LIBRARY_PATH=/srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-Q2_g64.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-mmproj-Q8_0.gguf
+      --n-gpu-layers 999
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 14000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5804
+
+  - model_id: llm-daily-driver-waldron
+    name: "Qwable 3.6 35B (daily driver)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/daily-driver/Qwable-3.6-35b_q5_k_m.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/daily-driver/mmproj-BF16.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 131072
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5805
+
+  - model_id: llm-coding-model-waldron
+    name: "Qwopus3.6 27B Coder (Gareth)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/coding-model/Qwopus3.6-27B-Coder-MTP-Q5_K_M.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/coding-model/mmproj-F32.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 131072
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 15000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5806
+
+  - model_id: llm-intent-router-waldron
+    name: "Qwen2.5 1.5B Instruct (intent router)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/intent-router/qwen2.5-1.5b-instruct-q4_k_m.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 8192
+      --threads 2
+      --parallel 2
+      --cont-batching
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --metrics
+      --temperature 0.1 --top-p 0.9 --top-k 20 --min-p 0.0
+    vram_mb: 1500
+    device: 0
+    spin_up_seconds: 30
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5807
+
+  - model_id: llm-ornith-waldron
+    name: "Ornith (Waldron)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/mmproj-F16.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 131072
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --spec-type draft-mtp
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5808
+
+  - model_id: llm-bonsai-dspark-waldron
+    name: "Bonsai dSpark (Waldron)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-dspark-Q4_1.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-mmproj-Q8_0.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+    vram_mb: 14000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5809
+
+  - model_id: llm-bonsai-q2-waldron
+    name: "Bonsai Q2 (Waldron)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-Q2_0.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-mmproj-Q8_0.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+    vram_mb: 11000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5810
+
+  - model_id: llm-qwen36-fast-nvfp4-waldron
+    name: "Qwen3.6 fast NVFP4 (Waldron)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/Qwen3.6-35B-Fast-NVFP4.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/mmproj.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --spec-type draft-mtp
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5811
+
+  - model_id: llm-qwen36-reap-waldron
+    name: "Qwen3.6 REAP (Waldron)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen3.6-35b-reap-pruned-ratio-0.3-q4_k_m.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 131072
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5812
+
+  - model_id: llm-gemma4-21b-reap-waldron
+    name: "Gemma4 21B REAP (Waldron)"
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma-4-21b-a4b-it-REAP-heretic.i1-IQ3_M.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma-4-mmproj-F16.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 262144
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --mlock
+      --no-mmap
+      --flash-attn on
+      --cache-type-k q8_0
+      --cache-type-v q8_0
+      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+    vram_mb: 13000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: false
+    port: 5813
+
+  # ---------------- Image (sd.cpp) ----------------
+  # All share /sdapi/v1; sdxl-lightning-waldron is the path_default.
+  - model_id: sdxl-lightning-waldron
+    name: "Waldron SDXL Lightning (Juggernaut XI)"
+    command: >
+      /opt/ai/bin/sd-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/sdxl/Juggernaut-XI-byRunDiffusion-Lightning.safetensors
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1, path_default: true}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5821
+
+  - model_id: photo-edit-waldron
+    name: "Waldron SDXL Photo Edit (Juggernaut XI img2img)"
+    command: >
+      /opt/ai/bin/sd-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/sdxl/Juggernaut-XI-byRunDiffusion.safetensors
+      --clip_l /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/sdxl/clip_l.safetensors
+      --clip_g /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/sdxl/clip_g.safetensors
+      --mmap --max-vram -1 --rng cuda --vae-tiling --fa
+      --sampling-method dpm++2m --scheduler karras
+      --steps 30 --cfg-scale 4.5 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5822
+
+  - model_id: z-anime-waldron
+    name: "Waldron Z Anime (8-step GGUF)"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Z-Anime-8steps.q5_0.gguf
+      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/ae.safetensors
+      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Qwen3-4b-Z-Image-Turbo-AbliteratedV1.i1-Q4_K_M.gguf
+      --mmap --max-vram -1 --rng cuda --vae-tiling --fa
+      --sampling-method euler_a --scheduler sgm_uniform
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5823
+
+  - model_id: juggernaut-z-waldron
+    name: "Waldron Juggernaut Z Fast (4-step GGUF)"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Juggernaut_Z_V1_Fast_by_RunDiffusion_q8_0.gguf
+      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/ae.safetensors
+      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Qwen3-4b-Z-Image-Turbo-AbliteratedV1.i1-Q4_K_M.gguf
+      --mmap --max-vram -1 --rng cuda --vae-tiling --fa
+      --sampling-method res_multistep --scheduler simple
+      --steps 4 --cfg-scale 2.0 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5824
+
+  - model_id: z-image-waldron
+    name: "Waldron Z Image base (Q8 GGUF)"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/z-image-Q8_0.gguf
+      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/ae.safetensors
+      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Qwen3-4b-Z-Image-Turbo-AbliteratedV1.i1-Q4_K_M.gguf
+      --mmap --max-vram -1 --rng cuda --vae-tiling --fa
+      --sampling-method res_multistep --scheduler simple
+      --steps 50 --cfg-scale 4.0 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5825
+
+  - model_id: flux2-klein-waldron
+    name: "Flux.2 Klein (Waldron)"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux2-klein/flux-2-klein-9b-Q4_0.gguf
+      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux2-klein/flux2-vae.safetensors
+      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux2-klein/flux2-klein-9b-uncensored-q4_k_m.gguf
+      --mmap --max-vram -1 --rng cuda --vae-tiling --fa
+      --steps 4 --cfg-scale 1.0 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 10000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5826
+
+pools:
+  coding-pool:
+    strategy: spillover
+    targets: [llm-coding-model-waldron, buster/qwopus-27b-coder-compat, digger/coding-model]
+    spillover: 1
+  daily-driver:
+    strategy: spillover
+    targets: [llm-daily-driver-waldron, buster/agents-a1, digger/daily-model, nomad/qwen3.5-9b]
+    spillover: 1
+  intent-router:
+    strategy: spillover
+    targets: [llm-intent-router-waldron, buster/intent-model, digger/intent-model, nomad/qwen3.5-9b]
+    spillover: 2
+
+peers:
+  - name: buster
+    kind: router
+    base_url: http://192.168.1.61:18080
+    models: [qwopus-27b-coder-compat, agents-a1, intent-model]
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [coding-model, daily-model, intent-model, ornith-model]
+  - name: nomad
+    kind: router
+    base_url: http://192.168.1.202:8081
+    models: [qwen3.5-9b]
+  # nugget is OFFLINE. Re-add when it returns:
+  # - name: nugget
+  #   kind: router
+  #   base_url: http://192.168.1.62:8081
+  #   models: [coding-model, daily-model, intent-model, agents-a1-model, fusion-heretic-model]
+  # OpenRouter upstreams (proxy-only, no /_router control API). Model ids are
+  # the ids AFTER the "openrouter/" prefix, matching gareth's current config.
+  - name: openrouter
+    kind: openai
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - cohere/north-mini-code:free
+      - google/gemma-4-31b-it:free
+      - nvidia/llama-nemotron-rerank-vl-1b-v2:free
+      - nvidia/nemotron-3-ultra-550b-a55b:free

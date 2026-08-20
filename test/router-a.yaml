@@ -1,0 +1,55 @@
+# Router A — smoke test config (spare ports, fake backends, NO real models/GPUs touched)
+listen: 0.0.0.0:18099
+start_port: 5900
+telemetry:
+  poll_seconds: 2
+  peer_sync_seconds: 3
+  peer_stale_seconds: 15
+
+stanzas:
+  - model_id: agents-a1
+    name: "Fake Agents A1"
+    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model agents-a1"
+    vram_mb: 0
+    device: CUDA0
+    spin_up_seconds: 10
+    api_type: chat
+    health_check: /health
+    idle_ttl_seconds: 6
+
+  - model_id: krea-2-turbo
+    name: "Fake Krea 2 Turbo"
+    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model krea-2-turbo"
+    vram_mb: 0
+    spin_up_seconds: 10
+    api_type: image
+    match:
+      path_prefix: /sdapi/v1
+      path_default: true
+    idle_ttl_seconds: 6
+
+  - model_id: embed
+    name: "Fake Embed"
+    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model embed"
+    vram_mb: 0
+    spin_up_seconds: 10
+    api_type: embedding
+    idle_ttl_seconds: 6
+
+pools:
+  coding-pool:
+    strategy: spillover
+    targets: [agents-a1]
+    spillover: 1
+  embed-pool:
+    strategy: spillover
+    targets: [embed]
+    spillover: 1
+
+peers:
+  - name: digger
+    kind: router
+    base_url: http://127.0.0.1:18100
+    models: [remote-model]
+
+preload: [agents-a1]

@@ -1,0 +1,755 @@
+# digger -- model-router v0.1 staged config (replaces llama-swap on 0.0.0.0:8082)
+# GPU: NVIDIA RTX PRO 4000 Blackwell 24GB. Image node (sd.cpp) + LLM stanzas.
+# Note: this node's sd.cpp stanzas share ONE /sdapi/v1 path; krea-2-turbo is the
+# path_default (requests without a body `model` field land there). Clients that
+# need a specific image model MUST send `"model": "<id>"` in the JSON body --
+# this matches the current llama-swap behaviour (body-field-only matching).
+#
+# Aliases map the generic ids peers reference (coding-model, daily-model,
+# ornith-model) to this node's actual stanza ids.
+# All commands transcribed from llama-swap-sd.yaml (replacing ${PORT} with
+# {port}).
+
+listen: 0.0.0.0:8082
+start_port: 5950
+
+reserved_ports: []   # sdcpp-webui runs on its own port (Gradio); verify with `ss -tlnp`
+
+telemetry:
+  poll_seconds: 2
+  peer_sync_seconds: 5
+  peer_stale_seconds: 15
+
+preload: [qwopus-27b-coder]
+
+stanzas:
+  # ---------------- LLM (chat) ----------------
+  - model_id: qwopus-27b-coder
+    name: "Qwopus3.6-27B-Coder-MTP Q4_K_M (coding)"
+    aliases: [coding-model]
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Qwopus3.6-27B-Coder-MTP-Q4_K_M.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Qwopus3.6-27B-Coder-MTP-F32.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 196608 --threads 4 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 49152 --reasoning-budget 36864 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.2 --top-p 0.9 --top-k 20 --min-p 0.0
+    vram_mb: 18000
+    device: 0
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5975
+
+  - model_id: qwable-35b
+    name: "Qwable 3.6 35B Q4_K_M (daily driver)"
+    aliases: [daily-model]
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Qwable-3.6-35b_Q4_K_M.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Qwable-3.6-35b-BF16.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5974
+
+  - model_id: ornith-35b-uc
+    name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact (agentic coding)"
+    aliases: [ornith-model]
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 3
+      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.6 --top-p 0.95 --top-k 20
+    vram_mb: 24000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5971
+
+  - model_id: nemotron-nano-30b
+    name: "Nemotron-3-Nano-30B-A3B TurboQuant Q4_K_M"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-TurboQuant-IQ4_XS.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-TurboQuant-fp8.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --n-predict 20480 --reasoning-budget 16384 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.6 --top-p 0.95
+    vram_mb: 19000
+    device: 0
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5970
+
+  - model_id: ornith-35b
+    name: "Ornith-1.0-35B-MTP-APEX-I-Compact (non-heretic)"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 3
+      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.6 --top-p 0.95 --top-k 20
+    vram_mb: 24000
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5972
+
+  - model_id: qwable-27b
+    name: "Qwable-27B"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Qwable-3.6-27b_q4_k_m.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Qwopus3.6-27B-Coder-MTP-F32.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 196608 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 49152 --reasoning-budget 36864 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.2 --top-p 0.9 --top-k 20 --min-p 0.0
+    vram_mb: 18000
+    device: 0
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5973
+
+  - model_id: qwopus-27b-fusion
+    name: "Qwopus3.6 27B Fusion heretic MTP Q4_K_M"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Qwopus3.6-27B-Fusion-heretic-MTP-Q4_K_M.gguf
+      --mmproj /srv/ssd/models/llm/mmproj-Qwopus3.6-27B-Fusion-heretic-F16.gguf --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 196608 --threads 4 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 49152 --reasoning-budget 36864 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 0.2 --top-p 0.9 --top-k 20 --min-p 0.0
+    vram_mb: 18000
+    device: 0
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5976
+
+  - model_id: thinkingcap-27b
+    name: "Huihui-ThinkingCap-Qwen3.6-27B abliterated Q5_K_M"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Huihui-ThinkingCap-Qwen3.6-27B-abliterated.i1-Q4_K_S.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 196608 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --jinja --metrics --no-mmap --mlock
+    vram_mb: 19000
+    device: 0
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5977
+
+  - model_id: intent-model
+    name: "Qwen3 0.6B Instruct (intent)"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/intent-model/Qwen3-0.6B-Q4_K_M.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 0
+      --threads 4
+      --ctx-size 8192 --parallel 2 --n-predict 64
+      --cont-batching --flash-attn off --metrics
+      --temperature 0.1 --top-p 0.9 --top-k 20 --min-p 0.0
+      --reasoning off
+    vram_mb: 1500
+    device: 0
+    spin_up_seconds: 30
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: true
+    port: 5978
+
+  # ---------------- Image (sd.cpp) ----------------
+  # All share /sdapi/v1; krea-2-turbo is the path_default (no body model -> krea-2-turbo).
+  - model_id: krea-2-turbo
+    name: "Krea2"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/storage/stable-diffusion-models/krea2/Krea-2-Turbo-Q8_0.gguf
+      --vae /srv/storage/stable-diffusion-models/krea2/vae-krea2-q8_0.gguf
+      --llm /srv/storage/stable-diffusion-models/krea2/text-encoder-krea2-q8_0.gguf
+      --max-vram 22 --rng cuda
+      --fa --offload-to-cpu
+      --sampling-method er_sde
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1, path_default: true}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5950
+
+  - model_id: krea-2-redcraft
+    name: "RedCraft"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/storage/stable-diffusion-models/krea2/krea2-redcraft-q8_0.gguf
+      --vae /srv/storage/stable-diffusion-models/krea2/vae-hdr-q8_0.gguf
+      --llm /srv/storage/stable-diffusion-models/krea2/text-encoder-engineer-v1-q8_0.gguf
+      --max-vram 22 --rng cuda
+      --fa --offload-to-cpu
+      --sampling-method er_sde
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5951
+
+  - model_id: krea-2-darkbeast3
+    name: "Krea DarkBeast 3"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/storage/stable-diffusion-models/krea2/darkBeast330_int8convrot_mid_mlp.safetensors
+      --vae /srv/storage/stable-diffusion-models/krea2/vae-hdr-q8_0.gguf
+      --llm /srv/storage/stable-diffusion-models/krea2/text-encoder-engineer-v1-q8_0.gguf
+      --max-vram 22 --rng cuda
+      --fa --offload-to-cpu
+      --sampling-method er_sde
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5952
+
+  - model_id: krea-2-imagine
+    name: "Krea (Grok) Imagine"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/storage/stable-diffusion-models/krea2/Kreamagine-Q8_0.gguf
+      --vae /srv/storage/stable-diffusion-models/krea2/vae-hdr-q8_0.gguf
+      --llm /srv/storage/stable-diffusion-models/krea2/text-encoder-engineer-v1-q8_0.gguf
+      --max-vram 22 --rng cuda
+      --fa --offload-to-cpu
+      --sampling-method er_sde
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5953
+
+  - model_id: krea-2-darkbeast-2
+    name: "Darkbeast2"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/storage/stable-diffusion-models/krea2/darkBeast-q8_0.gguf
+      --vae /srv/storage/stable-diffusion-models/krea2/vae-hdr-q8_0.gguf
+      --llm /srv/storage/stable-diffusion-models/krea2/text-encoder-engineer-v1-q8_0.gguf
+      --lora-model-dir /srv/storage/stable-diffusion-models/krea2/loras
+      --lora-apply-mode immediately
+      --max-vram 22 --rng cuda
+      --fa --offload-to-cpu
+      --sampling-method er_sde
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5954
+
+  - model_id: ltx-2.3-video
+    name: "LTX-2.3 video"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/ltx-2.3/diffusion_models/ltx-2.3-22b-distilled-1.1-UD-Q5_K_M.gguf
+      --vae /srv/ssd/models/dit/ltx-2.3/vae/ltx-2.3-22b-distilled_video_vae.safetensors
+      --audio-vae /srv/ssd/models/dit/ltx-2.3/vae/ltx-2.3-22b-distilled_audio_vae.safetensors
+      --llm /srv/ssd/models/dit/ltx-2.3/text_encoders/gemma-3-12b-it-UD-Q4_K_XL.gguf
+      --embeddings-connectors /srv/ssd/models/dit/ltx-2.3/text_encoders/ltx-2.3-22b-distilled_embeddings_connectors.safetensors
+      --lora-model-dir /srv/ssd/models/dit/ltx-2.3/loras
+      --diffusion-fa
+      --offload-to-cpu
+      --vae-tiling
+      --temporal-tiling
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 120
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 0
+    port: 5955
+
+  - model_id: minimax-h3-video
+    name: "MiniMax-H3 (T2VA, text-to-audio-video)"
+    command: >
+      /opt/ai/bin/sd-server
+      -M vid_gen
+      -l 0.0.0.0 --listen-port {port}
+      --diffusion-model /srv/ssd/models/dit/minimax-h3/diffusion_models/minimax_h3_fl2va-Q4_K_M.gguf
+      --vae /srv/ssd/models/dit/minimax-h3/vae/minimax_h3_video_vae_fp16.safetensors
+      --audio-vae /srv/ssd/models/dit/minimax-h3/vae/minimax_h3_audio_vae_fp32.safetensors
+      --llm /srv/ssd/models/dit/minimax-h3/text_encoders/qwen3vl_32b_minimax_h3-Q4_K_M.gguf
+      --diffusion-fa
+      --offload-to-cpu
+      --vae-tiling
+      --temporal-tiling
+      --mmap
+      --fps 24
+      -W 1280 -H 720
+      -s -1
+      --cfg-scale 1.0
+      --rng cpu
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 120
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 0
+    port: 5956
+
+  - model_id: sdxl-lightning
+    name: "Juggernaut XI Lightning"
+    command: >
+      /opt/ai/bin/sd-server
+      --model /srv/ssd/models/dit/sdxl-jug-xi/Juggernaut-XI-byRunDiffusion-Lightning.safetensors
+      --clip_l /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_l.safetensors
+      --clip_g /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_g.safetensors
+      --vae /srv/ssd/models/dit/sdxl-jug-xi/sdxl_vae.safetensors
+      --fa --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --sampling-method dpm++2m --scheduler karras
+      --steps 7 --cfg-scale 1.8 --seed -1
+      -n "fake eyes, deformed eyes, bad eyes, cgi, 3D, digital, airbrushed"
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 0
+    port: 5957
+
+  - model_id: sdxl-juggernaut-xi
+    name: "Juggernaut XI SDXL"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/sdxl-jug-xi/Juggernaut-XI-byRunDiffusion.safetensors
+      --clip_l /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_l.safetensors
+      --clip_g /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_g.safetensors
+      --vae /srv/ssd/models/dit/sdxl-jug-xi/sdxl_vae.safetensors
+      --fa --vae-tiling --mmap --max-vram 22 --rng cuda
+      --sampling-method dpm++2m --scheduler karras
+      --steps 30 --cfg-scale 4.5 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5958
+
+  - model_id: z-anime-turbo
+    name: "Anime (Z Anime 8 step)"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/z-image-turbo/z-anime-distill-8step-bf16.safetensors
+      --vae /srv/ssd/models/dit/z-image-turbo/ae.safetensors
+      --llm /srv/ssd/models/dit/z-image-turbo/qwen_3_4b-engineer-v4-bf16.safetensors
+      --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --fa
+      --sampling-method euler_a
+      --scheduler sgm_uniform
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -W 2048 -H 2048
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5959
+
+  - model_id: z-image-juggernaut-fast
+    name: "Juggernaut Z Fast"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/z-image-turbo/JuggernautZ_Fast_by_RunDiffusion.safetensors
+      --vae /srv/ssd/models/dit/z-image-turbo/ae.safetensors
+      --llm /srv/ssd/models/dit/z-image-turbo/Z-Image-Engineer-V6.safetensors
+      --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --fa
+      --sampling-method res_multistep
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -W 2048 -H 2048
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5960
+
+  - model_id: flux2-klein
+    name: "Flux.2 Klein 9B"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/flux-2/Flux2-Klein-9B-True-v2-bf16.safetensors
+      --vae /srv/ssd/models/dit/flux-2/flux2-vae.safetensors
+      --llm /srv/ssd/models/dit/flux-2/flux2-klein-9b-uncensored-f16.gguf
+      --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --fa
+      --steps 4 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5961
+
+  - model_id: sdxl-realvis-lightning
+    name: "RealVisXL v5.0 Lightning"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/sdxl-jug-xi/RealVisXL_V5.0_Lightning_fp16.safetensors
+      --vae /srv/ssd/models/dit/sdxl-jug-xi/sdxl_vae.safetensors
+      --clip_l /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_l.safetensors
+      --clip_g /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_g.safetensors
+      --hires-upscalers-dir /srv/ssd/models/dit/upscalers --hires-upscaler 4x_NMKD-Superscale-SP_178000_G --hires-steps 3 --hires-scale 1.3 --hires-denoising-strength 0.5 --hires
+      --mmap --max-vram 22 --rng cuda
+      --fa
+      --offload-to-cpu
+      --sampling-method dpm++2m --scheduler karras
+      --steps 5 --cfg-scale 1.5 --seed -1
+      -n "(octane render, render, drawing, anime, bad photo, bad photography:1.3), (worst quality, low quality, blurry:1.2), (bad teeth, deformed teeth, deformed lips), (bad anatomy, bad proportions:1.1), (deformed iris, deformed pupils), (deformed eyes, bad eyes), (deformed face, ugly face, bad face), (deformed hands, bad hands, fused fingers), morbid, mutilated, mutation, disfigured"
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5962
+
+  - model_id: stable-diffusion-3.5-medium
+    name: "Stable Diffusion 3.5 Large"
+    command: >
+      /opt/ai/bin/sd-server
+      --model /srv/ssd/models/dit/sd3.5/sd3.5_large-q8_0.gguf
+      --t5xxl /srv/ssd/models/dit/sd3.5/t5xxl_fp16.safetensors
+      --clip_l /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_l.safetensors
+      --clip_g /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_g.safetensors
+      --fa --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --clip-on-cpu
+      --steps 7 --cfg-scale 4.5 --seed -1
+      -n "fake eyes, deformed eyes, bad eyes, cgi, 3D, digital, airbrushed"
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5963
+
+  - model_id: stable-diffusion-inpainting
+    name: "SD3.5 img2img (1024)"
+    command: >
+      /opt/ai/bin/sd-server
+      --model /srv/ssd/models/dit/sd3.5/sd3.5_large-q8_0.gguf
+      --clip_l /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_l.safetensors
+      --clip_g /srv/ssd/models/dit/sdxl-jug-xi/encoders/clip_g.safetensors
+      --t5xxl /srv/ssd/models/dit/sd3.5/t5xxl_fp16.safetensors
+      --fa --vae-tiling --mmap --max-vram 22 --rng cuda
+      --sampling-method dpm++2m --scheduler karras
+      --steps 30 --cfg-scale 4.5 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5964
+
+  - model_id: z-image
+    name: "Z Image Base"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/z-image-turbo/z_image_bf16.safetensors
+      --vae /srv/ssd/models/dit/z-image-turbo/ae.safetensors
+      --llm /srv/ssd/models/dit/z-image-turbo/Z-Image-Engineer-V6.safetensors
+      --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --fa
+      --sampling-method res_multistep
+      --scheduler simple
+      --steps 50 --cfg-scale 4.0 --seed -1
+      -W 2048 -H 2048
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5965
+
+  - model_id: z-image-redcraft
+    name: "RedCraft z-image-turbo"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/krea2/redcraft.safetensors
+      --vae /srv/ssd/models/dit/z-image-turbo/ae.safetensors
+      --llm /srv/ssd/models/dit/z-image-turbo/Z-Image-Engineer-V6.safetensors
+      --mmap --max-vram 22 --rng cuda
+      --offload-to-cpu
+      --auto-fit
+      --vae-tiling
+      --fa
+      --sampling-method er_sde
+      --scheduler simple
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5966
+
+  - model_id: boogu-image-edit
+    name: "Boogu image edit"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/boogu/boogu_image_edit_turbo-q8_0.gguf
+      --llm /srv/ssd/models/dit/boogu/Qwen3-VL-8B-Instruct-Q4_K_M.gguf
+      --vae /srv/ssd/models/dit/boogu/flux1_vae_bf16.safetensors
+      --diffusion-fa
+      --mmap --max-vram 22 --rng cpu
+      --offload-to-cpu
+      --vae-tiling
+      --type q8_0
+      --steps 4 --cfg-scale 1.0 --seed -1
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5967
+
+  - model_id: qwen-image-edit-2511
+    name: "Qwen image edit 2.5.11"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/storage/stable-diffusion-models/qwen-image-edit-2511/qwen-image-edit-2511-Q4_K_M.gguf
+      --vae /srv/storage/stable-diffusion-models/qwen-image-edit-2511/qwen_image_vae.safetensors
+      --llm /srv/storage/stable-diffusion-models/qwen-image-edit-2511/Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf
+      --llm_vision /srv/storage/stable-diffusion-models/qwen-image-edit-2511/mmproj-F16.gguf
+      --model-args qwen_image_zero_cond_t=1
+      --diffusion-fa
+      --vae-tiling
+      --auto-fit
+      --mmap
+      --max-vram -1
+      --rng cuda
+      --offload-to-cpu
+      --sampling-method euler
+      --scheduler simple
+      --steps 30
+      --cfg-scale 4.0
+      --seed -1
+      -W 1024
+      -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5968
+
+  - model_id: ideogram4
+    name: "Ideogram 4"
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/ssd/models/dit/ideogram4/ideogram4-Q8_0.gguf
+      --uncond-diffusion-model /srv/ssd/models/dit/ideogram4/ideogram4_uncond-Q8_0.gguf
+      --llm /srv/ssd/models/dit/ideogram4/Qwen3-VL-8B-Instruct-Q4_K_M.gguf
+      --vae /srv/ssd/models/dit/flux-2/flux2-vae.safetensors
+      --diffusion-fa
+      --offload-to-cpu
+      --vae-tiling
+      --mmap
+      --max-vram 22
+      --rng cuda
+      --seed -1
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    port: 5969
+
+pools:
+  coding-pool:
+    strategy: spillover
+    targets: [qwopus-27b-coder, buster/qwopus-27b-coder-compat, gareths-homelab/llm-coding-model-waldron]
+    spillover: 1
+  daily-driver:
+    strategy: spillover
+    targets: [qwable-35b, buster/agents-a1, gareths-homelab/llm-daily-driver-waldron]
+    spillover: 1
+  intent-router:
+    strategy: spillover
+    targets: [intent-model, buster/intent-model, nomad/qwen3.5-9b]
+    spillover: 2
+
+peers:
+  - name: buster
+    kind: router
+    base_url: http://192.168.1.61:18080
+    models: [qwopus-27b-coder-compat, agents-a1, intent-model]
+  - name: nomad
+    kind: router
+    base_url: http://192.168.1.202:8081
+    models: [qwen3.5-9b]
+  - name: gareths-homelab
+    kind: router
+    base_url: http://100.89.49.44:8081
+    models: [llm-coding-model-waldron, llm-daily-driver-waldron, llm-intent-router-waldron, llm-ornith-waldron]
+  # nugget (192.168.1.62) is back online 2026-08-19 -- peer re-enabled.
+  - name: nugget
+    kind: router
+    base_url: http://192.168.1.62:8081
+    models: [gemma-4-12b, qwopus-35b-coder, qwopus-27b-coder-compat, intent-model,
+             qwen3-embedding-4b, jina-reranker-v3.5, gemma-4-26b, ornith-35b,
+             qwopus-27b-fusion, davidau-fable-fusion-711, agents-a1, grug-35b-mtp,
+             grug-27b-mtp, qwen3.6-35b, muse-glimmer-30b]
