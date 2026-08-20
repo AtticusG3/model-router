@@ -25,9 +25,9 @@ ss -tlnp | grep -E ':(18080|8081|8082)\b'   # per-node port from the table below
 # 1. Install the binary + configs.
 install -m 0755 build/model-router /opt/ai/bin/model-router
 install -m 0644 configs/<node>.yaml /opt/ai/config/model-router.yaml
+install -m 0644 configs/qwen-fixed-chat-template.jinja /opt/ai/config/qwen-fixed-chat-template.jinja
 # (peers are inline in the config for v0.1; the SPEC's separate peers.yaml can
 #  be introduced later without schema changes)
-# nomad also needs configs/qwen-fixed-chat-template.jinja → /opt/ai/config/
 
 # 2. Validate.
 /opt/ai/bin/model-router -check -config /opt/ai/config/model-router.yaml

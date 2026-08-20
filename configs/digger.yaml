@@ -2,6 +2,7 @@
 # GPU: NVIDIA RTX PRO 4000 Blackwell 24GB. Image node (sd.cpp) + LLM stanzas.
 # 2026-08-20 used: ornith heretic-compact 23299 (256k f16 MTP+mmproj),
 # qwen3.8-27b 22118 (128k q4_0; 256k lost). Intent is CPU (ngl 0).
+# qwen3.8-27b uses /opt/ai/config/qwen-fixed-chat-template.jinja.
 # Note: this node's sd.cpp stanzas share ONE /sdapi/v1 path; krea-2-turbo is the
 # path_default (requests without a body `model` field land there). Clients that
 # need a specific image model MUST send `"model": "<id>"` in the JSON body --

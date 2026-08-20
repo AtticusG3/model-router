@@ -108,6 +108,24 @@ Legacy pool/proxy names are aliases only.
 
 Image-only extras on digger/gareth (`sdxl-lightning`, `z-image`, `flux2-klein`, …) keep their local ids. Do not prefix with a hostname or `-waldron` as the identity.
 
+## Qwen chat template (3.5 / 3.6 / 3.8)
+
+Those chat stanzas (`qwen3.5-9b`, `qwen3.6-35b-a3b`, `qwen3.8-27b`) use
+[froggeric/Qwen-Fixed-Chat-Templates](https://huggingface.co/froggeric/Qwen-Fixed-Chat-Templates)
+v22.2. Copy `configs/qwen-fixed-chat-template.jinja` to
+`/opt/ai/config/qwen-fixed-chat-template.jinja` on every node that hosts
+them, then pass:
+
+```
+--jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+--reasoning-format deepseek
+```
+
+Add `--reasoning-preserve` only when that llama-server build lists the
+flag (buster stock, nugget TurboQuant). Do not apply this template to
+intent (`qwen3-0.6b-instruct`, `qwen2.5-1.5b-instruct`), embeddings, or
+sd.cpp `--llm` vision encoders.
+
 ## Measured `vram_mb` (2026-08-20)
 
 nvidia-smi **used** at `/health`, then `vram_mb` rounded up for admission headroom.

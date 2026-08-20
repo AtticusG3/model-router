@@ -4,7 +4,7 @@
 # vram_mb is nvidia-smi used rounded up after a successful ladder load.
 # 2026-08-20: qwen3.6-35b-a3b needed 128k turbo4, no mmproj, no MTP
 # (used=14764). ornith compact kept 256k f16 MTP+mmproj (used=14660).
-# intent used=1278.
+# intent used=1278. qwen3.6 uses /opt/ai/config/qwen-fixed-chat-template.jinja.
 
 listen: 127.0.0.1:18080
 start_port: 5801
