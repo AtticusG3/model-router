@@ -76,8 +76,9 @@ Per-node YAML with `stanzas` (SPEC schema + `device`, `aliases`, `env`,
 `port`), optional `pools` (compat spillover ids such as `coding-pool`; not
 listed), `peers` (`kind: router` for fleet nodes, `kind: openai` for
 proxy-only upstreams like openrouter), `preload`, and `telemetry` tuning.
-Staged fleet configs are in `configs/`; the swap procedure is in
-`deploy/swap-over.md`.
+Staged fleet configs are in `configs/` (plus
+`qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
+stanzas). The swap procedure is in `deploy/swap-over.md`.
 
 ## Test
 
@@ -96,11 +97,12 @@ touches real models, GPUs, or the running llama-swap.
 ```
 SPEC.md                  goals & architecture
 PLAN.md                  fleet survey, pitfalls, fitted design, deploy plan
+docs/vram-fit-ladder.md  shared model_ids, VRAM ladder, Qwen chat template
 cmd/model-router/        the router binary
 cmd/fake-model/          test backend (OpenAI + sdapi surface)
 internal/config/         config loading/validation
 internal/router/         matcher, admission, supervisor, telemetry, pools, proxy, server
-configs/                 staged per-node configs (buster, nugget, nomad, digger, gareths-homelab)
+configs/                 per-node YAML + qwen-fixed-chat-template.jinja
 deploy/                  systemd units + swap-over procedure
 test/                    smoke-test configs + launcher
 ```

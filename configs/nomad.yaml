@@ -1,6 +1,7 @@
 # nomad -- model-router v0.1 staged config (replaces llama-swap on 0.0.0.0:8081)
 # Single model: Qwen3.5-9B Abliterated (TurboQuant vision) on the RTX A2000 8GB.
-# Weights under /opt/ai/models/.
+# Weights under /opt/ai/models/. Chat template:
+# /opt/ai/config/qwen-fixed-chat-template.jinja (froggeric v22.2).
 
 listen: 0.0.0.0:8081
 start_port: 5901

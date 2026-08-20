@@ -8,8 +8,8 @@
 # (docs/vram-fit-ladder.md). Chat + image on V100; specialists on 4060.
 # 2026-08-20 used: agents-a1 28437 (256k f16 MTP+mmproj), qwen3.8-27b
 # 28703 (256k q8_0), ornith-quality 28635 (256k f16 MTP+mmproj),
-# ornith-compact 22829 (256k f16 MTP), qwen3.6-quality 28965 (256k f16
-# MTP+mmproj), intent 1019 / embed 3419 / rerank 1269.
+# qwen3.6-quality 28965 (256k f16 MTP+mmproj), intent 1019 / embed 3419
+# / rerank 1269. Qwen 3.6/3.8 use /opt/ai/config/qwen-fixed-chat-template.jinja.
 
 listen: 0.0.0.0:18080
 start_port: 5901

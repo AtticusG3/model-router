@@ -6,6 +6,7 @@
 # rounded up): agents-a1 29003, qwen3.8-27b 29059 (256k q8_0), ornith-quality
 # 29241, qwen3.6-quality 29333, embed 4029, rerank 1881. Chat wins were
 # 256k KV f16 + MTP/mmproj except qwen3.8 (f16 lost, q8_0 kept).
+# Qwen 3.6/3.8 use /opt/ai/config/qwen-fixed-chat-template.jinja.
 
 listen: 0.0.0.0:8081
 start_port: 5901
