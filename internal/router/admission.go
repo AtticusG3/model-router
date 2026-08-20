@@ -15,7 +15,6 @@ type GPUState struct {
 	Name         string `json:"name"`
 	TotalMB      int64  `json:"total_mb"`
 	FreeMB       int64  `json:"free_mb"`
-	LoadedModel  string `json:"loaded_model,omitempty"`
 	LastSeenUnix int64  `json:"last_seen_unix"`
 }
 
@@ -59,18 +58,20 @@ func (l *Ledger) GPUs() []*GPUState {
 	return out
 }
 
-// available = polled free MB minus our reservations on that GPU.
+// available is TotalMB minus reservations on that GPU. Polled FreeMB is
+// telemetry, not a second source of truth for fit.
 func (l *Ledger) available(g *GPUState) int64 {
-	free := g.FreeMB
+	used := int64(0)
 	for _, r := range l.reservations {
 		if r.gpuIndex == g.Index {
-			free -= r.vramMB
+			used += r.vramMB
 		}
 	}
-	if free < 0 {
-		free = 0
+	avail := g.TotalMB - used
+	if avail < 0 {
+		avail = 0
 	}
-	return free
+	return avail
 }
 
 // deviceIndex resolves a stanza's device string ("CUDA0", "0", "gpu:0") to a
@@ -89,9 +90,10 @@ func deviceIndex(device string) int {
 	return -1
 }
 
-// Reserve attempts to admit a stanza: finds a GPU with enough free VRAM and
-// records the reservation. Returns the chosen GPU index and true on success.
-// The reservation must be released with Release (on unload or failed spin-up).
+// Reserve attempts to admit a stanza: finds a GPU whose remaining
+// (total - reservations) VRAM fits, and records the reservation. Returns the
+// chosen GPU index and true on success. Keep the reservation until Unload or
+// failed Start.
 func (l *Ledger) Reserve(s *config.Stanza) (int, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
