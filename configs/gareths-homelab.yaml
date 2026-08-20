@@ -292,7 +292,7 @@ peers:
              krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nomad
     kind: router
-    base_url: http://192.168.1.202:8081
+    base_url: http://100.107.91.127:8081
     models: [qwen3.5-9b]
   - name: nugget
     kind: router
