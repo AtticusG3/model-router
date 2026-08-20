@@ -4,11 +4,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"model-router/internal/config"
@@ -30,72 +27,19 @@ type Managed struct {
 	stanza *config.Stanza
 	logger *Logger
 
-	mu       sync.Mutex
-	state    ProcessState
-	cmd      *exec.Cmd
-	port     int
-	gpuIdx   int
-	lastUsed time.Time
-	// inflight is the number of requests currently proxied to this backend.
-	inflight int
-
-	// restart bookkeeping
-	restartAttempts int
-	stopCh          chan struct{}
-	stopOnce        sync.Once
-}
-
-// Logger is a minimal leveled logger to keep the router dependency-free.
-// Recent entries are exposed to the local WebUI; the process stdout/stderr
-// remains the durable source for systemd/journald.
-type Logger struct {
 	mu     sync.Mutex
-	w      io.Writer
-	verb   bool
-	recent []string
-}
+	state  ProcessState
+	proc   Proc
+	port   int
+	gpuIdx int
+	// spawn, if set, overrides the GOOS spawnProc. Tests inject a fake.
+	spawn    spawner
+	lastUsed time.Time
 
-const maxRecentLogs = 300
-
-func NewLogger(w io.Writer, verbose bool) *Logger { return &Logger{w: w, verb: verbose} }
-
-func (l *Logger) write(prefix, format string, args ...any) {
-	line := prefix + fmt.Sprintf(format, args...)
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.recent = append(l.recent, line)
-	if len(l.recent) > maxRecentLogs {
-		l.recent = l.recent[len(l.recent)-maxRecentLogs:]
-	}
-	fmt.Fprintln(l.w, line)
-}
-
-func (l *Logger) Infof(format string, args ...any) {
-	l.write("[router] ", format, args...)
-}
-
-func (l *Logger) Debugf(format string, args ...any) {
-	if !l.verb {
-		return
-	}
-	l.write("[router:debug] ", format, args...)
-}
-
-func (l *Logger) Errorf(format string, args ...any) {
-	l.write("[router:error] ", format, args...)
-}
-
-// RecentLogs returns the newest log entries, newest last.
-func (l *Logger) RecentLogs(limit int) []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if limit <= 0 || limit > len(l.recent) {
-		limit = len(l.recent)
-	}
-	start := len(l.recent) - limit
-	out := make([]string, limit)
-	copy(out, l.recent[start:])
-	return out
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	// waitDone is closed by the single Wait owner (watch) when the process exits.
+	waitDone chan struct{}
 }
 
 // State returns the current process state.
@@ -105,29 +49,11 @@ func (m *Managed) State() ProcessState {
 	return m.state
 }
 
-// Touch records request activity (resets the idle TTL clock).
-func (m *Managed) Touch() {
+// markUsed resets the idle TTL clock. Pool occupancy lives on Router.
+func (m *Managed) markUsed() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.lastUsed = time.Now()
-	m.inflight++
-}
-
-// Done decrements in-flight count.
-func (m *Managed) Done() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.inflight > 0 {
-		m.inflight--
-	}
-	m.lastUsed = time.Now()
-}
-
-// Inflight returns the current in-flight request count.
-func (m *Managed) Inflight() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.inflight
+	m.mu.Unlock()
 }
 
 // newManaged constructs a supervisor for a stanza. The port is the backend port.
@@ -156,41 +82,33 @@ func (m *Managed) Start() (int, error) {
 		return m.gpuIndex(), nil
 	}
 	m.state = StateStarting
-	m.mu.Unlock()
-
-	m.mu.Lock()
 	m.gpuIdx = -1
+	m.stopCh = make(chan struct{})
+	m.stopOnce = sync.Once{}
+	m.proc = nil
+	m.waitDone = nil
+	spawn := m.spawn
 	m.mu.Unlock()
 
-	// Build the command. The stanza command is already macro-expanded.
-	cmd := exec.Command("/bin/sh", "-c", m.stanza.Command)
-	cmd.Env = append(os.Environ(), m.stanza.Env...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		m.fail("stdout pipe: %v", err)
-		return -1, err
+	if spawn == nil {
+		spawn = spawnProc
 	}
-	stderr, err := cmd.StderrPipe()
+	proc, err := spawn(m.stanza.Command, m.stanza.Env)
 	if err != nil {
-		m.fail("stderr pipe: %v", err)
-		return -1, err
-	}
-	if err := cmd.Start(); err != nil {
-		m.fail("spawn: %v", err)
+		m.fail("%v", err)
 		return -1, err
 	}
 
 	m.mu.Lock()
-	m.cmd = cmd
+	m.proc = proc
+	m.waitDone = make(chan struct{})
 	m.mu.Unlock()
 
-	// Capture logs.
-	go m.copyLogs(stdout)
-	go m.copyLogs(stderr)
+	go m.copyLogs(proc.Stdout())
+	go m.copyLogs(proc.Stderr())
+	go m.watch()
 
-	m.logger.Infof("started %s (pid %d, port %d)", m.stanza.ModelID, cmd.Process.Pid, m.port)
+	m.logger.Infof("started %s (pid %d, port %d)", m.stanza.ModelID, proc.PID(), m.port)
 
 	// Wait for health.
 	spinUp := time.Duration(m.stanza.SpinUpSeconds) * time.Second
@@ -216,9 +134,9 @@ func (m *Managed) Start() (int, error) {
 	// backend from a previous instance), which would otherwise let us mark a
 	// dead child as healthy and restart-loop forever.
 	m.mu.Lock()
-	aliveProc := m.cmd != nil && m.cmd.Process != nil && m.cmd.Process.Signal(syscall.Signal(0)) == nil
+	aliveProc := m.proc
 	m.mu.Unlock()
-	if !aliveProc {
+	if aliveProc == nil || !aliveProc.Alive() {
 		m.logger.Errorf("%s: health passed but spawned process is not alive (port %d held by another process?)", m.stanza.ModelID, m.port)
 		m.stop()
 		m.fail("process not alive after health check")
@@ -228,14 +146,10 @@ func (m *Managed) Start() (int, error) {
 	m.mu.Lock()
 	m.state = StateRunning
 	m.lastUsed = time.Now()
-	m.restartAttempts = 0
 	m.mu.Unlock()
 
 	// Record the GPU this model landed on (set by the router after Start).
 	m.logger.Infof("%s healthy on port %d", m.stanza.ModelID, m.port)
-
-	// Watch for unexpected exits and restart (crash/restart).
-	go m.watch()
 
 	return m.gpuIndex(), nil
 }
@@ -255,6 +169,9 @@ func (m *Managed) SetGPU(idx int) {
 
 // copyLogs feeds backend stdout/stderr to the debug logger.
 func (m *Managed) copyLogs(r io.Reader) {
+	if r == nil {
+		return
+	}
 	buf := make([]byte, 16<<10)
 	for {
 		n, err := r.Read(buf)
@@ -283,16 +200,21 @@ func (m *Managed) health() error {
 	return nil
 }
 
-// watch restarts the backend if it dies unexpectedly while it is supposed to
-// be running (crash/restart). Only restarts when the model is still wanted.
+// watch is the single Wait owner. It restarts the backend if it dies
+// unexpectedly while it is supposed to be running (crash/restart).
 func (m *Managed) watch() {
 	m.mu.Lock()
-	cmd := m.cmd
+	proc := m.proc
+	waitDone := m.waitDone
 	m.mu.Unlock()
-	if cmd == nil {
+	if proc == nil {
 		return
 	}
-	err := cmd.Wait()
+	err := proc.Wait()
+	if waitDone != nil {
+		close(waitDone)
+	}
+
 	m.mu.Lock()
 	wasRunning := m.state == StateRunning
 	m.state = StateStopped
@@ -338,36 +260,28 @@ func (m *Managed) Stop() {
 func (m *Managed) stop() {
 	m.stopOnce.Do(func() { close(m.stopCh) })
 	m.mu.Lock()
-	cmd := m.cmd
+	proc := m.proc
+	waitDone := m.waitDone
 	m.state = StateStopping
 	m.mu.Unlock()
-	if cmd == nil || cmd.Process == nil {
+	if proc == nil {
 		m.mu.Lock()
 		m.state = StateStopped
 		m.mu.Unlock()
 		return
 	}
-	// Kill the process group so children (e.g. sd-server subprocesses) die too.
-	pgid, err := syscall.Getpgid(cmd.Process.Pid)
-	if err == nil {
-		syscall.Kill(-pgid, syscall.SIGTERM)
-	} else {
-		cmd.Process.Signal(syscall.SIGTERM)
+	_ = proc.SignalTerm()
+	if waitDone == nil {
+		m.mu.Lock()
+		m.state = StateStopped
+		m.mu.Unlock()
+		return
 	}
-	done := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(done)
-	}()
 	select {
-	case <-done:
+	case <-waitDone:
 	case <-time.After(10 * time.Second):
-		if err == nil {
-			syscall.Kill(-pgid, syscall.SIGKILL)
-		} else {
-			cmd.Process.Kill()
-		}
-		<-done
+		_ = proc.Kill()
+		<-waitDone
 	}
 	m.mu.Lock()
 	m.state = StateStopped
