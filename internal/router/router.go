@@ -24,9 +24,10 @@ type Router struct {
 	peers  *PeerCache
 	node   string
 
-	mu       sync.Mutex
-	managed  map[string]*Managed // local stanza id -> supervisor
-	poolBusy map[string]int      // pool name -> in-flight requests
+	mu        sync.Mutex
+	managed   map[string]*Managed // local stanza id -> supervisor
+	occupancy map[string]int      // target key -> in-flight selected requests
+	spawn     spawner             // tests inject a fake; nil uses the GOOS default
 
 	httpc *http.Client
 }
@@ -35,14 +36,14 @@ type Router struct {
 func New(cfg *config.Config, logger *Logger, node string) *Router {
 	stale := time.Duration(cfg.Telemetry.PeerStaleSeconds) * time.Second
 	return &Router{
-		cfg:      cfg,
-		logger:   logger,
-		ledger:   NewLedger(),
-		peers:    NewPeerCache(stale),
-		node:     node,
-		managed:  map[string]*Managed{},
-		poolBusy: map[string]int{},
-		httpc:    &http.Client{Timeout: 0}, // no overall timeout; streaming is long
+		cfg:       cfg,
+		logger:    logger,
+		ledger:    NewLedger(),
+		peers:     NewPeerCache(stale),
+		node:      node,
+		managed:   map[string]*Managed{},
+		occupancy: map[string]int{},
+		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
 	}
 }
 
@@ -64,6 +65,9 @@ func (r *Router) Load(modelID string) (int, error) {
 	m, ok := r.managed[modelID]
 	if !ok {
 		m = newManaged(s, s.Port, r.logger)
+		if r.spawn != nil {
+			m.spawn = r.spawn
+		}
 		r.managed[modelID] = m
 	}
 	r.mu.Unlock()
@@ -72,7 +76,8 @@ func (r *Router) Load(modelID string) (int, error) {
 		return m.gpuIndex(), nil
 	}
 
-	// Admission control: reserve VRAM before spawning.
+	// Admission control: reserve VRAM before spawning. Keep it until Unload
+	// or failed Start so crash-restart does not need to re-reserve.
 	gpu, ok := r.ledger.Reserve(s)
 	if !ok {
 		return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, modelID)
@@ -83,12 +88,6 @@ func (r *Router) Load(modelID string) (int, error) {
 		return -1, err
 	}
 	m.SetGPU(gpu)
-	// Reservations protect the spin-up window. Once the backend is healthy,
-	// nvidia-smi accounts for its actual allocation; retaining the reservation
-	// would count the same VRAM twice and can reject a model that genuinely fits.
-	if m.State() == StateRunning {
-		r.ledger.Release(modelID)
-	}
 	return gpu, nil
 }
 
@@ -96,38 +95,45 @@ func (r *Router) Load(modelID string) (int, error) {
 func (r *Router) Unload(modelID string) error {
 	r.mu.Lock()
 	m, ok := r.managed[modelID]
-	r.mu.Unlock()
 	if !ok {
+		r.mu.Unlock()
 		return fmt.Errorf("not loaded: %s", modelID)
 	}
+	delete(r.managed, modelID)
+	r.mu.Unlock()
 	m.Stop()
 	r.ledger.Release(modelID)
 	return nil
+}
+
+// Target is a concrete serving destination after pool/spillover resolution.
+type Target struct {
+	Local  string
+	Peer   string
+	PeerID string
 }
 
 // resolveTarget resolves a ModelRef to a concrete serving target:
 //   - local stanza id (may need to be spawned)
 //   - pool name (spillover resolution)
 //   - peer-qualified "peer/model"
-//
-// Returns (kind, localID, peerName, peerModel, error).
-func (r *Router) resolveTarget(ref ModelRef) (kind string, localID string, peerName string, peerModel string, err error) {
+func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 	switch {
 	case ref.Local != "":
-		return "local", ref.Local, "", "", nil
+		return Target{Local: ref.Local}, nil
 	case ref.Pool != "":
 		return r.resolvePool(ref.Pool)
 	case ref.Peer != "":
 		p := r.cfg.Peer(ref.Peer)
 		if p == nil {
-			return "", "", "", "", fmt.Errorf("unknown peer %q", ref.Peer)
+			return Target{}, fmt.Errorf("unknown peer %q", ref.Peer)
 		}
 		if !r.peerHasModel(p, ref.PeerID) {
-			return "", "", "", "", fmt.Errorf("peer %s does not serve %q", ref.Peer, ref.PeerID)
+			return Target{}, fmt.Errorf("peer %s does not serve %q", ref.Peer, ref.PeerID)
 		}
-		return "peer", "", ref.Peer, ref.PeerID, nil
+		return Target{Peer: ref.Peer, PeerID: ref.PeerID}, nil
 	}
-	return "", "", "", "", ErrNoModel
+	return Target{}, ErrNoModel
 }
 
 func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
@@ -139,49 +145,128 @@ func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
 	return false
 }
 
+func occupancyKey(t Target) string {
+	if t.Local != "" {
+		return t.Local
+	}
+	if t.Peer != "" {
+		return t.Peer + "/" + t.PeerID
+	}
+	return ""
+}
+
+func (r *Router) releaseOccupancy(t Target) {
+	key := occupancyKey(t)
+	if key == "" {
+		return
+	}
+	r.mu.Lock()
+	if r.occupancy[key] > 0 {
+		r.occupancy[key]--
+	}
+	r.mu.Unlock()
+}
+
+func (r *Router) modelVram(modelID string) int64 {
+	if s := r.cfg.Stanza(modelID); s != nil {
+		return s.VramMB
+	}
+	if s := r.cfg.Alias(modelID); s != nil {
+		return s.VramMB
+	}
+	return 0
+}
+
+// peerFits reports whether cached peer telemetry shows a GPU with at least
+// vramMB free. Used only to pick a candidate; the peer admits for real.
+// Unknown or zero vram (no local stanza/alias) fails closed: FreeMB >= 0
+// must not count as a fit.
+func (r *Router) peerFits(name string, vramMB int64) bool {
+	if vramMB <= 0 {
+		return false
+	}
+	if !r.peers.Fresh(name) {
+		return false
+	}
+	t := r.peers.Snapshot()[name]
+	if t == nil {
+		return false
+	}
+	for _, g := range t.GPUs {
+		if g.FreeMB >= vramMB {
+			return true
+		}
+	}
+	return false
+}
+
 // resolvePool implements spillover selection. Targets are tried in order; a
-// target is used when it is loaded with in-flight below the spillover cap, or
-// when it can be admitted locally / reached on a peer.
-func (r *Router) resolvePool(poolName string) (kind string, localID string, peerName string, peerModel string, err error) {
+// target is used when occupancy is below the spillover cap and it is loaded
+// or can be admitted locally / reached on a peer. Occupancy increments when
+// a target is chosen.
+func (r *Router) resolvePool(poolName string) (Target, error) {
 	pool := r.cfg.Pool(poolName)
 	if pool == nil {
-		return "", "", "", "", fmt.Errorf("unknown pool %q", poolName)
+		return Target{}, fmt.Errorf("unknown pool %q", poolName)
 	}
-	cap := pool.Spillover
-	if cap <= 0 {
-		cap = 1
+	limit := pool.Spillover
+	if limit <= 0 {
+		limit = 1
 	}
 
 	for _, target := range pool.Targets {
 		ref := resolveRef(target, r.cfg)
 		switch {
 		case ref.Local != "":
+			t := Target{Local: ref.Local}
+			key := occupancyKey(t)
 			r.mu.Lock()
+			busy := r.occupancy[key]
 			m, ok := r.managed[ref.Local]
-			busy := 0
-			if ok {
-				busy = m.Inflight()
+			running := ok && m.State() == StateRunning
+			if busy >= limit {
+				r.mu.Unlock()
+				continue
+			}
+			if running {
+				r.occupancy[key]++
+				r.mu.Unlock()
+				return t, nil
 			}
 			r.mu.Unlock()
-			if ok && m.State() == StateRunning && busy < cap {
-				return "local", ref.Local, "", "", nil
-			}
-			if !ok || m.State() != StateRunning {
-				// Can we admit it locally? Probe without reserving: Reserve is
-				// idempotent for an already-reserved model, so a reserve-then-
-				// release probe would drop an in-flight reservation held by a
-				// concurrent Load (re-opening the door to double-booking).
-				if s := r.cfg.Stanza(ref.Local); s != nil && r.ledger.CanAdmit(s) {
-					return "local", ref.Local, "", "", nil
+			if s := r.cfg.Stanza(ref.Local); s != nil && r.ledger.CanAdmit(s) {
+				r.mu.Lock()
+				if r.occupancy[key] >= limit {
+					r.mu.Unlock()
+					continue
 				}
+				r.occupancy[key]++
+				r.mu.Unlock()
+				return t, nil
 			}
 		case ref.Peer != "":
-			if r.peers.Fresh(ref.Peer) && r.peers.HasFreeVRAM(ref.Peer) {
-				return "peer", "", ref.Peer, ref.PeerID, nil
+			t := Target{Peer: ref.Peer, PeerID: ref.PeerID}
+			key := occupancyKey(t)
+			r.mu.Lock()
+			busy := r.occupancy[key]
+			if busy >= limit {
+				r.mu.Unlock()
+				continue
+			}
+			r.mu.Unlock()
+			if r.peerFits(ref.Peer, r.modelVram(ref.PeerID)) {
+				r.mu.Lock()
+				if r.occupancy[key] >= limit {
+					r.mu.Unlock()
+					continue
+				}
+				r.occupancy[key]++
+				r.mu.Unlock()
+				return t, nil
 			}
 		}
 	}
-	return "", "", "", "", fmt.Errorf("no capacity for pool %q (all targets busy/unreachable)", poolName)
+	return Target{}, fmt.Errorf("no capacity for pool %q (all targets busy/unreachable)", poolName)
 }
 
 // ServeHTTP is the entry for model-routed endpoints.
@@ -191,17 +276,20 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	kind, localID, peerName, peerModel, err := r.resolveTarget(ref)
+	tgt, err := r.resolveTarget(ref)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	if ref.Pool != "" {
+		defer r.releaseOccupancy(tgt)
+	}
 
-	switch kind {
-	case "local":
-		r.serveLocal(w, req, localID)
-	case "peer":
-		r.servePeer(w, req, peerName, peerModel)
+	switch {
+	case tgt.Local != "":
+		r.serveLocal(w, req, tgt.Local)
+	case tgt.Peer != "":
+		r.servePeer(w, req, tgt.Peer, tgt.PeerID)
 	default:
 		http.Error(w, "no router for requested model", http.StatusNotFound)
 	}
@@ -220,8 +308,8 @@ func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID st
 		http.Error(w, "model failed to start", http.StatusServiceUnavailable)
 		return
 	}
-	m.Touch()
-	defer m.Done()
+	m.markUsed()
+	defer m.markUsed()
 	r.proxyTo(w, req, m.stanza.Proxy)
 }
 
@@ -256,7 +344,8 @@ func (r *Router) servePeer(w http.ResponseWriter, req *http.Request, peerName, p
 // the given id, restoring the body for downstream use. JSON bodies are
 // rewritten to field (the peer's configured body_field), preserving all other
 // fields; GETs rewrite the "model" query param, which body_field does not
-// cover.
+// cover. The matcher already buffered and restored r.Body; this only sets
+// the field on those bytes.
 func rewriteBodyModel(req *http.Request, newModel, field string) error {
 	if req.Method == http.MethodGet {
 		q := req.URL.Query()
@@ -270,28 +359,43 @@ func rewriteBodyModel(req *http.Request, newModel, field string) error {
 	if !strings.Contains(ct, "application/json") {
 		return nil
 	}
-	body, err := io.ReadAll(req.Body)
-	if err != nil {
+	if req.Body == nil {
+		return nil
+	}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(req.Body); err != nil {
 		return err
 	}
-	var obj map[string]any
-	if len(body) == 0 {
-		return nil // nothing to rewrite
+	raw := buf.Bytes()
+	if len(raw) == 0 {
+		return nil
 	}
-	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil // not JSON we understand; forward as-is
-	}
-	if obj == nil {
-		obj = map[string]any{}
-	}
-	obj[field] = newModel
-	rewritten, err := json.Marshal(obj)
-	if err != nil {
-		return err
+	rewritten, ok := jsonSetField(raw, field, newModel)
+	if !ok {
+		req.Body = io.NopCloser(bytes.NewReader(raw))
+		return nil
 	}
 	req.Body = io.NopCloser(bytes.NewReader(rewritten))
 	req.ContentLength = int64(len(rewritten))
 	return nil
+}
+
+// jsonSetField sets field to value on a JSON object. false means the bytes
+// are not an object we can rewrite; callers forward them unchanged.
+func jsonSetField(raw []byte, field, value string) ([]byte, bool) {
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false
+	}
+	if obj == nil {
+		obj = map[string]any{}
+	}
+	obj[field] = value
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 // peerLoad asks a peer to load a model. The peer's own admission control
@@ -305,13 +409,10 @@ func (r *Router) peerLoad(p *config.Peer, modelID string) error {
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusConflict:
-		// 200 = loaded, 409 = already loading/loaded.
-		return nil
-	default:
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("peer %s rejected load of %s (%d)", p.Name, modelID, resp.StatusCode)
 	}
+	return nil
 }
 
 // proxyTo reverse-proxies the request to baseURL, preserving path and body and
@@ -376,11 +477,12 @@ func (r *Router) Preload() {
 
 // LocalStatus returns per-stanza state for /v1/models and /_router/status.
 type ModelStatus struct {
-	ID     string `json:"id"`
-	Name   string `json:"name,omitempty"`
-	Type   string `json:"type,omitempty"` // model | selector | peer
-	State  string `json:"state,omitempty"`
-	VramMB int64  `json:"vram_mb,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name,omitempty"`
+	Type    string `json:"type,omitempty"` // model | selector | peer
+	State   string `json:"state,omitempty"`
+	VramMB  int64  `json:"vram_mb,omitempty"`
+	APIType string `json:"api_type,omitempty"`
 }
 
 // LocalModelStatuses lists public local stanzas with their lifecycle state.
@@ -407,7 +509,7 @@ func (r *Router) modelStatuses(includeUnlisted bool) []ModelStatus {
 			st = m.State()
 		}
 		r.mu.Unlock()
-		out = append(out, ModelStatus{ID: id, Name: s.Name, Type: "model", State: string(st), VramMB: s.VramMB})
+		out = append(out, ModelStatus{ID: id, Name: s.Name, Type: "model", State: string(st), VramMB: s.VramMB, APIType: s.APIType})
 	}
 	// Pools (selectors).
 	for name := range r.cfg.Pools {
@@ -454,9 +556,4 @@ func (r *Router) HandleLoad(modelID string) error {
 	}
 	_, err := r.Load(s.ModelID)
 	return err
-}
-
-// HandleUnload is the control endpoint handler.
-func (r *Router) HandleUnload(modelID string) error {
-	return r.Unload(modelID)
 }
