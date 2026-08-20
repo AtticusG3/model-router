@@ -82,7 +82,7 @@ func main() {
 
 	// Peer telemetry syncer.
 	syncEvery := time.Duration(cfg.Telemetry.PeerSyncSeconds) * time.Second
-	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery, nodeName).Run(ctx)
+	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery).Run(ctx)
 
 	// Idle TTL reaper.
 	go func() {
