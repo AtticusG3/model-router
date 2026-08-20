@@ -205,3 +205,112 @@ stanzas:
 		t.Fatalf("api_type = %v, want chat-a=chat img-a=image", got)
 	}
 }
+
+func TestCatalogUniqueMeshModels(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwen38-27b
+    name: "Qwen3.8 27B"
+    command: "x --port {port}"
+    unlisted: true
+    aliases: [coding-model]
+  - model_id: local-only
+    command: "x --port {port}"
+pools:
+  coding-pool:
+    targets: [qwen38-27b, digger/coding-model]
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [qwen38-27b, coding-model, remote-only]
+  - name: nugget
+    kind: router
+    base_url: http://192.168.1.62:8081
+    models: [qwen38-27b, nugget-only]
+`)
+	r.peers.Set("digger", &Telemetry{Node: "digger", GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 9000}}})
+	r.peers.Set("nugget", &Telemetry{Node: "nugget", GPUs: []*GPUState{{Index: 0, TotalMB: 16000, FreeMB: 8000}}})
+
+	got := map[string]ModelStatus{}
+	for _, ms := range r.AllModelStatuses() {
+		if _, dup := got[ms.ID]; dup {
+			t.Fatalf("duplicate catalog id %q", ms.ID)
+		}
+		got[ms.ID] = ms
+	}
+	if _, ok := got["coding-pool"]; ok {
+		t.Fatal("catalog listed selector coding-pool")
+	}
+	if _, ok := got["digger/coding-model"]; ok {
+		t.Fatal("catalog listed peer-qualified id")
+	}
+	if got["qwen38-27b"].Origin != "local" {
+		t.Fatalf("qwen38-27b origin = %q, want local", got["qwen38-27b"].Origin)
+	}
+	if got["coding-model"].ID != "" {
+		t.Fatal("alias coding-model listed as its own catalog row")
+	}
+	if got["remote-only"].Origin != "remote" || got["nugget-only"].Origin != "remote" {
+		t.Fatalf("remote origins: remote-only=%q nugget-only=%q", got["remote-only"].Origin, got["nugget-only"].Origin)
+	}
+	if _, ok := got["local-only"]; !ok {
+		t.Fatal("local-only missing from catalog")
+	}
+}
+
+func TestResolveMeshPicksFreshPeer(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: local-chat
+    command: "x --port {port}"
+    vram_mb: 1000
+peers:
+  - name: nugget
+    kind: router
+    base_url: http://192.168.1.62:8081
+    models: [qwen38-27b]
+`)
+	if _, err := r.resolveTarget(ModelRef{Raw: "qwen38-27b"}); err == nil {
+		t.Fatal("stale peer must not be selected")
+	}
+	r.peers.Set("nugget", &Telemetry{
+		Node: "nugget",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 16000, FreeMB: 8000}},
+	})
+	tgt, err := r.resolveTarget(ModelRef{Raw: "qwen38-27b"})
+	if err != nil {
+		t.Fatalf("resolveMesh: %v", err)
+	}
+	if tgt.Peer != "nugget" || tgt.PeerID != "qwen38-27b" {
+		t.Fatalf("target = %+v, want nugget/qwen38-27b", tgt)
+	}
+}
+
+func TestResolveMeshPrefersLocal(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwen38-27b
+    command: "x --port {port}"
+    vram_mb: 1000
+peers:
+  - name: nugget
+    kind: router
+    base_url: http://192.168.1.62:8081
+    models: [qwen38-27b]
+`)
+	r.peers.Set("nugget", &Telemetry{
+		Node: "nugget",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 16000, FreeMB: 8000}},
+	})
+	tgt, err := r.resolveTarget(ModelRef{Local: "qwen38-27b"})
+	if err != nil {
+		t.Fatalf("resolveTarget: %v", err)
+	}
+	if tgt.Local != "qwen38-27b" || tgt.Peer != "" {
+		t.Fatalf("target = %+v, want local qwen38-27b", tgt)
+	}
+}

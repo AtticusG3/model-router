@@ -47,7 +47,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 |------|---------|
 | `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/messages`, `/v1/embeddings`, `/v1/rerank`, `/v1/images/*`, `/infill`, `/completion` | OpenAI/llama-server passthrough |
 | `/sdapi/v1/*` | sd.cpp/A1111 passthrough |
-| `/v1/models` | model listing (stanzas + selectors + peers, llama-swap-shaped) |
+| `/v1/models` | unique mesh models (local + reachable remotes, no selectors) |
 | `/_router/load`, `/_router/unload` | peer-facing control (load = this node's own admission control) |
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, and recent router events |
 | `/ui/` | embedded operator WebUI (dashboard, controls, chat, image, logs/metrics) |
@@ -55,11 +55,12 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 
 ## Config
 
-Per-node YAML with `stanzas` (SPEC schema + `device`, `unlisted`, `aliases`,
-`env`, `port`), `pools` (llama-swap selectors with spillover), `peers`
-(`kind: router` for fleet nodes, `kind: openai` for proxy-only upstreams like
-openrouter), `preload`, and `telemetry` tuning. Staged fleet configs are in
-`configs/`; the swap procedure is in `deploy/swap-over.md`.
+Per-node YAML with `stanzas` (SPEC schema + `device`, `aliases`, `env`,
+`port`), optional `pools` (compat spillover ids such as `coding-pool`; not
+listed), `peers` (`kind: router` for fleet nodes, `kind: openai` for
+proxy-only upstreams like openrouter), `preload`, and `telemetry` tuning.
+Staged fleet configs are in `configs/`; the swap procedure is in
+`deploy/swap-over.md`.
 
 ## Test
 

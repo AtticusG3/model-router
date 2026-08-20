@@ -247,3 +247,22 @@ func TestLoadEvictsSameGPUNeighbor(t *testing.T) {
 		t.Fatal("b should be running")
 	}
 }
+
+func TestLoadDoesNotEvictInFlight(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.holdOccupancy("a")
+	if _, err := r.Load("b"); err == nil {
+		t.Fatal("Load b must not evict in-flight a")
+	}
+	if r.managed["a"] == nil {
+		t.Fatal("a must still be loaded")
+	}
+}

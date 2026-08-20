@@ -40,6 +40,13 @@ func TestHandlerRouteTable(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"object":"list"`) {
 		t.Fatalf("/v1/models: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	body := rec.Body.String()
+	if strings.Contains(body, "coding-pool") {
+		t.Fatalf("/v1/models listed selector: %s", body)
+	}
+	if strings.Contains(body, "digger/remote-model") {
+		t.Fatalf("/v1/models listed peer-qualified id: %s", body)
+	}
 
 	// sdapi prefix still model-routes (path_default stanza).
 	req = httptest.NewRequest("POST", "/sdapi/v1/txt2img", strings.NewReader(`{"prompt":"cat"}`))

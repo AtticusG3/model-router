@@ -119,11 +119,11 @@ func handleMetrics(r *Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		var sb strings.Builder
 		for _, ms := range r.LocalModelStatuses() {
-			switch ms.Type {
-			case "model":
-				fmt.Fprintf(&sb, "model_router_model_state{model=%q} 1\n", ms.ID)
-				fmt.Fprintf(&sb, "model_router_model_vram_mb{model=%q} %d\n", ms.ID, ms.VramMB)
+			if ms.Origin != "local" {
+				continue
 			}
+			fmt.Fprintf(&sb, "model_router_model_state{model=%q} 1\n", ms.ID)
+			fmt.Fprintf(&sb, "model_router_model_vram_mb{model=%q} %d\n", ms.ID, ms.VramMB)
 		}
 		for _, g := range r.ledger.GPUs() {
 			fmt.Fprintf(&sb, "model_router_gpu_free_mb{gpu=%d} %d\n", g.Index, g.FreeMB)
@@ -149,7 +149,7 @@ func handleModels(r *Router) http.HandlerFunc {
 			if ms.Name != "" {
 				rec["name"] = ms.Name
 			}
-			meta := map[string]any{"modelrouter": map[string]any{"type": ms.Type}}
+			meta := map[string]any{"modelrouter": map[string]any{"type": "model", "origin": ms.Origin}}
 			rec["meta"] = meta
 			rec["status"] = map[string]any{"value": ms.State}
 			data = append(data, rec)

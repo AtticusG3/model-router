@@ -119,6 +119,10 @@ func (r *Router) evictToFit(s *config.Stanza) {
 		return
 	}
 	for _, id := range r.ledger.occupantsOnGPU(want, s.ModelID) {
+		if r.busy(id) {
+			r.logger.Infof("skip evict %s (in-flight) while admitting %s", id, s.ModelID)
+			continue
+		}
 		r.logger.Infof("evicting %s to admit %s on gpu %d", id, s.ModelID, want)
 		if err := r.Unload(id); err != nil {
 			r.logger.Errorf("evict %s: %v", id, err)
@@ -138,8 +142,9 @@ type Target struct {
 
 // resolveTarget resolves a ModelRef to a concrete serving target:
 //   - local stanza id (may need to be spawned)
-//   - pool name (spillover resolution)
+//   - pool name (spillover resolution, compat for existing clients)
 //   - peer-qualified "peer/model"
+//   - mesh id advertised by a peer (first reachable node that lists it)
 func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 	switch {
 	case ref.Local != "":
@@ -155,8 +160,35 @@ func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 			return Target{}, fmt.Errorf("peer %s does not serve %q", ref.Peer, ref.PeerID)
 		}
 		return Target{Peer: ref.Peer, PeerID: ref.PeerID}, nil
+	case ref.Raw != "":
+		return r.resolveMesh(ref.Raw)
 	}
 	return Target{}, ErrNoModel
+}
+
+// resolveMesh picks a peer that advertises modelID. Local stanzas are
+// resolved before this runs. OpenAI peers are always eligible; router
+// peers need fresh telemetry. Known VRAM is used as a hint; the peer
+// still admits for real.
+func (r *Router) resolveMesh(modelID string) (Target, error) {
+	for i := range r.cfg.Peers {
+		p := &r.cfg.Peers[i]
+		if !r.peerHasModel(p, modelID) {
+			continue
+		}
+		if p.Kind == "openai" {
+			return Target{Peer: p.Name, PeerID: modelID}, nil
+		}
+		if !r.peers.Fresh(p.Name) {
+			continue
+		}
+		vram := r.modelVram(modelID)
+		if vram > 0 && !r.peerFits(p.Name, vram) {
+			continue
+		}
+		return Target{Peer: p.Name, PeerID: modelID}, nil
+	}
+	return Target{}, fmt.Errorf("no node can serve %q", modelID)
 }
 
 func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
@@ -187,6 +219,18 @@ func (r *Router) releaseOccupancy(t Target) {
 	if r.occupancy[key] > 0 {
 		r.occupancy[key]--
 	}
+	r.mu.Unlock()
+}
+
+func (r *Router) busy(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.occupancy[id] > 0
+}
+
+func (r *Router) holdOccupancy(id string) {
+	r.mu.Lock()
+	r.occupancy[id]++
 	r.mu.Unlock()
 }
 
@@ -320,6 +364,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 // serveLocal proxies to a local backend, spawning it if needed.
 func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID string) {
+	r.holdOccupancy(modelID)
+	defer r.releaseOccupancy(Target{Local: modelID})
 	if _, err := r.Load(modelID); err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
@@ -498,33 +544,32 @@ func (r *Router) Preload() {
 	}
 }
 
-// LocalStatus returns per-stanza state for /v1/models and /_router/status.
+// ModelStatus is one unique model id for /v1/models and /_router/status.
 type ModelStatus struct {
 	ID      string `json:"id"`
 	Name    string `json:"name,omitempty"`
-	Type    string `json:"type,omitempty"` // model | selector | peer
+	Type    string `json:"type,omitempty"`   // always "model"
+	Origin  string `json:"origin,omitempty"` // local | remote
 	State   string `json:"state,omitempty"`
 	VramMB  int64  `json:"vram_mb,omitempty"`
 	APIType string `json:"api_type,omitempty"`
 }
 
-// LocalModelStatuses lists public local stanzas with their lifecycle state.
+// LocalModelStatuses lists unique mesh models (local + reachable remotes).
 func (r *Router) LocalModelStatuses() []ModelStatus {
-	return r.modelStatuses(false)
+	return r.catalogStatuses()
 }
 
-// AllModelStatuses lists public and unlisted local stanzas for operators.
+// AllModelStatuses is the operator catalog; same unique mesh list as /v1/models.
 func (r *Router) AllModelStatuses() []ModelStatus {
-	return r.modelStatuses(true)
+	return r.catalogStatuses()
 }
 
-func (r *Router) modelStatuses(includeUnlisted bool) []ModelStatus {
+func (r *Router) catalogStatuses() []ModelStatus {
 	var out []ModelStatus
+	seen := map[string]bool{}
 	for _, id := range r.cfg.StanzaIDs() {
 		s := r.cfg.Stanza(id)
-		if s.Unlisted && !includeUnlisted {
-			continue
-		}
 		r.mu.Lock()
 		m, ok := r.managed[id]
 		st := ProcessState(StateStopped)
@@ -532,16 +577,26 @@ func (r *Router) modelStatuses(includeUnlisted bool) []ModelStatus {
 			st = m.State()
 		}
 		r.mu.Unlock()
-		out = append(out, ModelStatus{ID: id, Name: s.Name, Type: "model", State: string(st), VramMB: s.VramMB, APIType: s.APIType})
+		out = append(out, ModelStatus{
+			ID: id, Name: s.Name, Type: "model", Origin: "local",
+			State: string(st), VramMB: s.VramMB, APIType: s.APIType,
+		})
+		seen[id] = true
+		for _, a := range s.Aliases {
+			seen[a] = true
+		}
 	}
-	// Pools (selectors).
-	for name := range r.cfg.Pools {
-		out = append(out, ModelStatus{ID: name, Type: "selector"})
-	}
-	// Peers.
-	for _, p := range r.cfg.Peers {
+	for i := range r.cfg.Peers {
+		p := &r.cfg.Peers[i]
+		if p.Kind != "openai" && !r.peers.Fresh(p.Name) {
+			continue
+		}
 		for _, m := range p.Models {
-			out = append(out, ModelStatus{ID: p.Name + "/" + m, Type: "peer"})
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available"})
 		}
 	}
 	return out
