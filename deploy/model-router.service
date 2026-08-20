@@ -1,0 +1,27 @@
+# model-router.service -- per-node systemd unit (replaces llama-swap.service)
+# Deploy to /etc/systemd/system/model-router.service on each node.
+# The ExecStart config path matches the staged configs in configs/.
+#
+# NOTE: the unit is deliberately named model-router.service so llama-swap.service
+# stays installed as the rollback path (see swap-over.md).
+
+[Unit]
+Description=model-router (backend-agnostic model router)
+After=network.target
+# buster: keep the sidecar ordering from llama-swap (rag-proxy starts after us).
+Before=rag-proxy.service
+
+[Service]
+Type=simple
+# Runs as root on digger/gareth (llama-swap does too); on buster/nomad the
+# backends need access to /home/kevyn models and nvidia devices, which root
+# guarantees. Adjust if you prefer a dedicated user.
+User=root
+ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml
+Restart=always
+RestartSec=3
+TimeoutStopSec=30
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

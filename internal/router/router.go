@@ -1,0 +1,462 @@
+package router
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"model-router/internal/config"
+)
+
+// Router is one node's full instance of the model router. It owns the local
+// backends, the admission ledger, and the peer cache.
+type Router struct {
+	cfg    *config.Config
+	logger *Logger
+	ledger *Ledger
+	peers  *PeerCache
+	node   string
+
+	mu       sync.Mutex
+	managed  map[string]*Managed // local stanza id -> supervisor
+	poolBusy map[string]int      // pool name -> in-flight requests
+
+	httpc *http.Client
+}
+
+// New builds a Router from parsed config.
+func New(cfg *config.Config, logger *Logger, node string) *Router {
+	stale := time.Duration(cfg.Telemetry.PeerStaleSeconds) * time.Second
+	return &Router{
+		cfg:      cfg,
+		logger:   logger,
+		ledger:   NewLedger(),
+		peers:    NewPeerCache(stale),
+		node:     node,
+		managed:  map[string]*Managed{},
+		poolBusy: map[string]int{},
+		httpc:    &http.Client{Timeout: 0}, // no overall timeout; streaming is long
+	}
+}
+
+// Ledger returns the admission ledger (used by the telemetry poller).
+func (r *Router) Ledger() *Ledger { return r.ledger }
+
+// Peers returns the peer cache (used by the peer syncer and status).
+func (r *Router) Peers() *PeerCache { return r.peers }
+
+// Load ensures the given local stanza is running. It runs the node's own
+// admission control and returns the GPU index used.
+func (r *Router) Load(modelID string) (int, error) {
+	s := r.cfg.Stanza(modelID)
+	if s == nil {
+		return -1, fmt.Errorf("unknown local model %q", modelID)
+	}
+
+	r.mu.Lock()
+	m, ok := r.managed[modelID]
+	if !ok {
+		m = newManaged(s, s.Port, r.logger)
+		r.managed[modelID] = m
+	}
+	r.mu.Unlock()
+
+	if m.State() == StateRunning {
+		return m.gpuIndex(), nil
+	}
+
+	// Admission control: reserve VRAM before spawning.
+	gpu, ok := r.ledger.Reserve(s)
+	if !ok {
+		return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, modelID)
+	}
+
+	if _, err := m.Start(); err != nil {
+		r.ledger.Release(modelID)
+		return -1, err
+	}
+	m.SetGPU(gpu)
+	// Reservations protect the spin-up window. Once the backend is healthy,
+	// nvidia-smi accounts for its actual allocation; retaining the reservation
+	// would count the same VRAM twice and can reject a model that genuinely fits.
+	if m.State() == StateRunning {
+		r.ledger.Release(modelID)
+	}
+	return gpu, nil
+}
+
+// Unload stops a local model and releases its VRAM reservation.
+func (r *Router) Unload(modelID string) error {
+	r.mu.Lock()
+	m, ok := r.managed[modelID]
+	r.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("not loaded: %s", modelID)
+	}
+	m.Stop()
+	r.ledger.Release(modelID)
+	return nil
+}
+
+// resolveTarget resolves a ModelRef to a concrete serving target:
+//   - local stanza id (may need to be spawned)
+//   - pool name (spillover resolution)
+//   - peer-qualified "peer/model"
+//
+// Returns (kind, localID, peerName, peerModel, error).
+func (r *Router) resolveTarget(ref ModelRef) (kind string, localID string, peerName string, peerModel string, err error) {
+	switch {
+	case ref.Local != "":
+		return "local", ref.Local, "", "", nil
+	case ref.Pool != "":
+		return r.resolvePool(ref.Pool)
+	case ref.Peer != "":
+		p := r.cfg.Peer(ref.Peer)
+		if p == nil {
+			return "", "", "", "", fmt.Errorf("unknown peer %q", ref.Peer)
+		}
+		if !r.peerHasModel(p, ref.PeerID) {
+			return "", "", "", "", fmt.Errorf("peer %s does not serve %q", ref.Peer, ref.PeerID)
+		}
+		return "peer", "", ref.Peer, ref.PeerID, nil
+	}
+	return "", "", "", "", ErrNoModel
+}
+
+func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
+	for _, m := range p.Models {
+		if m == modelID {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvePool implements spillover selection. Targets are tried in order; a
+// target is used when it is loaded with in-flight below the spillover cap, or
+// when it can be admitted locally / reached on a peer.
+func (r *Router) resolvePool(poolName string) (kind string, localID string, peerName string, peerModel string, err error) {
+	pool := r.cfg.Pool(poolName)
+	if pool == nil {
+		return "", "", "", "", fmt.Errorf("unknown pool %q", poolName)
+	}
+	cap := pool.Spillover
+	if cap <= 0 {
+		cap = 1
+	}
+
+	for _, target := range pool.Targets {
+		ref := resolveRef(target, r.cfg)
+		switch {
+		case ref.Local != "":
+			r.mu.Lock()
+			m, ok := r.managed[ref.Local]
+			busy := 0
+			if ok {
+				busy = m.Inflight()
+			}
+			r.mu.Unlock()
+			if ok && m.State() == StateRunning && busy < cap {
+				return "local", ref.Local, "", "", nil
+			}
+			if !ok || m.State() != StateRunning {
+				// Can we admit it locally? Probe without reserving: Reserve is
+				// idempotent for an already-reserved model, so a reserve-then-
+				// release probe would drop an in-flight reservation held by a
+				// concurrent Load (re-opening the door to double-booking).
+				if s := r.cfg.Stanza(ref.Local); s != nil && r.ledger.CanAdmit(s) {
+					return "local", ref.Local, "", "", nil
+				}
+			}
+		case ref.Peer != "":
+			if r.peers.Fresh(ref.Peer) && r.peers.HasFreeVRAM(ref.Peer) {
+				return "peer", "", ref.Peer, ref.PeerID, nil
+			}
+		}
+	}
+	return "", "", "", "", fmt.Errorf("no capacity for pool %q (all targets busy/unreachable)", poolName)
+}
+
+// ServeHTTP is the entry for model-routed endpoints.
+func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	ref, err := matchRequest(req, r.cfg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	kind, localID, peerName, peerModel, err := r.resolveTarget(ref)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	switch kind {
+	case "local":
+		r.serveLocal(w, req, localID)
+	case "peer":
+		r.servePeer(w, req, peerName, peerModel)
+	default:
+		http.Error(w, "no router for requested model", http.StatusNotFound)
+	}
+}
+
+// serveLocal proxies to a local backend, spawning it if needed.
+func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID string) {
+	if _, err := r.Load(modelID); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	r.mu.Lock()
+	m := r.managed[modelID]
+	r.mu.Unlock()
+	if m == nil || m.State() != StateRunning {
+		http.Error(w, "model failed to start", http.StatusServiceUnavailable)
+		return
+	}
+	m.Touch()
+	defer m.Done()
+	r.proxyTo(w, req, m.stanza.Proxy)
+}
+
+// servePeer proxies to a peer, first asking it to load the model (the peer runs
+// its own admission control — no split-brain).
+func (r *Router) servePeer(w http.ResponseWriter, req *http.Request, peerName, peerModel string) {
+	p := r.cfg.Peer(peerName)
+	if p == nil {
+		http.Error(w, fmt.Sprintf("unknown peer %q", peerName), http.StatusServiceUnavailable)
+		return
+	}
+	// OpenAI-kind peers (openrouter etc.) have no /_router control API and no
+	// load step — the upstream serves the model id directly.
+	if p.Kind != "openai" {
+		if err := r.peerLoad(p, peerModel); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+	// The request may still name the model as "peerName/peerModel"; the peer
+	// only knows its local id, so rewrite the model field before proxying
+	// (llama-swap's ReplaceRequestModel does the same). The field rewritten is
+	// the peer's configured body_field, not a hardcoded "model".
+	if err := rewriteBodyModel(req, peerModel, p.BodyField); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	r.proxyTo(w, req, p.BaseURL)
+}
+
+// rewriteBodyModel replaces the model field in a request body (or query) with
+// the given id, restoring the body for downstream use. JSON bodies are
+// rewritten to field (the peer's configured body_field), preserving all other
+// fields; GETs rewrite the "model" query param, which body_field does not
+// cover.
+func rewriteBodyModel(req *http.Request, newModel, field string) error {
+	if req.Method == http.MethodGet {
+		q := req.URL.Query()
+		if q.Get("model") != "" {
+			q.Set("model", newModel)
+			req.URL.RawQuery = q.Encode()
+		}
+		return nil
+	}
+	ct := req.Header.Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		return nil
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return err
+	}
+	var obj map[string]any
+	if len(body) == 0 {
+		return nil // nothing to rewrite
+	}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return nil // not JSON we understand; forward as-is
+	}
+	if obj == nil {
+		obj = map[string]any{}
+	}
+	obj[field] = newModel
+	rewritten, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	req.Body = io.NopCloser(bytes.NewReader(rewritten))
+	req.ContentLength = int64(len(rewritten))
+	return nil
+}
+
+// peerLoad asks a peer to load a model. The peer's own admission control
+// decides; we only use cached telemetry for *candidate* selection.
+func (r *Router) peerLoad(p *config.Peer, modelID string) error {
+	body, _ := json.Marshal(map[string]string{"model_id": modelID})
+	url := p.BaseURL + "/_router/load"
+	resp, err := r.httpc.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("peer %s load: %w", p.Name, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusConflict:
+		// 200 = loaded, 409 = already loading/loaded.
+		return nil
+	default:
+		return fmt.Errorf("peer %s rejected load of %s (%d)", p.Name, modelID, resp.StatusCode)
+	}
+}
+
+// proxyTo reverse-proxies the request to baseURL, preserving path and body and
+// streaming SSE responses. Buffering is disabled for streaming.
+func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL string) {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	// The matcher already read the body and restored r.Body with a fresh
+	// reader, so the ReverseProxy can stream it downstream.
+	proxy := &httputil.ReverseProxy{
+		Director: func(r *http.Request) {
+			r.URL.Scheme = u.Scheme
+			r.URL.Host = u.Host
+			r.Host = u.Host
+			// Keep the original path (peer router / backend routes on it).
+			r.URL.Path = req.URL.Path
+			r.URL.RawQuery = req.URL.RawQuery
+		},
+		FlushInterval: -1, // flush immediately for SSE
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
+		},
+	}
+	// Tell any fronting proxy (nginx on gareth) not to buffer SSE.
+	w.Header().Set("X-Accel-Buffering", "no")
+	proxy.ServeHTTP(w, req)
+}
+
+// ReapIdle unloads local backends idle past their TTL. Called on an interval.
+func (r *Router) ReapIdle() {
+	now := time.Now()
+	r.mu.Lock()
+	ids := make([]string, 0, len(r.managed))
+	for id, m := range r.managed {
+		if m.IsIdle(now) {
+			ids = append(ids, id)
+		}
+	}
+	r.mu.Unlock()
+	for _, id := range ids {
+		r.logger.Infof("unloading idle model %s", id)
+		r.Unload(id)
+	}
+}
+
+// Preload loads the configured startup models in order.
+func (r *Router) Preload() {
+	for _, id := range r.cfg.Preload {
+		if r.cfg.Stanza(id) == nil {
+			r.logger.Errorf("preload: unknown model %q", id)
+			continue
+		}
+		r.logger.Infof("preloading %s", id)
+		if _, err := r.Load(id); err != nil {
+			r.logger.Errorf("preload %s failed: %v", id, err)
+		}
+	}
+}
+
+// LocalStatus returns per-stanza state for /v1/models and /_router/status.
+type ModelStatus struct {
+	ID     string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Type   string `json:"type,omitempty"` // model | selector | peer
+	State  string `json:"state,omitempty"`
+	VramMB int64  `json:"vram_mb,omitempty"`
+}
+
+// LocalModelStatuses lists public local stanzas with their lifecycle state.
+func (r *Router) LocalModelStatuses() []ModelStatus {
+	return r.modelStatuses(false)
+}
+
+// AllModelStatuses lists public and unlisted local stanzas for operators.
+func (r *Router) AllModelStatuses() []ModelStatus {
+	return r.modelStatuses(true)
+}
+
+func (r *Router) modelStatuses(includeUnlisted bool) []ModelStatus {
+	var out []ModelStatus
+	for _, id := range r.cfg.StanzaIDs() {
+		s := r.cfg.Stanza(id)
+		if s.Unlisted && !includeUnlisted {
+			continue
+		}
+		r.mu.Lock()
+		m, ok := r.managed[id]
+		st := ProcessState(StateStopped)
+		if ok {
+			st = m.State()
+		}
+		r.mu.Unlock()
+		out = append(out, ModelStatus{ID: id, Name: s.Name, Type: "model", State: string(st), VramMB: s.VramMB})
+	}
+	// Pools (selectors).
+	for name := range r.cfg.Pools {
+		out = append(out, ModelStatus{ID: name, Type: "selector"})
+	}
+	// Peers.
+	for _, p := range r.cfg.Peers {
+		for _, m := range p.Models {
+			out = append(out, ModelStatus{ID: p.Name + "/" + m, Type: "peer"})
+		}
+	}
+	return out
+}
+
+// TelemetrySnapshot assembles this node's telemetry for peers.
+func (r *Router) TelemetrySnapshot() *Telemetry {
+	gpus := r.ledger.GPUs()
+	var loaded []string
+	r.mu.Lock()
+	for id, m := range r.managed {
+		if m.State() == StateRunning {
+			loaded = append(loaded, id)
+		}
+	}
+	r.mu.Unlock()
+	return &Telemetry{
+		Node:         r.node,
+		GPUs:         gpus,
+		LoadedModels: loaded,
+		Timestamp:    time.Now().Unix(),
+	}
+}
+
+// HandleLoad is the control endpoint handler for peer load() calls. Accepts
+// stanza ids and aliases (so a peer can load "coding-model" on a node whose
+// stanza is "qwopus-27b-coder").
+func (r *Router) HandleLoad(modelID string) error {
+	s := r.cfg.Stanza(modelID)
+	if s == nil {
+		s = r.cfg.Alias(modelID)
+	}
+	if s == nil {
+		return fmt.Errorf("unknown local model %q", modelID)
+	}
+	_, err := r.Load(s.ModelID)
+	return err
+}
+
+// HandleUnload is the control endpoint handler.
+func (r *Router) HandleUnload(modelID string) error {
+	return r.Unload(modelID)
+}
