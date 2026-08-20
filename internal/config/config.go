@@ -68,16 +68,29 @@ type Stanza struct {
 	// llama-swap's aliases). Needed so peer references like "digger/coding-model"
 	// resolve to the node's actual coding stanza. Not listed in /v1/models.
 	Aliases []string `yaml:"aliases"`
+	// Slots is the local concurrency cap (llama.cpp --parallel). 0 in YAML
+	// means derive from --parallel / -np in Command; missing flag → 1.
+	Slots int `yaml:"slots"`
+}
+
+// SlotCount is the in-flight request cap for this stanza. Always >= 1.
+func (s *Stanza) SlotCount() int {
+	if s == nil || s.Slots <= 0 {
+		return 1
+	}
+	return s.Slots
 }
 
 // Pool is a virtual model id resolved to concrete targets per request
 // (llama-swap "selector"). Kept so existing clients can still POST
 // coding-pool etc.; pools are not listed in /v1/models or the UI.
 type Pool struct {
-	Name      string   `yaml:"name"`
-	Strategy  string   `yaml:"strategy"`
-	Targets   []string `yaml:"targets"`
-	Spillover int      `yaml:"spillover"`
+	Name     string   `yaml:"name"`
+	Strategy string   `yaml:"strategy"`
+	Targets  []string `yaml:"targets"`
+	// Spillover is the in-flight cap per target. 0 = use the local target's
+	// slots (or 1 for a peer with no local stanza).
+	Spillover int `yaml:"spillover"`
 }
 
 // Peer is another node (or plain OpenAI-compatible upstream) that can serve
@@ -226,6 +239,9 @@ func Parse(raw []byte) (*Config, error) {
 			s.Command = strings.ReplaceAll(s.Command, "{model_path}", s.ModelPath)
 			s.Command = strings.ReplaceAll(s.Command, "{model}", s.ModelPath)
 		}
+		if s.Slots <= 0 {
+			s.Slots = parallelFromCommand(s.Command)
+		}
 		cfg.stanzaByID[s.ModelID] = s
 	}
 
@@ -234,9 +250,7 @@ func Parse(raw []byte) (*Config, error) {
 		if p.Strategy == "" {
 			p.Strategy = "spillover"
 		}
-		if p.Spillover == 0 {
-			p.Spillover = 1
-		}
+		// Spillover 0 means "use the target stanza's slots" at pick time.
 		if _, dup := cfg.stanzaByID[name]; dup {
 			return nil, fmt.Errorf("pool %q collides with a stanza id", name)
 		}
@@ -396,4 +410,37 @@ func (c *Config) BodyFields() []string {
 	}
 	add("model")
 	return out
+}
+
+// parallelFromCommand reads llama.cpp --parallel / -np from a backend
+// command. Last occurrence wins. Missing or unparsable → 1.
+func parallelFromCommand(cmd string) int {
+	fields := strings.Fields(cmd)
+	n := 0
+	for i := 0; i < len(fields); i++ {
+		f := fields[i]
+		var rest string
+		switch {
+		case f == "--parallel" || f == "-np":
+			if i+1 >= len(fields) {
+				continue
+			}
+			rest = fields[i+1]
+			i++
+		case strings.HasPrefix(f, "--parallel="):
+			rest = strings.TrimPrefix(f, "--parallel=")
+		case strings.HasPrefix(f, "-np="):
+			rest = strings.TrimPrefix(f, "-np=")
+		default:
+			continue
+		}
+		var v int
+		if _, err := fmt.Sscanf(rest, "%d", &v); err == nil && v > 0 {
+			n = v
+		}
+	}
+	if n <= 0 {
+		return 1
+	}
+	return n
 }

@@ -17,7 +17,7 @@ Group=kevyn
 LimitMEMLOCK=infinity
 Environment=HOME=/home/kevyn
 Environment=CUDA_VISIBLE_DEVICES=0
-Environment=LD_LIBRARY_PATH=/opt/ai/llama-cpp-turboquant/build/bin
+Environment=LD_LIBRARY_PATH=/home/kevyn/llama-cpp-turboquant-fresh/build-fresh/bin
 TimeoutStopSec=60
 ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml --node nugget
 Restart=always

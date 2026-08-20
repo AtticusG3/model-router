@@ -2,11 +2,9 @@
 # GPU: Tesla V100-SXM2-32GB. Unit: deploy/model-router.nugget.service
 # (User=kevyn, LimitMEMLOCK, TurboQuant LD_LIBRARY_PATH).
 #
-# vram_mb from the local TurboQuant V100 walk 2026-08-20 (nvidia-smi used,
-# rounded up): agents-a1 29003, qwen3.8-27b 29059 (256k q8_0), ornith-quality
-# 29241, qwen3.6-quality 29333, embed 4029, rerank 1881. Chat wins were
-# 256k KV f16 + MTP/mmproj except qwen3.8 (f16 lost, q8_0 kept).
-# Qwen 3.6/3.8 use /opt/ai/config/qwen-fixed-chat-template.jinja.
+# vram_mb from the 2026-08-21 per-slot walk: MoE qwen3.6 is 2x256k
+# (used=30081). Dense chat is one 256k slot. Qwen 3.6/3.8 use
+# /opt/ai/config/qwen-fixed-chat-template.jinja.
 
 listen: 0.0.0.0:8081
 start_port: 5901
@@ -25,20 +23,20 @@ stanzas:
     name: "Agents-A1-Uncensored-MTP-APEX-I-Quality (agentic coding)"
     aliases: [daily-driver, daily-pool]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Agents-A1-Uncensored-MTP-APEX-I-Quality.gguf
       --mmproj /opt/ai/models/llm/mmproj-Agents-A1-Uncensored-MTP-BF16.gguf
       --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
       --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k f16 --cache-type-v f16
-      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
-      --spec-type draft-mtp --spec-draft-n-max 4
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --spec-type draft-mtp --spec-draft-n-max 2
       --n-predict 65536
       --split-mode none
-      --temperature 0.85 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 1.1 --repeat-penalty 1.0
-    vram_mb: 29500
+      --temperature 0.85 --top-p 0.95 --top-k 20 --min-p 0.0       --presence-penalty 1.1 --repeat-penalty 1.0
+    vram_mb: 27000
     device: 0
     spin_up_seconds: 120
     api_type: chat
@@ -52,7 +50,7 @@ stanzas:
     name: "Qwen3 0.6B Instruct (intent, CPU)"
     aliases: [intent-model, intent-router]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Qwen3-0.6B-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 0
@@ -77,7 +75,7 @@ stanzas:
     name: "Qwen3 Embedding 4B"
     aliases: [embed-pool]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Qwen3-Embedding-4B-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
@@ -99,7 +97,7 @@ stanzas:
     name: "Jina Reranker v3.5"
     aliases: [reranker-pool]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/jina-reranker-v3-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
@@ -121,20 +119,20 @@ stanzas:
     name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Quality"
     aliases: [ornith-1.0-35b-heretic-quality, ornith-1.0-35b-heretic-compact]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Ornith-1.0-35B-Heretic-MTP-APEX-I-Quality.gguf
       --mmproj /opt/ai/models/llm/mmproj-Ornith-1.0-35B-Heretic-MTP-BF16.gguf
       --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
       --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k f16 --cache-type-v f16
-      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
-      --spec-type draft-mtp --spec-draft-n-max 3
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --spec-type draft-mtp --spec-draft-n-max 4
       --n-predict 65536
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none
-    vram_mb: 29700
+    vram_mb: 26900
     device: 0
     spin_up_seconds: 120
     api_type: chat
@@ -148,18 +146,19 @@ stanzas:
     name: "Qwen3.8 27B (UD-Q5_K_XL)"
     aliases: [coding-pool]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Qwen3.8-27B-UD-Q5_K_XL.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k q8_0 --cache-type-v q8_0
-      --cache-reuse 256 --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
-      --reasoning-format deepseek --reasoning-preserve --metrics
+      --ctx-size 262144 --threads 2 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
+      --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --reasoning-preserve
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none
-    vram_mb: 29500
+    vram_mb: 27400
     device: 0
     spin_up_seconds: 90
     api_type: chat
@@ -173,21 +172,22 @@ stanzas:
     name: "Qwen3.6 35B A3B uncensored heretic Native-MTP APEX I Quality"
     aliases: [qwen3.6-35b, qwen3.6-35b-a3b-heretic-quality]
     command: >
-      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Quality.gguf
       --mmproj /opt/ai/models/llm/mmproj-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-F16.gguf
       --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
-      --cache-type-k f16 --cache-type-v f16
-      --cache-reuse 256 --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
-      --reasoning-format deepseek --reasoning-preserve --metrics
-      --spec-type draft-mtp --spec-draft-n-max 4
+      --ctx-size 524288 --threads 3 --parallel 2 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --reasoning-preserve
+      --spec-type draft-mtp --spec-draft-n-max 3
       --n-predict 65536
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none
-    vram_mb: 29800
+    vram_mb: 30600
     device: 0
     spin_up_seconds: 120
     api_type: chat

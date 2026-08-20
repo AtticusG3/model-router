@@ -62,6 +62,26 @@ func TestTelemetrySnapshotFreshStaleAndReclaim(t *testing.T) {
 	}
 }
 
+func TestTelemetrySnapshotReportsSlotsAndInFlight(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Slots = 2
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.holdOccupancy("a")
+	if r.occupancyOf("a") != 1 {
+		t.Fatalf("occupancy = %d, want 1", r.occupancyOf("a"))
+	}
+	snap := r.TelemetrySnapshot()
+	if len(snap.LoadedModels) != 1 {
+		t.Fatalf("loaded = %+v", snap.LoadedModels)
+	}
+	got := snap.LoadedModels[0]
+	if got.Slots != 2 || got.InFlight != 1 {
+		t.Fatalf("slots=%d in_flight=%d, want 2/1", got.Slots, got.InFlight)
+	}
+}
+
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }
