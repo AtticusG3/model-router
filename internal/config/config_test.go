@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -191,5 +192,141 @@ stanzas:
 		if got[i] != want[i] {
 			t.Fatalf("BodyFields() = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestValidCatalogFilesParse(t *testing.T) {
+	files := []string{
+		"../../test/router-a.yaml",
+		"../../test/router-b.yaml",
+		"../../configs/buster.yaml",
+		"../../configs/digger.yaml",
+		"../../configs/nomad.yaml",
+		"../../configs/gareths-homelab.yaml",
+	}
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			if _, err := Load(f); err != nil {
+				t.Fatalf("%s: %v", f, err)
+			}
+		})
+	}
+}
+
+func TestParseRejectsInvalidCatalog(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "unknown pool target",
+			raw: `
+stanzas:
+  - model_id: a
+    command: "x"
+pools:
+  p:
+    targets: [missing]
+`,
+			want: `unknown target "missing"`,
+		},
+		{
+			name: "unknown pool peer target",
+			raw: `
+stanzas:
+  - model_id: a
+    command: "x"
+pools:
+  p:
+    targets: [ghost/model]
+`,
+			want: `unknown target "ghost/model"`,
+		},
+		{
+			name: "pool target not advertised by peer",
+			raw: `
+stanzas:
+  - model_id: a
+    command: "x"
+peers:
+  - name: digger
+    base_url: http://127.0.0.1:9
+    models: [coding-model]
+pools:
+  p:
+    targets: [digger/nope]
+`,
+			want: `unknown target "digger/nope"`,
+		},
+		{
+			name: "missing preload id",
+			raw: `
+stanzas:
+  - model_id: a
+    command: "x"
+preload: [missing]
+`,
+			want: `preload: unknown model "missing"`,
+		},
+		{
+			name: "empty peer name",
+			raw: `
+peers:
+  - base_url: http://127.0.0.1:9
+`,
+			want: "name is required",
+		},
+		{
+			name: "kind not in enum",
+			raw: `
+peers:
+  - name: x
+    kind: proxy
+    base_url: http://127.0.0.1:9
+`,
+			want: `kind "proxy" is not router or openai`,
+		},
+		{
+			name: "duplicate path_default on same prefix",
+			raw: `
+stanzas:
+  - model_id: a
+    command: "x"
+    match:
+      path_prefix: /sdapi/v1
+      path_default: true
+  - model_id: b
+    command: "x"
+    match:
+      path_prefix: /sdapi/v1
+      path_default: true
+`,
+			want: `duplicate path_default for prefix "/sdapi/v1"`,
+		},
+		{
+			name: "alias pool collision",
+			raw: `
+stanzas:
+  - model_id: a
+    command: "x"
+    aliases: [coding-pool]
+pools:
+  coding-pool:
+    targets: [a]
+`,
+			want: `alias "coding-pool" collides with a pool`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.raw))
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error %q, want substring %q", err, tt.want)
+			}
+		})
 	}
 }
