@@ -84,20 +84,6 @@ func main() {
 	syncEvery := time.Duration(cfg.Telemetry.PeerSyncSeconds) * time.Second
 	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery).Run(ctx)
 
-	// Idle TTL reaper.
-	go func() {
-		t := time.NewTicker(10 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				r.ReapIdle()
-			}
-		}
-	}()
-
 	handler := router.NewHandler(r, logger)
 	srv, _, errCh, err := startHTTPServer(cfg.Listen, handler, logger)
 	if err != nil {

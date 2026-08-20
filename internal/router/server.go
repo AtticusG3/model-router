@@ -118,6 +118,7 @@ func decodeModelID(w http.ResponseWriter, req *http.Request) (string, bool) {
 func handleMetrics(r *Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		var sb strings.Builder
+		snap := r.TelemetrySnapshot()
 		for _, ms := range r.LocalModelStatuses() {
 			if ms.Origin != "local" {
 				continue
@@ -125,8 +126,9 @@ func handleMetrics(r *Router) http.HandlerFunc {
 			fmt.Fprintf(&sb, "model_router_model_state{model=%q} 1\n", ms.ID)
 			fmt.Fprintf(&sb, "model_router_model_vram_mb{model=%q} %d\n", ms.ID, ms.VramMB)
 		}
-		for _, g := range r.ledger.GPUs() {
+		for _, g := range snap.GPUs {
 			fmt.Fprintf(&sb, "model_router_gpu_free_mb{gpu=%d} %d\n", g.Index, g.FreeMB)
+			fmt.Fprintf(&sb, "model_router_gpu_free_if_stale_evicted_mb{gpu=%d} %d\n", g.Index, g.FreeIfStaleEvictedMB)
 			fmt.Fprintf(&sb, "model_router_gpu_total_mb{gpu=%d} %d\n", g.Index, g.TotalMB)
 		}
 		fmt.Fprintf(&sb, "model_router_up{node=%q} 1\n", r.node)

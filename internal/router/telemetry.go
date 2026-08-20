@@ -16,10 +16,18 @@ import (
 
 // Telemetry is the snapshot exchanged between peers.
 type Telemetry struct {
-	Node         string      `json:"node"`
-	GPUs         []*GPUState `json:"gpus"`
-	LoadedModels []string    `json:"loaded_models"`
-	Timestamp    int64       `json:"timestamp"`
+	Node         string        `json:"node"`
+	GPUs         []*GPUState   `json:"gpus"`
+	LoadedModels []LoadedModel `json:"loaded_models"`
+	Timestamp    int64         `json:"timestamp"`
+}
+
+// LoadedModel is one locally running backend as advertised to peers.
+type LoadedModel struct {
+	ID        string `json:"id"`
+	Freshness string `json:"freshness"` // fresh | stale
+	VramMB    int64  `json:"vram_mb,omitempty"`
+	GPU       int    `json:"gpu"`
 }
 
 // GPUPoller runs nvidia-smi on an interval and feeds the ledger.
