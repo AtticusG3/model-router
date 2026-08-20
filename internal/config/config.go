@@ -261,7 +261,74 @@ func Parse(raw []byte) (*Config, error) {
 		cfg.peerByName[p.Name] = p
 	}
 
+	if err := cfg.validateCatalog(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+func (c *Config) validateCatalog() error {
+	pathDefault := map[string]string{}
+	for i := range c.Stanzas {
+		s := &c.Stanzas[i]
+		if s.Match.PathDefault && s.Match.PathPrefix != "" {
+			if prev, ok := pathDefault[s.Match.PathPrefix]; ok {
+				return fmt.Errorf("duplicate path_default for prefix %q (stanzas %q and %q)", s.Match.PathPrefix, prev, s.ModelID)
+			}
+			pathDefault[s.Match.PathPrefix] = s.ModelID
+		}
+		for _, a := range s.Aliases {
+			if _, ok := c.poolByName[a]; ok {
+				return fmt.Errorf("alias %q collides with a pool", a)
+			}
+		}
+	}
+	for i := range c.Peers {
+		p := &c.Peers[i]
+		if p.Name == "" {
+			return fmt.Errorf("peer %d: name is required", i)
+		}
+		switch p.Kind {
+		case "router", "openai":
+		default:
+			return fmt.Errorf("peer %q: kind %q is not router or openai", p.Name, p.Kind)
+		}
+	}
+	for name, p := range c.poolByName {
+		for _, t := range p.Targets {
+			if !c.poolTargetResolves(t) {
+				return fmt.Errorf("pool %q: unknown target %q", name, t)
+			}
+		}
+	}
+	for _, id := range c.Preload {
+		if c.stanzaByID[id] == nil {
+			return fmt.Errorf("preload: unknown model %q", id)
+		}
+	}
+	return nil
+}
+
+// poolTargetResolves reports whether a pool target is a local stanza, an alias,
+// or a peer-qualified id whose peer exists and advertises the model.
+func (c *Config) poolTargetResolves(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	peerName, model, ok := strings.Cut(raw, "/")
+	if ok {
+		p := c.peerByName[peerName]
+		if p == nil || model == "" {
+			return false
+		}
+		for _, m := range p.Models {
+			if m == model {
+				return true
+			}
+		}
+		return false
+	}
+	return c.stanzaByID[raw] != nil || c.aliasByID[raw] != nil
 }
 
 // Stanza returns the local stanza with the given id, or nil.
