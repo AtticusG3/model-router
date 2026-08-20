@@ -43,8 +43,15 @@ func TestHTTPServerWebUI(t *testing.T) {
 	r := New(cfg, logger, "router-a")
 	h := NewHandler(r, logger)
 
-	req := httptest.NewRequest("GET", "/ui/", nil)
+	req := httptest.NewRequest("GET", "/", nil)
 	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/ui/" {
+		t.Fatalf("root redirect status=%d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	req = httptest.NewRequest("GET", "/ui/", nil)
+	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("UI status = %d", rec.Code)
