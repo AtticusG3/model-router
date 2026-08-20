@@ -50,7 +50,9 @@ type Stanza struct {
 	Match   Match  `yaml:"match"`
 	// HealthCheck is the URL path polled for readiness. Default "/health".
 	HealthCheck string `yaml:"health_check"`
-	// IdleTTLSeconds unloads the backend after this many idle seconds. 0 = never.
+	// IdleTTLSeconds marks a running model stale after this many idle seconds.
+	// Stale models stay loaded (reload is expensive); they are evicted only when
+	// another load needs the VRAM. 0 = never stale (resident).
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
 	// Unlisted is accepted for llama-swap configs. Listing ignores it: the
 	// mesh catalog shows every available model id once.

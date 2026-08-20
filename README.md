@@ -10,10 +10,14 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture) and `PLAN.md`
 - Serves OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/embeddings`,
   `/v1/rerank`, `/v1/images/generations`, `/v1/models`, …) and sd.cpp routes
   (`/sdapi/v1/*`) by loading the right backend on demand.
-- Supervises backend processes (spawn, health-check polling, crash/restart,
-  idle-TTL unload) — patterns adapted from mostlygeek/llama-swap.
-- Admission control per GPU with a local VRAM reservation ledger; a node is the
-  sole authority over its own GPUs (no split-brain).
+- Supervises backend processes (spawn, health-check polling, crash/restart).
+  Idle TTL marks a loaded model stale; it stays resident until another load
+  needs the VRAM (reload is expensive, unload is cheap).
+- Admission uses live nvidia-smi free VRAM, with a per-GPU reservation ledger
+  so concurrent loads cannot double-book during spin-up. A node is the sole
+  authority over its own GPUs (no split-brain).
+- Advertises to peers every few seconds: loaded models (fresh/stale), live
+  free VRAM, and free VRAM if stale models were evicted.
 - Spills requests to peers when the local node can't serve them (model not
   local, or GPU full): `POST /_router/load` on the candidate, then a streamed
   transparent reverse proxy.

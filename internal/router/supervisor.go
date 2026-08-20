@@ -49,7 +49,7 @@ func (m *Managed) State() ProcessState {
 	return m.state
 }
 
-// markUsed resets the idle TTL clock. Pool occupancy lives on Router.
+// markUsed resets the idle-TTL stale clock. Pool occupancy lives on Router.
 func (m *Managed) markUsed() {
 	m.mu.Lock()
 	m.lastUsed = time.Now()
@@ -295,9 +295,10 @@ func (m *Managed) fail(format string, args ...any) {
 	m.logger.Errorf("[%s] %s", m.stanza.ModelID, fmt.Sprintf(format, args...))
 }
 
-// IsIdle reports whether the backend has been idle longer than its TTL.
-// ttl <= 0 means never idle.
-func (m *Managed) IsIdle(now time.Time) bool {
+// IsStale reports whether a running backend has been idle longer than its TTL.
+// ttl <= 0 means never stale (resident). Stale models stay loaded until a
+// later admission needs their VRAM.
+func (m *Managed) IsStale(now time.Time) bool {
 	ttl := m.stanza.IdleTTLSeconds
 	if ttl <= 0 {
 		return false
@@ -308,4 +309,10 @@ func (m *Managed) IsIdle(now time.Time) bool {
 		return false
 	}
 	return now.Sub(m.lastUsed) > time.Duration(ttl)*time.Second
+}
+
+func (m *Managed) setLastUsed(t time.Time) {
+	m.mu.Lock()
+	m.lastUsed = t
+	m.mu.Unlock()
 }
