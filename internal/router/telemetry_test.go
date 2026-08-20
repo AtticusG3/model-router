@@ -45,6 +45,9 @@ func TestTelemetrySnapshotFreshStaleAndReclaim(t *testing.T) {
 	if snap.GPUs[0].FreeMB != 4000 || snap.GPUs[0].FreeIfStaleEvictedMB != 4000 {
 		t.Fatalf("fresh gpu free=%d reclaim=%d", snap.GPUs[0].FreeMB, snap.GPUs[0].FreeIfStaleEvictedMB)
 	}
+	if snap.GPUs[0].FreeIfIdleEvictedMB != 10000 {
+		t.Fatalf("idle reclaim = %d, want 10000", snap.GPUs[0].FreeIfIdleEvictedMB)
+	}
 
 	r.managed["a"].setLastUsed(time.Now().Add(-2 * time.Second))
 	snap = r.TelemetrySnapshot()

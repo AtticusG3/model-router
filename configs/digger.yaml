@@ -1,5 +1,7 @@
 # digger -- model-router v0.1 staged config (replaces llama-swap on 0.0.0.0:8082)
 # GPU: NVIDIA RTX PRO 4000 Blackwell 24GB. Image node (sd.cpp) + LLM stanzas.
+# 2026-08-20 used: ornith heretic-compact 23299 (256k f16 MTP+mmproj),
+# qwen3.8-27b 22118 (128k q4_0; 256k lost). Intent is CPU (ngl 0).
 # Note: this node's sd.cpp stanzas share ONE /sdapi/v1 path; krea-2-turbo is the
 # path_default (requests without a body `model` field land there). Clients that
 # need a specific image model MUST send `"model": "<id>"` in the JSON body --
@@ -20,62 +22,13 @@ telemetry:
   peer_sync_seconds: 5
   peer_stale_seconds: 15
 
-preload: [qwopus-3.6-27b-coder]
+preload: [qwen3-0.6b-instruct]
 
 stanzas:
   # ---------------- LLM (chat) ----------------
-  - model_id: qwopus-3.6-27b-coder
-    name: "Qwopus3.6-27B-Coder-MTP Q4_K_M (coding)"
-    aliases: [coding-model, coding-pool]
-    command: >
-      /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Qwopus3.6-27B-Coder-MTP-Q4_K_M.gguf
-      --mmproj /srv/ssd/models/llm/mmproj-Qwopus3.6-27B-Coder-MTP-F32.gguf --no-mmproj-offload
-      --port {port} --host 127.0.0.1
-      --n-gpu-layers 99
-      --ctx-size 196608 --threads 4 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-      --spec-type draft-mtp --spec-draft-n-max 4
-      --n-predict 49152 --reasoning-budget 36864 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.2 --top-p 0.9 --top-k 20 --min-p 0.0
-    vram_mb: 18000
-    device: 0
-    spin_up_seconds: 90
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 300
-    unlisted: true
-    port: 5975
-
-  - model_id: qwable-3.6-35b
-    name: "Qwable 3.6 35B Q4_K_M (daily driver)"
-    aliases: [daily-model, daily-driver]
-    command: >
-      /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Qwable-3.6-35b_Q4_K_M.gguf
-      --mmproj /srv/ssd/models/llm/mmproj-Qwable-3.6-35b-BF16.gguf --no-mmproj-offload
-      --port {port} --host 127.0.0.1
-      --n-gpu-layers 99
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
-    vram_mb: 22000
-    device: 0
-    spin_up_seconds: 120
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 300
-    unlisted: true
-    port: 5974
-
-  - model_id: ornith-1.0-35b-heretic-compact
+  - model_id: ornith-1.0-35b-heretic
     name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact (agentic coding)"
-    aliases: [ornith-model]
+    aliases: [ornith-1.0-35b-heretic-compact, ornith-1.0-35b-heretic-quality, ornith-model, daily-driver, daily-model]
     command: >
       /opt/ai/bin/llama-server
       --model /srv/ssd/models/llm/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf
@@ -83,12 +36,12 @@ stanzas:
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
       --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
+      --cache-type-k f16 --cache-type-v f16 --cache-reuse 256
       --jinja --metrics --no-mmap --mlock
       --spec-type draft-mtp --spec-draft-n-max 3
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 0.6 --top-p 0.95 --top-k 20
-    vram_mb: 24000
+    vram_mb: 23500
     device: 0
     spin_up_seconds: 120
     api_type: chat
@@ -98,68 +51,21 @@ stanzas:
     unlisted: true
     port: 5971
 
-  - model_id: nemotron-3-nano-30b
-    name: "Nemotron-3-Nano-30B-A3B TurboQuant Q4_K_M"
+  - model_id: qwen3.8-27b
+    name: "Qwen3.8 27B (UD-Q5_K_XL)"
+    aliases: [coding-pool]
     command: >
       /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-TurboQuant-IQ4_XS.gguf
-      --mmproj /srv/ssd/models/llm/mmproj-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-TurboQuant-fp8.gguf --no-mmproj-offload
+      --model /srv/ssd/models/llm/Qwen3.8-27B-UD-Q5_K_XL.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-      --n-predict 20480 --reasoning-budget 16384 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.6 --top-p 0.95
-    vram_mb: 19000
-    device: 0
-    spin_up_seconds: 90
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 300
-    unlisted: true
-    port: 5970
-
-  - model_id: ornith-1.0-35b-compact
-    name: "Ornith-1.0-35B-MTP-APEX-I-Compact (non-heretic)"
-    command: >
-      /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf
-      --mmproj /srv/ssd/models/llm/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf --no-mmproj-offload
-      --port {port} --host 127.0.0.1
-      --n-gpu-layers 99
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-      --spec-type draft-mtp --spec-draft-n-max 3
+      --ctx-size 131072 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q4_0 --cache-type-v q4_0 --cache-reuse 256
+      --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --metrics --no-mmap --mlock
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.6 --top-p 0.95 --top-k 20
-    vram_mb: 24000
-    device: 0
-    spin_up_seconds: 120
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 300
-    unlisted: true
-    port: 5972
-
-  - model_id: qwable-3.6-27b
-    name: "Qwable-27B"
-    command: >
-      /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Qwable-3.6-27b_q4_k_m.gguf
-      --mmproj /srv/ssd/models/llm/mmproj-Qwopus3.6-27B-Coder-MTP-F32.gguf --no-mmproj-offload
-      --port {port} --host 127.0.0.1
-      --n-gpu-layers 99
-      --ctx-size 196608 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-      --spec-type draft-mtp --spec-draft-n-max 4
-      --n-predict 49152 --reasoning-budget 36864 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.2 --top-p 0.9 --top-k 20 --min-p 0.0
-    vram_mb: 18000
+      --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
+    vram_mb: 22500
     device: 0
     spin_up_seconds: 90
     api_type: chat
@@ -168,50 +74,6 @@ stanzas:
     idle_ttl_seconds: 300
     unlisted: true
     port: 5973
-
-  - model_id: qwopus-3.6-27b-fusion
-    name: "Qwopus3.6 27B Fusion heretic MTP Q4_K_M"
-    command: >
-      /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Qwopus3.6-27B-Fusion-heretic-MTP-Q4_K_M.gguf
-      --mmproj /srv/ssd/models/llm/mmproj-Qwopus3.6-27B-Fusion-heretic-F16.gguf --no-mmproj-offload
-      --port {port} --host 127.0.0.1
-      --n-gpu-layers 99
-      --ctx-size 196608 --threads 4 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-      --spec-type draft-mtp --spec-draft-n-max 4
-      --n-predict 49152 --reasoning-budget 36864 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.2 --top-p 0.9 --top-k 20 --min-p 0.0
-    vram_mb: 18000
-    device: 0
-    spin_up_seconds: 90
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 300
-    unlisted: true
-    port: 5976
-
-  - model_id: thinkingcap-qwen3.6-27b
-    name: "Huihui-ThinkingCap-Qwen3.6-27B abliterated Q5_K_M"
-    command: >
-      /opt/ai/bin/llama-server
-      --model /srv/ssd/models/llm/Huihui-ThinkingCap-Qwen3.6-27B-abliterated.i1-Q4_K_S.gguf
-      --port {port} --host 127.0.0.1
-      --n-gpu-layers 99
-      --ctx-size 196608 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k q8_0 --cache-type-v turbo3 --cache-reuse 256
-      --jinja --metrics --no-mmap --mlock
-    vram_mb: 19000
-    device: 0
-    spin_up_seconds: 90
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 300
-    unlisted: true
-    port: 5977
 
   - model_id: qwen3-0.6b-instruct
     name: "Qwen3 0.6B Instruct (intent)"
@@ -226,7 +88,7 @@ stanzas:
       --cont-batching --flash-attn off --metrics
       --temperature 0.1 --top-p 0.9 --top-k 20 --min-p 0.0
       --reasoning off
-    vram_mb: 1500
+    vram_mb: 0
     device: 0
     spin_up_seconds: 30
     api_type: chat
@@ -448,8 +310,9 @@ stanzas:
     idle_ttl_seconds: 300
     port: 5958
 
-  - model_id: z-anime
-    name: "Anime (Z Anime 8 step)"
+  - model_id: z-anime-turbo
+    name: "Z-Anime Turbo (8-step distill)"
+    aliases: [z-anime]
     command: >
       /opt/ai/bin/sd-server
       --diffusion-model /srv/ssd/models/dit/z-image-turbo/z-anime-distill-8step-bf16.safetensors
@@ -723,9 +586,9 @@ peers:
   - name: buster
     kind: router
     base_url: http://192.168.1.61:18080
-    models: [qwopus-3.6-27b-coder-compat, agents-a1, qwen3-0.6b-instruct,
-             qwen3-embedding-4b, jina-reranker-v3.5, qwen3.8-27b,
-             ornith-1.0-35b-heretic-quality, gemma-4-12b, krea-2-turbo]
+    models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
+             qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
+             krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nomad
     kind: router
     base_url: http://192.168.1.202:8081
@@ -733,12 +596,11 @@ peers:
   - name: gareths-homelab
     kind: router
     base_url: http://100.89.49.44:8081
-    models: [qwopus-3.6-27b-coder, qwable-3.6-35b, qwen2.5-1.5b-instruct,
-             ornith-1.0-35b-compact, gemma-4-26b-a4b, sdxl-lightning, z-image, flux2-klein]
-  # nugget (192.168.1.62) is back online 2026-08-19 -- peer re-enabled.
+    models: [qwen2.5-1.5b-instruct, ornith-1.0-35b, qwen3.6-35b-a3b,
+             krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nugget
     kind: router
     base_url: http://192.168.1.62:8081
-    models: [gemma-4-12b, qwopus-3.6-27b-coder-compat, qwen3-0.6b-instruct,
-             qwen3-embedding-4b, jina-reranker-v3.5, gemma-4-26b-a4b,
-             ornith-1.0-35b-compact, qwopus-3.6-27b-fusion, agents-a1]
+    models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
+             ornith-1.0-35b-heretic, qwen3.8-27b, qwen3.6-35b-a3b,
+             krea-2-turbo, z-anime-turbo, ideogram4]

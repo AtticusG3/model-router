@@ -114,6 +114,12 @@ func TestHTTPServerWebUI(t *testing.T) {
 	if strings.Contains(body, "juggernaut") {
 		t.Fatal("image options still use id/name regex")
 	}
+	if strings.Contains(body, `onclick="loadModel(`) || strings.Contains(uiJS, "JSON.stringify(m.id)") {
+		t.Fatal("Load/Unload still uses broken inline onclick quoting")
+	}
+	if !strings.Contains(uiJS, `data-act="load"`) || !strings.Contains(uiJS, "sameOptions") {
+		t.Fatal("UI missing data-act load buttons or select-preservation helper")
+	}
 
 	req = httptest.NewRequest("GET", "/_router/status", nil)
 	rec = httptest.NewRecorder()

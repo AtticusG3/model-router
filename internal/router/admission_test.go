@@ -164,6 +164,25 @@ func TestAdmitUsesLiveFreeAndLedger(t *testing.T) {
 	}
 }
 
+func TestUnloadCreditLetsNextReserveBeforeSmiCatchesUp(t *testing.T) {
+	l := NewLedger()
+	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 32768}})
+	a := &config.Stanza{ModelID: "a", VramMB: 22000, Device: "0"}
+	b := &config.Stanza{ModelID: "b", VramMB: 16000, Device: "0"}
+	if _, ok := l.Reserve(a); !ok {
+		t.Fatal("a should admit")
+	}
+	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 2000}})
+	if _, ok := l.Reserve(b); ok {
+		t.Fatal("b must not fit beside a")
+	}
+	l.Release("a")
+	l.Credit(0, 22000)
+	if _, ok := l.Reserve(b); !ok {
+		t.Fatal("b should admit from unload credit while smi still shows 2000 free")
+	}
+}
+
 func loadTestRouter(t *testing.T) *Router {
 	t.Helper()
 	port, _ := healthServer(t)
@@ -251,21 +270,25 @@ func TestFailedStartReleasesReservation(t *testing.T) {
 	}
 }
 
-func TestLoadDoesNotEvictFreshNeighbor(t *testing.T) {
+func TestLoadEvictsIdleResidentLastResort(t *testing.T) {
 	r := loadTestRouter(t)
 	r.cfg.Stanza("a").Device = "0"
 	r.cfg.Stanza("b").Device = "0"
 	r.cfg.Stanza("a").VramMB = 8000
 	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("a").IdleTTLSeconds = 0
 	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
-	if _, err := r.Load("b"); err == nil {
-		t.Fatal("Load b must not evict fresh a")
+	if _, err := r.Load("b"); err != nil {
+		t.Fatalf("Load b should evict idle resident a: %v", err)
 	}
-	if r.managed["a"] == nil {
-		t.Fatal("a must still be loaded")
+	if _, ok := r.managed["a"]; ok {
+		t.Fatal("idle resident a should have been evicted")
+	}
+	if r.managed["b"] == nil || r.managed["b"].State() != StateRunning {
+		t.Fatal("b should be running")
 	}
 }
 

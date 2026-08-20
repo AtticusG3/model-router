@@ -1,0 +1,290 @@
+# nugget -- model-router on 0.0.0.0:8081
+# GPU: Tesla V100-SXM2-32GB. Unit: deploy/model-router.nugget.service
+# (User=kevyn, LimitMEMLOCK, TurboQuant LD_LIBRARY_PATH).
+#
+# vram_mb from the local TurboQuant V100 walk 2026-08-20 (nvidia-smi used,
+# rounded up): agents-a1 29003, qwen3.8-27b 29059 (256k q8_0), ornith-quality
+# 29241, qwen3.6-quality 29333, embed 4029, rerank 1881. Chat wins were
+# 256k KV f16 + MTP/mmproj except qwen3.8 (f16 lost, q8_0 kept).
+
+listen: 0.0.0.0:8081
+start_port: 5901
+reserved_ports: []
+
+telemetry:
+  poll_seconds: 2
+  peer_sync_seconds: 5
+  peer_stale_seconds: 15
+
+# agents-a1 is the GPU resident; intent is CPU (ngl 0) so it can sit beside it.
+preload: [agents-a1, qwen3-0.6b-instruct]
+
+stanzas:
+  - model_id: agents-a1
+    name: "Agents-A1-Uncensored-MTP-APEX-I-Quality (agentic coding)"
+    aliases: [daily-driver, daily-pool]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/Agents-A1-Uncensored-MTP-APEX-I-Quality.gguf
+      --mmproj /opt/ai/models/llm/mmproj-Agents-A1-Uncensored-MTP-BF16.gguf
+      --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 999
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k f16 --cache-type-v f16
+      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 65536
+      --split-mode none
+      --temperature 0.85 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 1.1 --repeat-penalty 1.0
+    vram_mb: 29500
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: true
+    port: 5901
+
+  - model_id: qwen3-0.6b-instruct
+    name: "Qwen3 0.6B Instruct (intent, CPU)"
+    aliases: [intent-model, intent-router]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/Qwen3-0.6B-Q4_K_M.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 0
+      --threads 3
+      --ctx-size 8192 --parallel 2 --cont-batching
+      --n-predict 64
+      --flash-attn off
+      --metrics
+      --temperature 0.1 --top-p 0.9 --top-k 20 --min-p 0.0
+      --reasoning off
+      --split-mode none
+    vram_mb: 0
+    spin_up_seconds: 30
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    unlisted: true
+    port: 5902
+
+  - model_id: qwen3-embedding-4b
+    name: "Qwen3 Embedding 4B"
+    aliases: [embed-pool]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/Qwen3-Embedding-4B-Q4_K_M.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 8192 --threads 2 --parallel 2 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --metrics --embedding
+      --split-mode none
+    vram_mb: 4200
+    device: 0
+    spin_up_seconds: 30
+    api_type: embedding
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5903
+
+  - model_id: jina-reranker-v3.5
+    name: "Jina Reranker v3.5"
+    aliases: [reranker-pool]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/jina-reranker-v3-Q4_K_M.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 8192 --threads 2 --parallel 2 --cont-batching --flash-attn on
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --metrics --reranking
+      --split-mode none
+    vram_mb: 2000
+    device: 0
+    spin_up_seconds: 30
+    api_type: rerank
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5904
+
+  - model_id: ornith-1.0-35b-heretic
+    name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Quality"
+    aliases: [ornith-1.0-35b-heretic-quality, ornith-1.0-35b-heretic-compact]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/Ornith-1.0-35B-Heretic-MTP-APEX-I-Quality.gguf
+      --mmproj /opt/ai/models/llm/mmproj-Ornith-1.0-35B-Heretic-MTP-BF16.gguf
+      --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 999
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k f16 --cache-type-v f16
+      --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
+      --spec-type draft-mtp --spec-draft-n-max 3
+      --n-predict 65536
+      --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
+      --split-mode none
+    vram_mb: 29700
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5909
+
+  - model_id: qwen3.8-27b
+    name: "Qwen3.8 27B (UD-Q5_K_XL)"
+    aliases: [coding-pool]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/Qwen3.8-27B-UD-Q5_K_XL.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --cache-reuse 256 --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --reasoning-preserve --metrics
+      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
+      --split-mode none
+    vram_mb: 29500
+    device: 0
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5912
+
+  - model_id: qwen3.6-35b-a3b
+    name: "Qwen3.6 35B A3B uncensored heretic Native-MTP APEX I Quality"
+    aliases: [qwen3.6-35b, qwen3.6-35b-a3b-heretic-quality]
+    command: >
+      /opt/ai/llama-cpp-turboquant/build/bin/llama-server
+      --model /opt/ai/models/llm/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Quality.gguf
+      --mmproj /opt/ai/models/llm/mmproj-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-F16.gguf
+      --no-mmproj-offload
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --cache-type-k f16 --cache-type-v f16
+      --cache-reuse 256 --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
+      --reasoning-format deepseek --reasoning-preserve --metrics
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 65536
+      --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
+      --split-mode none
+    vram_mb: 29800
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5914
+
+  - model_id: krea-2-turbo
+    name: "Krea 2.0 Turbo"
+    command: >
+      /opt/ai/bin/sd-health-proxy {port} --
+      /opt/ai/bin/sd-server
+      --diffusion-model /opt/ai/models/image/krea2/Krea-2-Turbo-Q8_0.gguf
+      --vae /opt/ai/models/image/krea2/vae-krea2-q8_0.gguf
+      --llm /opt/ai/models/image/krea2/text-encoder-krea2-q8_0.gguf
+      --diffusion-fa
+      --offload-to-cpu
+      --steps 8 --cfg-scale 1.0 --seed -1
+    env: ["GGML_CUDA_PDL=0"]
+    vram_mb: 16000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1, path_default: true}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5915
+
+  - model_id: z-anime-turbo
+    name: "Z-Anime Turbo (8-step distill)"
+    aliases: [z-anime]
+    command: >
+      /opt/ai/bin/sd-health-proxy {port} --
+      /opt/ai/bin/sd-server
+      --diffusion-model /opt/ai/models/image/z-anime-turbo/z-anime-distill-8step-bf16.safetensors
+      --vae /opt/ai/models/image/z-anime-turbo/ae.safetensors
+      --llm /opt/ai/models/image/z-anime-turbo/qwen_3_4b-engineer-v4-bf16.safetensors
+      --diffusion-fa
+      --offload-to-cpu
+      --steps 8 --cfg-scale 1.0 --seed -1
+      -W 1024 -H 1024
+    env: ["GGML_CUDA_PDL=0"]
+    vram_mb: 20000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5916
+
+  - model_id: ideogram4
+    name: "Ideogram 4"
+    command: >
+      /opt/ai/bin/sd-health-proxy {port} --
+      /opt/ai/bin/sd-server
+      --diffusion-model /opt/ai/models/image/ideogram4/ideogram4-Q8_0.gguf
+      --uncond-diffusion-model /opt/ai/models/image/ideogram4/ideogram4_uncond-Q8_0.gguf
+      --llm /opt/ai/models/image/ideogram4/Qwen3-VL-8B-Instruct-Q4_K_M.gguf
+      --vae /opt/ai/models/image/ideogram4/flux2-vae.safetensors
+      --diffusion-fa
+      --offload-to-cpu
+      --vae-tiling
+      --seed -1
+      -W 1024 -H 1024
+    env: ["GGML_CUDA_PDL=0"]
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5917
+
+peers:
+  - name: buster
+    kind: router
+    base_url: http://192.168.1.61:18080
+    models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
+             qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
+             krea-2-turbo, z-anime-turbo, ideogram4]
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [qwen3-0.6b-instruct, qwen3.8-27b, ornith-1.0-35b-heretic,
+             krea-2-turbo, z-anime-turbo, ideogram4]
+  - name: gareths-homelab
+    kind: router
+    base_url: http://100.89.49.44:8081
+    models: [qwen2.5-1.5b-instruct, ornith-1.0-35b, qwen3.6-35b-a3b,
+             krea-2-turbo, z-anime-turbo, ideogram4]
+  - name: nomad
+    kind: router
+    base_url: http://192.168.1.202:8081
+    models: [qwen3.5-9b]
