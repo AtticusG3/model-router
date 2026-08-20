@@ -16,6 +16,7 @@ type GPUState struct {
 	TotalMB              int64  `json:"total_mb"`
 	FreeMB               int64  `json:"free_mb"`
 	FreeIfStaleEvictedMB int64  `json:"free_if_stale_evicted_mb,omitempty"`
+	FreeIfIdleEvictedMB  int64  `json:"free_if_idle_evicted_mb,omitempty"`
 	LastSeenUnix         int64  `json:"last_seen_unix"`
 }
 
@@ -29,6 +30,9 @@ type Ledger struct {
 	// reserved but that may not yet show up in nvidia-smi (spinning up) or
 	// that we are intentionally keeping accounted for.
 	reservations map[string]reservation
+	// pending is VRAM just released whose nvidia-smi FreeMB has not caught
+	// up yet. Added to live free until a later poll shows the bytes.
+	pending map[int]int64
 }
 
 type reservation struct {
@@ -37,13 +41,27 @@ type reservation struct {
 }
 
 func NewLedger() *Ledger {
-	return &Ledger{reservations: map[string]reservation{}}
+	return &Ledger{reservations: map[string]reservation{}, pending: map[int]int64{}}
 }
 
 // SetGPUs replaces the polled GPU snapshot.
 func (l *Ledger) SetGPUs(gpus []*GPUState) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	oldFree := map[int]int64{}
+	for _, g := range l.gpus {
+		oldFree[g.Index] = g.FreeMB
+	}
+	for _, g := range gpus {
+		if old, ok := oldFree[g.Index]; ok {
+			if gain := g.FreeMB - old; gain > 0 {
+				l.pending[g.Index] -= gain
+				if l.pending[g.Index] < 0 {
+					l.pending[g.Index] = 0
+				}
+			}
+		}
+	}
 	l.gpus = gpus
 }
 
@@ -74,14 +92,24 @@ func (l *Ledger) available(g *GPUState) int64 {
 	if ledger < 0 {
 		ledger = 0
 	}
-	live := g.FreeMB
-	if live < 0 {
-		live = 0
-	}
+	live := l.liveFreeLocked(g, 0)
 	if live < ledger {
 		return live
 	}
 	return ledger
+}
+
+// liveFreeLocked is nvidia-smi FreeMB plus pending release credit and any
+// extra (evict-probe) credit. Caller holds l.mu.
+func (l *Ledger) liveFreeLocked(g *GPUState, extra int64) int64 {
+	live := g.FreeMB + l.pending[g.Index] + extra
+	if live < 0 {
+		live = 0
+	}
+	if g.TotalMB > 0 && live > g.TotalMB {
+		live = g.TotalMB
+	}
+	return live
 }
 
 // deviceIndex resolves a stanza's device string ("CUDA0", "0", "gpu:0") to a
@@ -173,13 +201,7 @@ func (l *Ledger) CanAdmitEvicting(s *config.Stanza, evict []string) bool {
 		if ledger < 0 {
 			ledger = 0
 		}
-		live := g.FreeMB + credit[g.Index]
-		if live < 0 {
-			live = 0
-		}
-		if g.TotalMB > 0 && live > g.TotalMB {
-			live = g.TotalMB
-		}
+		live := l.liveFreeLocked(g, credit[g.Index])
 		avail := ledger
 		if live < avail {
 			avail = live
@@ -261,4 +283,14 @@ func (l *Ledger) Release(modelID string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.reservations, modelID)
+}
+
+// Credit records VRAM that Unload just freed, before nvidia-smi catches up.
+func (l *Ledger) Credit(gpu int, mb int64) {
+	if gpu < 0 || mb <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.pending[gpu] += mb
 }

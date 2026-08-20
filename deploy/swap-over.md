@@ -7,10 +7,11 @@ its health checks on the same port).
 
 Rollout order (least disruptive first):
 
-1. **nomad** (single model, 8 GB, nothing else depends on it)
+1. **nomad** (single local model, 8 GB; use `/ui/` Chat lab to probe mesh peers)
 2. **gareths-homelab** (nginx fronts the router; trivial rollback)
 3. **digger** (image node; sdcpp-webui runs alongside, untouched)
-4. **buster** (LAST — rag-proxy, Open WebUI, Hermes depend on :18080)
+4. **nugget** (V100; unit is `deploy/model-router.nugget.service`)
+5. **buster** (LAST — rag-proxy, Open WebUI, Hermes depend on :18080)
 
 ---
 
@@ -26,6 +27,7 @@ install -m 0755 build/model-router /opt/ai/bin/model-router
 install -m 0644 configs/<node>.yaml /opt/ai/config/model-router.yaml
 # (peers are inline in the config for v0.1; the SPEC's separate peers.yaml can
 #  be introduced later without schema changes)
+# nomad also needs configs/qwen-fixed-chat-template.jinja → /opt/ai/config/
 
 # 2. Validate.
 /opt/ai/bin/model-router -check -config /opt/ai/config/model-router.yaml
@@ -41,7 +43,7 @@ systemctl start model-router.service
 
 # 5. Verify (adjust port per node):
 curl -s http://127.0.0.1:18080/health                 # OK
-curl -s http://127.0.0.1:18080/v1/models | head -c 400 # stanzas + pools + peers
+curl -s http://127.0.0.1:18080/v1/models | head -c 400 # unique mesh model_ids
 curl -s http://127.0.0.1:18080/_router/status          # loaded models + telemetry
 
 # 6. Smoke-test the real models (per-node list below), e.g.:
@@ -68,21 +70,21 @@ systemctl start llama-swap.service
 
 | Node | Router port | Verify against | Notes |
 |------|-------------|----------------|-------|
-| nomad | :8081 | qwen3.5-9b chat | unlisted: true — the /v1/models list will NOT show it (same as today) |
-| gareths-homelab | 127.0.0.1:18080 (nginx :8081/:8082) | llm-gemma-waldron chat (preload), sdxl-lightning-waldron via /sdapi/v1/txt2img | nginx blocks already proxy both ports → 18080; confirm `proxy_buffering off` for SSE; preload matches the old hook |
-| digger | :8082 | qwopus-27b-coder chat (preload), krea-2-turbo via /sdapi/v1/txt2img | image stanzas with `"model": "<id>"` in body; no body model → krea-2-turbo (path_default) — same behaviour as llama-swap's body-only matching |
-| buster | :18080 | agents-a1 chat, intent-model (rag-proxy uses it), /v1/embeddings | rag-proxy keeps pointing at 127.0.0.1:18080 — NO rag-proxy change needed. Reranker/sparse/turbovec (:18095/:18096/:18097) untouched |
+| nomad | :8081 | local `qwen3.5-9b`; Chat lab `agents-a1` then `qwen3.8-27b` (mesh) | unlisted local stanza; catalog Load/Unload is local-only — remote ids are Mesh routed via Chat lab |
+| nugget | :8081 | `agents-a1` chat (preload), `qwen3-0.6b-instruct` | Swap as user kevyn; unit is `deploy/model-router.nugget.service` (memlock + TurboQuant lib path). Single V100. |
+| gareths-homelab | 127.0.0.1:18080 (nginx :8081/:8082) | `qwen2.5-1.5b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | nginx blocks already proxy both ports → 18080; confirm `proxy_buffering off` for SSE |
+| digger | :8082 | `qwen3-0.6b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | image stanzas with `"model": "<id>"` in body; no body model → krea-2-turbo (path_default) |
+| buster | :18080 | `agents-a1`, `qwen3-0.6b-instruct` (alias intent-router), /v1/embeddings | rag-proxy keeps pointing at 127.0.0.1:18080 — NO rag-proxy change needed. Reranker/sparse/turbovec (:18095/:18096/:18097) untouched |
 
 ## Known v0.1 limitations (accept before swapping)
 
-1. **No eviction/preemption** (SPEC v2 open question). On buster, the big
-   models share ONE V100: if agents-a1 is resident, requesting qwen38-27b
-   returns 503 (or spills to digger/gareth via the pools) instead of
-   hot-swapping like the old llama-swap matrix did. The resident set
-   (agents-a1 + intent + embedding + reranker) is preloaded at startup.
-   Digger/gareth have the same constraint on their single cards.
-2. **VRAM numbers are estimates.** After the first swap, compare
-   `nvidia-smi` deltas to `vram_mb` and calibrate. The router treats
+1. **Last-resort idle eviction, not in-flight preemption.** Stale occupants
+   go first; if that is not enough, an idle resident (including ttl=0) is
+   unloaded unless a request is mid-generation. In-flight work is never
+   killed. If this node still cannot fit, the request spills to a peer that
+   advertises the same `model_id`.
+2. **VRAM numbers are measured then rounded up** (`docs/vram-fit-ladder.md`).
+   After swap, compare `nvidia-smi` used to `vram_mb`. The router treats
    `vram_mb` as a hard reservation (fail-closed).
 3. **Peer wiring goes directly to router ports** (buster :18080, not the old
    :8081 rag-proxy path). Update all peer base_urls at once so no node talks
@@ -94,15 +96,13 @@ systemctl start llama-swap.service
 5. **Client disconnect during spin-up:** the request goroutine waits out the
    full spin-up window; the model still finishes loading and serves the next
    request. (SPEC open question: hold vs async polling.)
-6. **`CMD:` placeholder stanzas** in configs/digger.yaml and
-   configs/gareths-homelab.yaml must be filled by copying the cmd block from
-   the matching llama-swap config (line numbers are noted in the files).
 
 ## Post-swap checklist
 
 - [ ] `_router/status` shows loaded models + per-GPU free VRAM on every node
 - [ ] peers see each other: `_router/status` → `peers` map has fresh timestamps
-- [ ] cross-node request: from buster, `{"model":"digger/coding-model"}` answers
+- [ ] cross-node request: from nomad `/ui/` Chat lab, `agents-a1` then `qwen3.8-27b` stream via a peer
+- [ ] catalog Load/Unload on a **local** stanza actually start/stop the backend
 - [ ] offline tolerance: `systemctl stop model-router` on one node; the others
       still 503 cleanly (no hang) for its models and keep serving local ones
 - [ ] streaming chat (Open WebUI) shows tokens live through the router

@@ -105,22 +105,39 @@ func (r *Router) Unload(modelID string) error {
 	}
 	delete(r.managed, modelID)
 	r.mu.Unlock()
+	gpu := m.gpuIndex()
+	vram := r.modelVram(modelID)
 	m.Stop()
 	r.ledger.Release(modelID)
+	r.ledger.Credit(gpu, vram)
 	return nil
 }
 
-// evictToFit unloads stale models until the ledger can admit s. Fresh and
-// in-flight models are held: reload is expensive, unload is cheap, so idle
-// backends stay until their VRAM is needed. gpu < 0 (auto device) considers
-// every GPU's stale occupants.
+// evictToFit unloads occupants until the ledger can admit s.
+// Pass 1: stale models. Pass 2 (last resort): any idle model that is not
+// mid-generation or still spinning up, including ttl=0 residents.
 func (r *Router) evictToFit(s *config.Stanza) {
 	want := deviceIndex(s.Device)
-	for _, id := range r.ledger.occupantsOnGPU(want, s.ModelID) {
-		if r.busy(id) || !r.modelStale(id) {
+	r.evictPass(s, want, true)
+	if r.ledger.CanAdmit(s) {
+		return
+	}
+	r.evictPass(s, want, false)
+}
+
+func (r *Router) evictPass(s *config.Stanza, gpu int, staleOnly bool) {
+	for _, id := range r.ledger.occupantsOnGPU(gpu, s.ModelID) {
+		if r.protected(id) {
 			continue
 		}
-		r.logger.Infof("evicting stale %s to admit %s", id, s.ModelID)
+		if staleOnly && !r.modelStale(id) {
+			continue
+		}
+		why := "idle"
+		if staleOnly {
+			why = "stale"
+		}
+		r.logger.Infof("evicting %s %s to admit %s", why, id, s.ModelID)
 		if err := r.Unload(id); err != nil {
 			r.logger.Errorf("evict %s: %v", id, err)
 		}
@@ -138,6 +155,23 @@ func (r *Router) modelStale(id string) bool {
 		return false
 	}
 	return m.IsStale(time.Now())
+}
+
+// protected is true when a model must not be preempted: a request is in
+// flight, or the backend is still starting/stopping.
+func (r *Router) protected(id string) bool {
+	r.mu.Lock()
+	busy := r.occupancy[id] > 0
+	m := r.managed[id]
+	r.mu.Unlock()
+	if busy {
+		return true
+	}
+	if m == nil {
+		return false
+	}
+	st := m.State()
+	return st == StateStarting || st == StateStopping
 }
 
 // Target is a concrete serving destination after pool/spillover resolution.
@@ -243,7 +277,7 @@ func (r *Router) localCanServe(s *config.Stanza) bool {
 	}
 	var evict []string
 	for _, id := range r.ledger.occupantsOnGPU(deviceIndex(s.Device), s.ModelID) {
-		if !r.busy(id) {
+		if !r.protected(id) {
 			evict = append(evict, id)
 		}
 	}
@@ -296,7 +330,7 @@ func (r *Router) peerFits(name string, vramMB int64) bool {
 		return false
 	}
 	for _, g := range t.GPUs {
-		if g.FreeMB >= vramMB || g.FreeIfStaleEvictedMB >= vramMB {
+		if g.FreeMB >= vramMB || g.FreeIfStaleEvictedMB >= vramMB || g.FreeIfIdleEvictedMB >= vramMB {
 			return true
 		}
 	}
@@ -415,7 +449,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch {
 	case tgt.Local != "":
 		if err := r.proxyLocal(w, req, tgt.Local); err != nil {
-			if r.serveSpill(w, req, tgt.Local) {
+			if req.Header.Get("X-Model-Router-Peer") == "" && r.serveSpill(w, req, tgt.Local) {
 				return
 			}
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -465,8 +499,9 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 	}
 }
 
-// serveSpill tries later pool targets after a direct local id could not start
-// (krea holding the V100, chat named agents-a1 instead of daily-driver).
+// serveSpill tries later pool targets after a direct local id could not start,
+// then any peer that advertises the same model_id. Incoming peer-proxied
+// requests do not bounce (X-Model-Router-Peer).
 func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLocal string) bool {
 	for _, raw := range r.spillTargets(failedLocal) {
 		ref := resolveRef(raw, r.cfg)
@@ -487,7 +522,12 @@ func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLoca
 			}
 		}
 	}
-	return false
+	tgt, err := r.resolveMesh(failedLocal)
+	if err != nil || tgt.Peer == "" {
+		return false
+	}
+	r.logger.Meshf("spill %s -> %s", failedLocal, tgt.Peer)
+	return r.proxyPeer(w, req, tgt.Peer, tgt.PeerID) == nil
 }
 
 func (r *Router) spillTargets(failedLocal string) []string {
@@ -565,6 +605,8 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	if err := rewriteBodyModel(req, peerModel, p.BodyField); err != nil {
 		return err
 	}
+	req.Header.Set("X-Model-Router-Peer", r.node)
+	r.logger.Meshf("%s %s -> %s (%s)", req.Method, req.URL.Path, peerName, peerModel)
 	r.proxyTo(w, req, p.BaseURL)
 	return nil
 }
@@ -761,6 +803,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 	gpus := r.ledger.GPUs()
 	now := time.Now()
 	staleByGPU := map[int]int64{}
+	idleByGPU := map[int]int64{}
 	r.mu.Lock()
 	type running struct {
 		id string
@@ -786,12 +829,19 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			}
 		}
 		loaded = append(loaded, LoadedModel{ID: item.id, Freshness: freshness, VramMB: vram, GPU: gpu})
+		if gpu >= 0 {
+			idleByGPU[gpu] += vram
+		}
 	}
 	for _, g := range gpus {
 		reclaim := staleByGPU[g.Index]
 		g.FreeIfStaleEvictedMB = g.FreeMB + reclaim
 		if g.TotalMB > 0 && g.FreeIfStaleEvictedMB > g.TotalMB {
 			g.FreeIfStaleEvictedMB = g.TotalMB
+		}
+		g.FreeIfIdleEvictedMB = g.FreeMB + idleByGPU[g.Index]
+		if g.TotalMB > 0 && g.FreeIfIdleEvictedMB > g.TotalMB {
+			g.FreeIfIdleEvictedMB = g.TotalMB
 		}
 	}
 	return &Telemetry{
@@ -800,6 +850,47 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		LoadedModels: loaded,
 		Timestamp:    now.Unix(),
 	}
+}
+
+// BackendMetric is one running backend's /metrics scrape for the operator UI.
+type BackendMetric struct {
+	ID   string `json:"id"`
+	Body string `json:"body"`
+}
+
+// BackendMetrics scrapes each running local backend's /metrics. llama.cpp
+// stanzas that pass --metrics return Prometheus text; sd.cpp usually does not.
+func (r *Router) BackendMetrics() []BackendMetric {
+	r.mu.Lock()
+	type run struct {
+		id   string
+		port int
+	}
+	var live []run
+	for id, m := range r.managed {
+		if m.State() == StateRunning && m.stanza != nil && m.stanza.Port > 0 {
+			live = append(live, run{id: id, port: m.stanza.Port})
+		}
+	}
+	r.mu.Unlock()
+	client := &http.Client{Timeout: 800 * time.Millisecond}
+	out := make([]BackendMetric, 0, len(live))
+	for _, item := range live {
+		url := fmt.Sprintf("http://127.0.0.1:%d/metrics", item.port)
+		resp, err := client.Get(url)
+		if err != nil {
+			out = append(out, BackendMetric{ID: item.id, Body: err.Error()})
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		resp.Body.Close()
+		text := strings.TrimSpace(string(body))
+		if text == "" {
+			text = fmt.Sprintf("HTTP %d (empty)", resp.StatusCode)
+		}
+		out = append(out, BackendMetric{ID: item.id, Body: text})
+	}
+	return out
 }
 
 // HandleLoad is the control endpoint handler for peer load() calls. Accepts

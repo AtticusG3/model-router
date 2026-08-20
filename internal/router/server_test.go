@@ -67,7 +67,7 @@ func TestHandlerRouteTable(t *testing.T) {
 	req = httptest.NewRequest("GET", "/metrics", nil)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "model_router_up") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "model_router_up") || !strings.Contains(rec.Body.String(), "model_router_model_running") {
 		t.Fatalf("/metrics: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

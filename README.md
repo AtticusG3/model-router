@@ -4,7 +4,6 @@ Backend-agnostic model router for the homelab fleet (replaces llama-swap
 fleet-wide). One static binary runs on every node; per-node behaviour comes
 entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (fleet survey), and
 `docs/vram-fit-ladder.md` (shared `model_id`s and how to fit a weight on a GPU).
-(fleet survey, pitfalls, and the decisions that fit this network).
 
 ## What it does
 
@@ -12,20 +11,20 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
   `/v1/rerank`, `/v1/images/generations`, `/v1/models`, …) and sd.cpp routes
   (`/sdapi/v1/*`) by loading the right backend on demand.
 - Supervises backend processes (spawn, health-check polling, crash/restart).
-  Idle TTL marks a loaded model stale; it stays resident until another load
-  needs the VRAM (reload is expensive, unload is cheap).
+- Idle TTL marks a loaded model stale; it stays resident until another load
+  needs the VRAM. Last resort: an idle resident (including ttl=0) is evicted
+  if it is not mid-generation.
 - Admission uses live nvidia-smi free VRAM, with a per-GPU reservation ledger
   so concurrent loads cannot double-book during spin-up. A node is the sole
   authority over its own GPUs (no split-brain).
 - Advertises to peers every few seconds: loaded models (fresh/stale), live
-  free VRAM, and free VRAM if stale models were evicted.
+  free VRAM, and free VRAM if stale or idle models were evicted.
 - Spills requests to peers when the local node can't serve them (model not
   local, or GPU full): `POST /_router/load` on the candidate, then a streamed
   transparent reverse proxy.
 - Works fully offline: a node serves everything in its own stanza catalog even
   if the LAN is gone; unreachable peers are excluded via telemetry staleness.
-- Includes an embedded operator WebUI at `/ui/` with model/GPU dashboards,
-  load/unload controls, streaming chat, image generation, live logs, and metrics.
+- Includes an embedded operator WebUI at `/ui/` (see below).
 
 ## Build
 
@@ -53,10 +52,23 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/messages`, `/v1/embeddings`, `/v1/rerank`, `/v1/images/*`, `/infill`, `/completion` | OpenAI/llama-server passthrough |
 | `/sdapi/v1/*` | sd.cpp/A1111 passthrough |
 | `/v1/models` | unique mesh models (local + reachable remotes, no selectors) |
-| `/_router/load`, `/_router/unload` | peer-facing control (load = this node's own admission control) |
-| `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, and recent router events |
+| `/_router/load`, `/_router/unload` | local-only control (this node's admission; peers call these) |
+| `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
 | `/ui/` | embedded operator WebUI (dashboard, controls, chat, image, logs/metrics) |
-| `/health`, `/metrics` | health + minimal Prometheus text |
+| `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
+
+## Operator WebUI (`/ui/`)
+
+Catalog **Load** / **Unload** only start and stop **this node's** stanzas.
+Remote rows are Mesh routed: the router picks a peer when a request names
+that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
+`qwen3.8-27b`), choose the id in **Chat lab** and send — that is a normal
+`/v1/chat/completions` request, so the node `POST`s `/_router/load` on a
+fresh peer and streams the reply. Image lab is the same for `api_type:
+image` (or Path default for the configured sd.cpp route).
+
+The chat/image selectors keep the current choice across the 3s status poll.
+Hard-refresh `/ui/` after deploying a new binary.
 
 ## Config
 
@@ -88,7 +100,7 @@ cmd/model-router/        the router binary
 cmd/fake-model/          test backend (OpenAI + sdapi surface)
 internal/config/         config loading/validation
 internal/router/         matcher, admission, supervisor, telemetry, pools, proxy, server
-configs/                 staged per-node configs (buster, nomad, digger, gareths-homelab)
-deploy/                  systemd unit + swap-over procedure
+configs/                 staged per-node configs (buster, nugget, nomad, digger, gareths-homelab)
+deploy/                  systemd units + swap-over procedure
 test/                    smoke-test configs + launcher
 ```

@@ -199,14 +199,19 @@ type PeerSyncer struct {
 	cache  *PeerCache
 	every  time.Duration
 	client *http.Client
+	logger *Logger
+	mu     sync.Mutex
+	last   map[string]string
 }
 
-func NewPeerSyncer(cfg *config.Config, cache *PeerCache, every time.Duration) *PeerSyncer {
+func NewPeerSyncer(cfg *config.Config, cache *PeerCache, every time.Duration, logger *Logger) *PeerSyncer {
 	return &PeerSyncer{
 		cfg:    cfg,
 		cache:  cache,
 		every:  every,
 		client: &http.Client{Timeout: 5 * time.Second},
+		logger: logger,
+		last:   map[string]string{},
 	}
 }
 
@@ -233,19 +238,35 @@ func (s *PeerSyncer) syncOnce() {
 		resp, err := s.client.Get(url)
 		if err != nil {
 			s.cache.SetErr(p.Name, err)
+			s.note(p.Name, err.Error())
 			continue
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			s.cache.SetErr(p.Name, fmt.Errorf("telemetry %s -> %d", url, resp.StatusCode))
+			msg := fmt.Sprintf("telemetry %s -> %d", url, resp.StatusCode)
+			s.cache.SetErr(p.Name, fmt.Errorf("%s", msg))
+			s.note(p.Name, msg)
 			continue
 		}
 		var t Telemetry
 		if err := json.Unmarshal(body, &t); err != nil {
 			s.cache.SetErr(p.Name, err)
+			s.note(p.Name, err.Error())
 			continue
 		}
 		s.cache.Set(p.Name, &t)
+		s.note(p.Name, fmt.Sprintf("ok gpus=%d loaded=%d", len(t.GPUs), len(t.LoadedModels)))
 	}
+}
+
+func (s *PeerSyncer) note(name, state string) {
+	s.mu.Lock()
+	prev := s.last[name]
+	s.last[name] = state
+	s.mu.Unlock()
+	if prev == state || s.logger == nil {
+		return
+	}
+	s.logger.Meshf("peer %s: %s", name, state)
 }

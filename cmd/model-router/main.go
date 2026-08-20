@@ -82,7 +82,7 @@ func main() {
 
 	// Peer telemetry syncer.
 	syncEvery := time.Duration(cfg.Telemetry.PeerSyncSeconds) * time.Second
-	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery).Run(ctx)
+	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery, logger).Run(ctx)
 
 	handler := router.NewHandler(r, logger)
 	srv, _, errCh, err := startHTTPServer(cfg.Listen, handler, logger)

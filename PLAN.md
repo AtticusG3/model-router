@@ -213,8 +213,8 @@ backends; real llama-swap untouched):
   resolve to the node's real stanza.
 - ✅ OpenAI + sdapi proxy with SSE flushing; `/v1/models` llama-swap-shaped;
   `/_router/{load,unload,status,telemetry}`, `/health`, `/metrics`; `-check`.
-- ✅ Staged configs for all four nodes (configs/) + systemd unit + swap-over
-  procedure (deploy/), all validated with `-check`.
+- ✅ Staged configs for all five nodes (configs/, including nugget) + systemd
+  units + swap-over procedure (deploy/), all validated with `-check`.
 
 Bugs found and fixed during the smoke test (all real, fleet-relevant):
 
@@ -239,13 +239,13 @@ Bugs found and fixed during the smoke test (all real, fleet-relevant):
 
 Remaining v0.1 gaps to accept before rollout (also in deploy/swap-over.md):
 
-- No eviction: big models sharing one card (buster V100, digger/gareth 24/16GB)
-  can't hot-swap like llama-swap's matrix; requests 503 or spill to peers.
-- `vram_mb` values are estimates pending calibration.
-- Some digger/gareth stanza commands are `CMD:` placeholders pointing at the
-  source llama-swap config (noted inline).
-- Staged only: no node has been swapped; the procedure in deploy/swap-over.md
-  is the executable plan.
+- In-flight work is never preempted. Idle residents (including ttl=0) can be
+  evicted last-resort; otherwise the request spills to a peer with the same
+  `model_id`.
+- `vram_mb` values are measured (2026-08-20 walks) then rounded up; re-check
+  after swap.
+- Staged only: swap procedure in deploy/swap-over.md is the executable plan.
+  Nugget now has `configs/nugget.yaml` + `deploy/model-router.nugget.service`.
 
 ## 5. Deployment (staged — NOT executed this pass)
 
@@ -256,7 +256,8 @@ units in `deploy/`. The swap-over keeps llama-swap as a rollback (unit
 `llama-swap.service` is only stopped after the router passes a health check on the
 same port).
 
-Order of rollout (least disruptive first): **nomad** (single model, 8 GB) →
-**gareths-homelab** (nginx in front, easy rollback) → **digger** (image node) →
-**buster** (last; rag-proxy depends on :18080, so buster swap is the riskiest and
-needs the most pre-flight).
+Order of rollout (least disruptive first): **nomad** (single local model;
+Chat lab probes mesh peers) → **gareths-homelab** (nginx in front, easy
+rollback) → **digger** (image node) → **nugget** (V100, kevyn unit) →
+**buster** (last; rag-proxy depends on :18080, so buster swap is the
+riskiest and needs the most pre-flight).

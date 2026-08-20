@@ -418,4 +418,11 @@ peers:
 	if r.peerFits("digger", 8000) {
 		t.Fatal("peer with only 3000 MB even after stale eviction must not fit 8000")
 	}
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 2000, FreeIfStaleEvictedMB: 3000, FreeIfIdleEvictedMB: 20000}},
+	})
+	if !r.peerFits("digger", 8000) {
+		t.Fatal("peer with 20000 MB after idle eviction should fit an 8000 MB model")
+	}
 }

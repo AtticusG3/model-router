@@ -154,6 +154,6 @@ sub-path, until a proper base-href rewrite pass is designed.
   Buster) and for image-gen jobs, which have a different duration profile
   than chat completions.
 - Multi-GPU tensor-split stanzas (relevant once Buster gets a second V100).
-- Eviction/preemption policy — what happens when a higher-priority request
-  needs VRAM currently held by an idle-but-not-yet-TTL'd model.
-- Metrics/observability endpoint.
+- Priority / in-flight preemption — v0.1 already evicts stale occupants,
+  then idle residents (including ttl=0) that are not mid-generation. Killing
+  an in-flight request is still open.

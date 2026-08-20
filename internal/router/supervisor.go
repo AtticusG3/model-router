@@ -167,7 +167,7 @@ func (m *Managed) SetGPU(idx int) {
 	m.gpuIdx = idx
 }
 
-// copyLogs feeds backend stdout/stderr to the debug logger.
+// copyLogs feeds backend stdout/stderr to the upstream log ring.
 func (m *Managed) copyLogs(r io.Reader) {
 	if r == nil {
 		return
@@ -176,7 +176,17 @@ func (m *Managed) copyLogs(r io.Reader) {
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			m.logger.Debugf("[%s] %s", m.stanza.ModelID, strings.TrimRight(string(buf[:n]), "\n"))
+			text := strings.TrimRight(string(buf[:n]), "\n")
+			for _, line := range strings.Split(text, "\n") {
+				line = strings.TrimRight(line, "\r")
+				if line == "" {
+					continue
+				}
+				if len(line) > 2000 {
+					line = line[:2000] + "..."
+				}
+				m.logger.Upstreamf("[%s] %s", m.stanza.ModelID, line)
+			}
 		}
 		if err != nil {
 			return

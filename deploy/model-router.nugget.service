@@ -1,0 +1,28 @@
+# Install on nugget as /etc/systemd/system/model-router.service
+# (llama-swap.service stays installed for rollback).
+#
+# Matches the old llama-swap unit: kevyn, memlock for --mlock, TurboQuant
+# library path, CUDA0 only.
+
+[Unit]
+Description=model-router (nugget)
+After=network-online.target nvidia-persistenced.service
+Wants=network-online.target
+Conflicts=llama-swap.service
+
+[Service]
+Type=simple
+User=kevyn
+Group=kevyn
+LimitMEMLOCK=infinity
+Environment=HOME=/home/kevyn
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=LD_LIBRARY_PATH=/opt/ai/llama-cpp-turboquant/build/bin
+TimeoutStopSec=60
+ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml --node nugget
+Restart=always
+RestartSec=3
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

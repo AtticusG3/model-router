@@ -28,7 +28,12 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 			})
 		}},
 		{"/_router/logs", func(w http.ResponseWriter, req *http.Request) {
-			writeJSON(w, map[string]any{"entries": logger.RecentLogs(300)})
+			writeJSON(w, map[string]any{
+				"entries":         logger.RecentLogs(300),
+				"upstream":        logger.RecentUpstream(300),
+				"mesh":            logger.RecentMesh(300),
+				"backend_metrics": r.BackendMetrics(),
+			})
 		}},
 		{"/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, r.TelemetrySnapshot())
@@ -118,20 +123,56 @@ func decodeModelID(w http.ResponseWriter, req *http.Request) (string, bool) {
 func handleMetrics(r *Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		var sb strings.Builder
-		snap := r.TelemetrySnapshot()
+		fmt.Fprintf(&sb, "# HELP model_router_up 1 if this process is serving\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_up gauge\n")
+		fmt.Fprintf(&sb, "model_router_up{node=%q} 1\n", r.node)
+
+		fmt.Fprintf(&sb, "# HELP model_router_model_running 1 if the local backend is running\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_model_running gauge\n")
+		fmt.Fprintf(&sb, "# HELP model_router_model_vram_mb stanza reservation in MB\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_model_vram_mb gauge\n")
 		for _, ms := range r.LocalModelStatuses() {
 			if ms.Origin != "local" {
 				continue
 			}
-			fmt.Fprintf(&sb, "model_router_model_state{model=%q} 1\n", ms.ID)
+			running := 0
+			if ms.State == string(StateRunning) {
+				running = 1
+			}
+			fmt.Fprintf(&sb, "model_router_model_running{model=%q} %d\n", ms.ID, running)
 			fmt.Fprintf(&sb, "model_router_model_vram_mb{model=%q} %d\n", ms.ID, ms.VramMB)
 		}
+
+		snap := r.TelemetrySnapshot()
+		fmt.Fprintf(&sb, "# HELP model_router_gpu_free_mb live nvidia-smi free VRAM\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_gpu_free_mb gauge\n")
+		fmt.Fprintf(&sb, "# HELP model_router_gpu_total_mb GPU memory total\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_gpu_total_mb gauge\n")
+		fmt.Fprintf(&sb, "# HELP model_router_gpu_free_if_stale_evicted_mb free plus stale-model reservations\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_gpu_free_if_stale_evicted_mb gauge\n")
+		fmt.Fprintf(&sb, "# HELP model_router_gpu_free_if_idle_evicted_mb free plus all loaded-model reservations\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_gpu_free_if_idle_evicted_mb gauge\n")
 		for _, g := range snap.GPUs {
 			fmt.Fprintf(&sb, "model_router_gpu_free_mb{gpu=%d} %d\n", g.Index, g.FreeMB)
-			fmt.Fprintf(&sb, "model_router_gpu_free_if_stale_evicted_mb{gpu=%d} %d\n", g.Index, g.FreeIfStaleEvictedMB)
 			fmt.Fprintf(&sb, "model_router_gpu_total_mb{gpu=%d} %d\n", g.Index, g.TotalMB)
+			fmt.Fprintf(&sb, "model_router_gpu_free_if_stale_evicted_mb{gpu=%d} %d\n", g.Index, g.FreeIfStaleEvictedMB)
+			fmt.Fprintf(&sb, "model_router_gpu_free_if_idle_evicted_mb{gpu=%d} %d\n", g.Index, g.FreeIfIdleEvictedMB)
 		}
-		fmt.Fprintf(&sb, "model_router_up{node=%q} 1\n", r.node)
+
+		fmt.Fprintf(&sb, "# HELP model_router_peer_fresh 1 if peer telemetry is within the stale window\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_peer_fresh gauge\n")
+		for i := range r.cfg.Peers {
+			p := &r.cfg.Peers[i]
+			if p.Kind != "router" {
+				continue
+			}
+			fresh := 0
+			if r.peers.Fresh(p.Name) {
+				fresh = 1
+			}
+			fmt.Fprintf(&sb, "model_router_peer_fresh{peer=%q} %d\n", p.Name, fresh)
+		}
+
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprint(w, sb.String())
 	}
