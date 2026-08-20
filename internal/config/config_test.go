@@ -91,6 +91,12 @@ func TestParse(t *testing.T) {
 	if cfg.Peer("digger") == nil {
 		t.Error("peer lookup failed")
 	}
+	if !cfg.PeerAdvertises("coding-model") {
+		t.Error("PeerAdvertises(coding-model) = false")
+	}
+	if cfg.PeerAdvertises("agents-a1") {
+		t.Error("PeerAdvertises(agents-a1) = true, want false")
+	}
 	if cfg.Peer("digger").Kind != "router" {
 		t.Errorf("peer kind = %q", cfg.Peer("digger").Kind)
 	}

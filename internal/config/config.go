@@ -1,8 +1,8 @@
 // Package config loads and validates the model-router per-node configuration.
 //
 // The stanza schema is defined in SPEC.md. This file extends it with the fields
-// the fleet actually needs (device pinning for buster's two GPUs, pools for the
-// selector IDs clients reference, peers, preload, unlisted).
+// the fleet actually needs (device pinning for buster's two GPUs, optional
+// pools for legacy client ids, peers, preload).
 package config
 
 import (
@@ -52,7 +52,8 @@ type Stanza struct {
 	HealthCheck string `yaml:"health_check"`
 	// IdleTTLSeconds unloads the backend after this many idle seconds. 0 = never.
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
-	// Unlisted hides the stanza from /v1/models (like llama-swap's unlisted).
+	// Unlisted is accepted for llama-swap configs. Listing ignores it: the
+	// mesh catalog shows every available model id once.
 	Unlisted bool `yaml:"unlisted"`
 	// Env are extra "KEY=value" environment variables for the backend process.
 	Env []string `yaml:"env"`
@@ -68,7 +69,8 @@ type Stanza struct {
 }
 
 // Pool is a virtual model id resolved to concrete targets per request
-// (llama-swap "selector"). Targets are local stanza ids or "peer/model".
+// (llama-swap "selector"). Kept so existing clients can still POST
+// coding-pool etc.; pools are not listed in /v1/models or the UI.
 type Pool struct {
 	Name      string   `yaml:"name"`
 	Strategy  string   `yaml:"strategy"`
@@ -342,6 +344,21 @@ func (c *Config) Pool(name string) *Pool { return c.poolByName[name] }
 
 // Peer returns the peer with the given name, or nil.
 func (c *Config) Peer(name string) *Peer { return c.peerByName[name] }
+
+// PeerAdvertises reports whether any peer lists id in its models catalog.
+func (c *Config) PeerAdvertises(id string) bool {
+	if id == "" {
+		return false
+	}
+	for i := range c.Peers {
+		for _, m := range c.Peers[i].Models {
+			if m == id {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // StanzaIDs returns all local stanza ids in config order.
 func (c *Config) StanzaIDs() []string {

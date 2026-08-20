@@ -19,8 +19,8 @@ import (
 // The message mirrors llama-swap's so existing clients keep their behaviour.
 var ErrNoModel = errors.New("no model id could be identified")
 
-// ModelRef is a resolved model reference. It is either a local stanza id, a
-// pool name, or a peer-qualified "peer/model" id.
+// ModelRef is a resolved model reference: local stanza, pool (compat),
+// peer-qualified "peer/model", or a mesh id (Raw only; peers advertise it).
 type ModelRef struct {
 	Raw    string // as requested, e.g. "coding-pool", "digger/coding-model"
 	Local  string // local stanza id ("" if not local)
@@ -73,7 +73,7 @@ func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 
 	if m := modelFromRequest(r, body, cfg); m != "" {
 		ref := resolveRef(m, cfg)
-		if ref.Local == "" && ref.Pool == "" && ref.Peer == "" {
+		if ref.Local == "" && ref.Pool == "" && ref.Peer == "" && !cfg.PeerAdvertises(m) {
 			return ModelRef{}, fmt.Errorf("%w: %q", ErrNoModel, m)
 		}
 		return ref, nil

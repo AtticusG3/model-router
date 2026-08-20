@@ -107,6 +107,29 @@ func TestMatchPeerQualified(t *testing.T) {
 	}
 }
 
+func TestMatchPeerAdvertisedUnqualified(t *testing.T) {
+	cfg := testConfig(t)
+	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"coding-model","messages":[]}`)
+	ref, err := matchRequest(req, cfg)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if ref.Local != "" || ref.Pool != "" || ref.Peer != "" {
+		t.Fatalf("want mesh raw-only ref, got %+v", ref)
+	}
+	if ref.Raw != "coding-model" {
+		t.Fatalf("raw = %q", ref.Raw)
+	}
+}
+
+func TestMatchUnknownModelStillFails(t *testing.T) {
+	cfg := testConfig(t)
+	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"nope","messages":[]}`)
+	if _, err := matchRequest(req, cfg); err == nil {
+		t.Fatal("unknown model should fail")
+	}
+}
+
 func TestMatchPathDefault(t *testing.T) {
 	cfg := testConfig(t)
 	// No model in body -> falls back to path_default stanza.
