@@ -149,7 +149,7 @@ case "$NODE" in
       --cache-type-k turbo4 --cache-type-v turbo4
       --split-mode none --device CUDA0 )
     for n in 1 2 3 4; do
-      run_n ornith-1.0-35b "$n" "$BIN" --model "$BASE/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf" \
+      run_n ornith-1.0-35b-heretic "$n" "$BIN" --model "$BASE/models/ornith-model/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf" \
         --ctx-size 262144 --threads 8 --parallel 1 "${COMMON[@]}" || true
     done
     ;;

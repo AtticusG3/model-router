@@ -50,7 +50,7 @@ case "$NODE" in
     BASE=/srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp
     MODELS=(
       "qwen3.6-35b-a3b|$BASE/models/qwen36/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Compact.gguf|99"
-      "ornith-1.0-35b|$BASE/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf|99"
+      "ornith-1.0-35b-heretic|$BASE/models/ornith-model/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf|99"
     )
     ;;
   nomad)

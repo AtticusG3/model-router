@@ -150,8 +150,7 @@ Legacy pool/proxy names are aliases only.
 | `qwen3-embedding-4b` | Qwen3 Embedding 4B (rag-proxy) | buster, nugget |
 | `jina-reranker-v3.5` | Jina Reranker v3.5 (rag-proxy) | buster, nugget |
 | `qwen3.8-27b` | Qwen3.8 27B UD-Q5_K_XL | buster, nugget, digger |
-| `ornith-1.0-35b-heretic` | Ornith 1.0 35B Heretic (APEX Quality on 32GB, Compact on 24GB) | buster, nugget, digger |
-| `ornith-1.0-35b` | Ornith 1.0 35B (APEX Compact; 16GB pick) | gareth |
+| `ornith-1.0-35b-heretic` | Ornith 1.0 35B Heretic (APEX Quality on 32GB, Compact on 24GB/16GB) | buster, nugget, digger, gareth |
 | `qwen3.5-9b` | Qwen 3.5 9B Abliterated | nomad |
 | `qwen3.6-35b-a3b` | Qwen 3.6 35B A3B heretic (APEX Quality on 32GB, Compact on 16GB) | buster, nugget, gareth |
 | `krea-2-turbo` | Krea 2 Turbo | buster, nugget, digger, gareth |
@@ -206,7 +205,7 @@ a second 256k cache, so it stays one slot.
 | digger | RTX PRO 4000 24GB | `qwen3.8-27b` | 1×128k turbo4 (256k lost) | 22753 | 23300 |
 | digger | CPU | `qwen3-0.6b-instruct` | ngl 0 | 0 | 0 |
 | gareth | 5060 Ti 16GB | `qwen3.6-35b-a3b` | 1×256k turbo4, no MTP, no mmproj (Compact) | 14732 | 15200 |
-| gareth | 5060 Ti 16GB | `ornith-1.0-35b` | 1×256k turbo4, MTP+mmproj (Compact) | 13808 | 14300 |
+| gareth | 5060 Ti 16GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Compact) | 13808 | 14300 |
 | gareth | 5060 Ti 16GB | `qwen2.5-1.5b-instruct` | specialist | 1278 | 1500 |
 | nomad | RTX A2000 8GB | `qwen3.5-9b` | 1×49k turbo4, mmproj (small-card exception) | 6879 | 7400 |
 
