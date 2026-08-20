@@ -19,11 +19,12 @@ telemetry:
   peer_sync_seconds: 5
   peer_stale_seconds: 15
 
-preload: [llm-gemma-waldron]   # matches llama-swap's on_startup preload
+preload: [gemma-4-26b-a4b]   # matches llama-swap's on_startup preload
 
 stanzas:
-  - model_id: llm-gemma-waldron
+  - model_id: gemma-4-26b-a4b
     name: "Gemma 4 26B A4B"
+    aliases: [llm-gemma-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma4/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf
@@ -52,8 +53,9 @@ stanzas:
     unlisted: false
     port: 5801
 
-  - model_id: llm-laguna-waldron
+  - model_id: laguna-s-2.1
     name: "Laguna-S-2.1"
+    aliases: [llm-laguna-waldron]
     command: >
       env LD_LIBRARY_PATH=/srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin/llama-server
@@ -82,8 +84,9 @@ stanzas:
     unlisted: false
     port: 5802
 
-  - model_id: llm-qwen-waldron
+  - model_id: qwen3.6-35b-a3b
     name: "Qwen 3.6 35B A3B"
+    aliases: [llm-qwen-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Compact.gguf
@@ -112,8 +115,9 @@ stanzas:
     unlisted: false
     port: 5803
 
-  - model_id: llm-bonsai-27b-waldron
+  - model_id: ternary-bonsai-27b
     name: "Ternary Bonsai 27B"
+    aliases: [llm-bonsai-27b-waldron]
     command: >
       env LD_LIBRARY_PATH=/srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama.cpp/build/bin/llama-server
@@ -141,8 +145,9 @@ stanzas:
     unlisted: false
     port: 5804
 
-  - model_id: llm-daily-driver-waldron
+  - model_id: qwable-3.6-35b
     name: "Qwable 3.6 35B (daily driver)"
+    aliases: [llm-daily-driver-waldron, daily-driver, daily-model]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/daily-driver/Qwable-3.6-35b_q5_k_m.gguf
@@ -169,8 +174,9 @@ stanzas:
     unlisted: false
     port: 5805
 
-  - model_id: llm-coding-model-waldron
+  - model_id: qwopus-3.6-27b-coder
     name: "Qwopus3.6 27B Coder (Gareth)"
+    aliases: [llm-coding-model-waldron, coding-pool, coding-model]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/coding-model/Qwopus3.6-27B-Coder-MTP-Q5_K_M.gguf
@@ -197,8 +203,9 @@ stanzas:
     unlisted: false
     port: 5806
 
-  - model_id: llm-intent-router-waldron
+  - model_id: qwen2.5-1.5b-instruct
     name: "Qwen2.5 1.5B Instruct (intent router)"
+    aliases: [llm-intent-router-waldron, intent-model, intent-router]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/intent-router/qwen2.5-1.5b-instruct-q4_k_m.gguf
@@ -223,8 +230,9 @@ stanzas:
     unlisted: false
     port: 5807
 
-  - model_id: llm-ornith-waldron
+  - model_id: ornith-1.0-35b-compact
     name: "Ornith (Waldron)"
+    aliases: [llm-ornith-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf
@@ -252,8 +260,9 @@ stanzas:
     unlisted: false
     port: 5808
 
-  - model_id: llm-bonsai-dspark-waldron
+  - model_id: ternary-bonsai-27b-dspark
     name: "Bonsai dSpark (Waldron)"
+    aliases: [llm-bonsai-dspark-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-dspark-Q4_1.gguf
@@ -279,8 +288,9 @@ stanzas:
     unlisted: false
     port: 5809
 
-  - model_id: llm-bonsai-q2-waldron
+  - model_id: ternary-bonsai-27b-q2
     name: "Bonsai Q2 (Waldron)"
+    aliases: [llm-bonsai-q2-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/prism-ml/Ternary-Bonsai-27B-Q2_0.gguf
@@ -306,8 +316,9 @@ stanzas:
     unlisted: false
     port: 5810
 
-  - model_id: llm-qwen36-fast-nvfp4-waldron
+  - model_id: qwen3.6-35b-fast
     name: "Qwen3.6 fast NVFP4 (Waldron)"
+    aliases: [llm-qwen36-fast-nvfp4-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/Qwen3.6-35B-Fast-NVFP4.gguf
@@ -335,8 +346,9 @@ stanzas:
     unlisted: false
     port: 5811
 
-  - model_id: llm-qwen36-reap-waldron
+  - model_id: qwen3.6-35b-reap
     name: "Qwen3.6 REAP (Waldron)"
+    aliases: [llm-qwen36-reap-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen3.6-35b-reap-pruned-ratio-0.3-q4_k_m.gguf
@@ -362,8 +374,9 @@ stanzas:
     unlisted: false
     port: 5812
 
-  - model_id: llm-gemma4-21b-reap-waldron
+  - model_id: gemma-4-21b-reap
     name: "Gemma4 21B REAP (Waldron)"
+    aliases: [llm-gemma4-21b-reap-waldron]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin/llama-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/gemma-4-21b-a4b-it-REAP-heretic.i1-IQ3_M.gguf
@@ -392,8 +405,9 @@ stanzas:
 
   # ---------------- Image (sd.cpp) ----------------
   # All share /sdapi/v1; sdxl-lightning-waldron is the path_default.
-  - model_id: sdxl-lightning-waldron
+  - model_id: sdxl-lightning
     name: "Waldron SDXL Lightning (Juggernaut XI)"
+    aliases: [sdxl-lightning-waldron]
     command: >
       /opt/ai/bin/sd-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/sdxl/Juggernaut-XI-byRunDiffusion-Lightning.safetensors
@@ -408,8 +422,9 @@ stanzas:
     unlisted: false
     port: 5821
 
-  - model_id: photo-edit-waldron
+  - model_id: sdxl-juggernaut-xi
     name: "Waldron SDXL Photo Edit (Juggernaut XI img2img)"
+    aliases: [photo-edit-waldron]
     command: >
       /opt/ai/bin/sd-server
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/sdxl/Juggernaut-XI-byRunDiffusion.safetensors
@@ -430,8 +445,9 @@ stanzas:
     unlisted: false
     port: 5822
 
-  - model_id: z-anime-waldron
+  - model_id: z-anime
     name: "Waldron Z Anime (8-step GGUF)"
+    aliases: [z-anime-waldron]
     command: >
       /opt/ai/bin/sd-server
       --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Z-Anime-8steps.q5_0.gguf
@@ -452,8 +468,9 @@ stanzas:
     unlisted: false
     port: 5823
 
-  - model_id: juggernaut-z-waldron
+  - model_id: z-image-juggernaut-fast
     name: "Waldron Juggernaut Z Fast (4-step GGUF)"
+    aliases: [juggernaut-z-waldron]
     command: >
       /opt/ai/bin/sd-server
       --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/Juggernaut_Z_V1_Fast_by_RunDiffusion_q8_0.gguf
@@ -474,8 +491,9 @@ stanzas:
     unlisted: false
     port: 5824
 
-  - model_id: z-image-waldron
+  - model_id: z-image
     name: "Waldron Z Image base (Q8 GGUF)"
+    aliases: [z-image-waldron]
     command: >
       /opt/ai/bin/sd-server
       --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/z-image-turbo/z-image-Q8_0.gguf
@@ -496,8 +514,9 @@ stanzas:
     unlisted: false
     port: 5825
 
-  - model_id: flux2-klein-waldron
+  - model_id: flux2-klein
     name: "Flux.2 Klein (Waldron)"
+    aliases: [flux2-klein-waldron]
     command: >
       /opt/ai/bin/sd-server
       --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux2-klein/flux-2-klein-9b-Q4_0.gguf
@@ -517,29 +536,19 @@ stanzas:
     unlisted: false
     port: 5826
 
-pools:
-  coding-pool:
-    strategy: spillover
-    targets: [llm-coding-model-waldron, buster/qwopus-27b-coder-compat, digger/coding-model]
-    spillover: 1
-  daily-driver:
-    strategy: spillover
-    targets: [llm-daily-driver-waldron, buster/agents-a1, digger/daily-model, nomad/qwen3.5-9b]
-    spillover: 1
-  intent-router:
-    strategy: spillover
-    targets: [llm-intent-router-waldron, buster/intent-model, digger/intent-model, nomad/qwen3.5-9b]
-    spillover: 2
-
 peers:
   - name: buster
     kind: router
     base_url: http://192.168.1.61:18080
-    models: [qwopus-27b-coder-compat, agents-a1, intent-model]
+    models: [qwopus-3.6-27b-coder-compat, agents-a1, qwen3-0.6b-instruct,
+             qwen3-embedding-4b, jina-reranker-v3.5, qwen3.8-27b,
+             ornith-1.0-35b-heretic-quality, gemma-4-12b, krea-2-turbo]
   - name: digger
     kind: router
     base_url: http://192.168.1.36:8082
-    models: [coding-model, daily-model, intent-model, ornith-model]
+    models: [qwopus-3.6-27b-coder, qwable-3.6-35b, qwen3-0.6b-instruct,
+             ornith-1.0-35b-heretic-compact, ornith-1.0-35b-compact,
+             krea-2-turbo, sdxl-lightning, z-image, flux2-klein]
   - name: nomad
     kind: router
     base_url: http://192.168.1.202:8081

@@ -1,7 +1,6 @@
 # nomad -- model-router v0.1 staged config (replaces llama-swap on 0.0.0.0:8081)
 # Single model: Qwen3.5-9B Abliterated (TurboQuant vision) on the RTX A2000 8GB.
-# Weights under /opt/ai/models/. Keep this node unlisted (like llama-swap's
-# `unlisted: true`) so it only serves pool spillover, not direct listing.
+# Weights under /opt/ai/models/.
 
 listen: 0.0.0.0:8081
 start_port: 5901
@@ -18,6 +17,7 @@ preload: [qwen3.5-9b]
 stanzas:
   - model_id: qwen3.5-9b
     name: "Qwen 3.5 9B Abliterated (TurboQuant vision)"
+    aliases: [coding-pool, daily-driver, intent-router]
     command: >
       /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/qwen35-9b-vision/Qwen3.5-9B-Abliterated-Claude-4.6-Opus-Reasoning-Distilled-v2.Q4_K_M.gguf
@@ -50,35 +50,19 @@ stanzas:
     unlisted: true
     port: 5901
 
-pools:
-  coding-pool:
-    strategy: spillover
-    targets: [qwen3.5-9b, buster/qwopus-27b-coder-compat, digger/coding-model, gareths-homelab/llm-coding-model-waldron]
-    spillover: 1
-  daily-driver:
-    strategy: spillover
-    targets: [qwen3.5-9b, buster/agents-a1, digger/daily-model, gareths-homelab/llm-daily-driver-waldron]
-    spillover: 1
-  intent-router:
-    strategy: spillover
-    targets: [qwen3.5-9b, buster/intent-model, digger/intent-model, gareths-homelab/llm-intent-router-waldron]
-    spillover: 2
-
 peers:
   - name: buster
     kind: router
     base_url: http://192.168.1.61:18080
-    models: [qwopus-27b-coder-compat, agents-a1, intent-model, qwen3-embedding-4b, jina-reranker-v3.5, qwen38-27b, ornith-35b, gemma-4-12b]
+    models: [qwopus-3.6-27b-coder-compat, agents-a1, qwen3-0.6b-instruct,
+             qwen3-embedding-4b, jina-reranker-v3.5, qwen3.8-27b,
+             ornith-1.0-35b-heretic-quality, gemma-4-12b, krea-2-turbo]
   - name: digger
     kind: router
     base_url: http://192.168.1.36:8082
-    models: [coding-model, daily-model, intent-model, ornith-model]
+    models: [qwopus-3.6-27b-coder, qwable-3.6-35b, qwen3-0.6b-instruct,
+             ornith-1.0-35b-heretic-compact]
   - name: gareths-homelab
     kind: router
     base_url: http://100.89.49.44:8081
-    models: [llm-coding-model-waldron, llm-daily-driver-waldron, llm-intent-router-waldron]
-  # nugget is OFFLINE (192.168.1.62, no route). Re-add when it returns:
-  # - name: nugget
-  #   kind: router
-  #   base_url: http://192.168.1.62:8081
-  #   models: [coding-model, daily-model, intent-model, agents-a1-model, fusion-heretic-model]
+    models: [qwopus-3.6-27b-coder, qwable-3.6-35b, qwen2.5-1.5b-instruct]

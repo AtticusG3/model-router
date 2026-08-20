@@ -2,7 +2,8 @@
 
 Backend-agnostic model router for the homelab fleet (replaces llama-swap
 fleet-wide). One static binary runs on every node; per-node behaviour comes
-entirely from a YAML config. See `SPEC.md` (goals/architecture) and `PLAN.md`
+entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (fleet survey), and
+`docs/vram-fit-ladder.md` (shared `model_id`s and how to fit a weight on a GPU).
 (fleet survey, pitfalls, and the decisions that fit this network).
 
 ## What it does
