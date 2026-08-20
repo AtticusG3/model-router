@@ -8,124 +8,116 @@ import (
 	"time"
 )
 
-// modelRoutedPaths are the endpoints whose model is resolved from the body /
-// query / path by the matcher. Everything else is either a control endpoint or
-// 404. Mirrors llama-swap's route table.
-var modelRoutedPaths = []string{
-	"/v1/chat/completions",
-	"/v1/completions",
-	"/v1/responses",
-	"/v1/messages",
-	"/v1/messages/count_tokens",
-	"/v1/embeddings",
-	"/v1/rerank",
-	"/v1/reranking",
-	"/rerank",
-	"/reranking",
-	"/infill",
-	"/completion",
-	"/v1/audio/speech",
-	"/v1/audio/voices",
-	"/v1/images/generations",
-	"/v1/images/edits",
-	"/sdapi/v1/txt2img",
-	"/sdapi/v1/img2img",
-	"/sdapi/v1/loras",
-	"/v/chat/completions",
-	"/v/embeddings",
-	"/v/responses",
-	"/v/completions",
-	"/v/messages",
-	"/v/rerank",
-	"/v/reranking",
-	// llama.cpp native WebUI/control endpoints. The WebUI supplies ?model=;
-	// requests without a model still fail closed in the catch-all below.
-	"/props",
-	"/slots",
-	"/tokenize",
-	"/detokenize",
-	"/apply-template",
-}
-
 // NewHandler builds the HTTP mux for the router.
 func NewHandler(r *Router, logger *Logger) http.Handler {
 	mux := http.NewServeMux()
+	proxy := http.HandlerFunc(r.ServeHTTP)
 
-	// Control endpoints.
-	mux.HandleFunc("/_router/load", func(w http.ResponseWriter, req *http.Request) {
+	routes := []struct {
+		pattern string
+		h       http.HandlerFunc
+	}{
+		{"/_router/load", handleLoad(r)},
+		{"/_router/unload", handleUnload(r)},
+		{"/_router/status", func(w http.ResponseWriter, req *http.Request) {
+			writeJSON(w, map[string]any{
+				"node":      r.node,
+				"models":    r.AllModelStatuses(),
+				"telemetry": r.TelemetrySnapshot(),
+				"peers":     r.Peers().Snapshot(),
+			})
+		}},
+		{"/_router/logs", func(w http.ResponseWriter, req *http.Request) {
+			writeJSON(w, map[string]any{"entries": logger.RecentLogs(300)})
+		}},
+		{"/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
+			writeJSON(w, r.TelemetrySnapshot())
+		}},
+		{"/ui", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, "/ui/", http.StatusMovedPermanently)
+		}},
+		{"/ui/", func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprint(w, webUIHTML)
+		}},
+		{"/health", func(w http.ResponseWriter, req *http.Request) {
+			fmt.Fprintln(w, "OK")
+		}},
+		{"/metrics", handleMetrics(r)},
+		{"/v1/models", handleModels(r)},
+		// Prefixes cover OpenAI /v1, versionless /v, and sdapi. Exact natives
+		// still need their own entries because they are not under those trees.
+		{"/v1/{path...}", proxy},
+		{"/v/{path...}", proxy},
+		{"/sdapi/v1/", proxy},
+		{"/rerank", proxy},
+		{"/reranking", proxy},
+		{"/infill", proxy},
+		{"/completion", proxy},
+		{"/props", proxy},
+		{"/slots", proxy},
+		{"/tokenize", proxy},
+		{"/detokenize", proxy},
+		{"/apply-template", proxy},
+		{"/", handleRoot(r)},
+	}
+	for _, rt := range routes {
+		mux.HandleFunc(rt.pattern, rt.h)
+	}
+	return mux
+}
+
+func handleLoad(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var body struct {
-			ModelID string `json:"model_id"`
-		}
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.ModelID == "" {
-			http.Error(w, "model_id required", http.StatusBadRequest)
+		id, ok := decodeModelID(w, req)
+		if !ok {
 			return
 		}
-		if err := r.HandleLoad(body.ModelID); err != nil {
+		if err := r.HandleLoad(id); err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, `{"status":"loaded"}`)
-	})
+	}
+}
 
-	mux.HandleFunc("/_router/unload", func(w http.ResponseWriter, req *http.Request) {
+func handleUnload(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var body struct {
-			ModelID string `json:"model_id"`
-		}
-		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.ModelID == "" {
-			http.Error(w, "model_id required", http.StatusBadRequest)
+		id, ok := decodeModelID(w, req)
+		if !ok {
 			return
 		}
-		if err := r.HandleUnload(body.ModelID); err != nil {
+		if err := r.Unload(id); err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
 		fmt.Fprintln(w, `{"status":"unloaded"}`)
-	})
+	}
+}
 
-	mux.HandleFunc("/_router/status", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, map[string]any{
-			"node":      r.node,
-			"models":    r.AllModelStatuses(),
-			"telemetry": r.TelemetrySnapshot(),
-			"peers":     r.Peers().Snapshot(),
-		})
-	})
+func decodeModelID(w http.ResponseWriter, req *http.Request) (string, bool) {
+	var body struct {
+		ModelID string `json:"model_id"`
+	}
+	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.ModelID == "" {
+		http.Error(w, "model_id required", http.StatusBadRequest)
+		return "", false
+	}
+	return body.ModelID, true
+}
 
-	mux.HandleFunc("/_router/logs", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, map[string]any{"entries": logger.RecentLogs(300)})
-	})
-
-	mux.HandleFunc("/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
-		writeJSON(w, r.TelemetrySnapshot())
-	})
-
-	// Embedded operator WebUI. It shares the router listener and needs no
-	// separate runtime or static-file service.
-	mux.HandleFunc("/ui", func(w http.ResponseWriter, req *http.Request) {
-		http.Redirect(w, req, "/ui/", http.StatusMovedPermanently)
-	})
-	mux.HandleFunc("/ui/", func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, webUIHTML)
-	})
-
-	// Health + metrics.
-	mux.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
-		fmt.Fprintln(w, "OK")
-	})
-
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, req *http.Request) {
+func handleMetrics(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
 		var sb strings.Builder
-		now := time.Now().Unix()
 		for _, ms := range r.LocalModelStatuses() {
 			switch ms.Type {
 			case "model":
@@ -138,13 +130,13 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 			fmt.Fprintf(&sb, "model_router_gpu_total_mb{gpu=%d} %d\n", g.Index, g.TotalMB)
 		}
 		fmt.Fprintf(&sb, "model_router_up{node=%q} 1\n", r.node)
-		_ = now
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		fmt.Fprint(w, sb.String())
-	})
+	}
+}
 
-	// OpenAI /v1/models listing (llama-swap-compatible shape).
-	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, req *http.Request) {
+func handleModels(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
 		created := time.Now().Unix()
 		var data []map[string]any
 		for _, ms := range r.LocalModelStatuses() {
@@ -163,27 +155,11 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 			data = append(data, rec)
 		}
 		writeJSON(w, map[string]any{"object": "list", "data": data})
-	})
-
-	// Model-routed endpoints.
-	for _, p := range modelRoutedPaths {
-		pp := p
-		mux.HandleFunc(pp, func(w http.ResponseWriter, req *http.Request) {
-			// Versionless /v/... routes are forwarded as-is; the backend
-			// handles them (llama-server supports both).
-			r.ServeHTTP(w, req)
-		})
 	}
+}
 
-	// sdapi passthrough (any /sdapi/v1/* path the matcher can resolve).
-	mux.HandleFunc("/sdapi/v1/", func(w http.ResponseWriter, req *http.Request) {
-		r.ServeHTTP(w, req)
-	})
-
-	// The native llama.cpp WebUI may request root/static paths with a model
-	// query parameter. Route those through the same matcher. A browser visiting
-	// the bare listener root gets the operator UI instead.
-	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
+func handleRoot(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Query().Get("model") != "" {
 			r.ServeHTTP(w, req)
 			return
@@ -193,9 +169,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 			return
 		}
 		http.NotFound(w, req)
-	})
-
-	return mux
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
