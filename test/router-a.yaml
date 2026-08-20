@@ -9,7 +9,7 @@ telemetry:
 stanzas:
   - model_id: agents-a1
     name: "Fake Agents A1"
-    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model agents-a1"
+    command: "build/fake-model --port {port} --model agents-a1"
     vram_mb: 0
     device: CUDA0
     spin_up_seconds: 10
@@ -19,7 +19,7 @@ stanzas:
 
   - model_id: krea-2-turbo
     name: "Fake Krea 2 Turbo"
-    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model krea-2-turbo"
+    command: "build/fake-model --port {port} --model krea-2-turbo"
     vram_mb: 0
     spin_up_seconds: 10
     api_type: image
@@ -30,7 +30,7 @@ stanzas:
 
   - model_id: embed
     name: "Fake Embed"
-    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model embed"
+    command: "build/fake-model --port {port} --model embed"
     vram_mb: 0
     spin_up_seconds: 10
     api_type: embedding

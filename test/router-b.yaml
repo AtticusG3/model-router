@@ -9,7 +9,7 @@ telemetry:
 stanzas:
   - model_id: remote-model
     name: "Fake Remote Model"
-    command: "/home/kevyn/projects/model-router/build/fake-model --port {port} --model remote-model"
+    command: "build/fake-model --port {port} --model remote-model"
     vram_mb: 0
     spin_up_seconds: 10
     api_type: chat
