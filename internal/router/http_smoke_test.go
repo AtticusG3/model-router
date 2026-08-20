@@ -187,3 +187,70 @@ func TestHTTPServerBodyModel(t *testing.T) {
 	}
 	t.Logf("status=%d body=%s", rec.Code, rec.Body.String())
 }
+
+func TestHTTPPoolSpillsToPeerWhileLocalBusy(t *testing.T) {
+	var proxiedModel string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, _ := io.ReadAll(req.Body)
+		if req.URL.Path == "/_router/load" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"loaded"}`))
+			return
+		}
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		proxiedModel = payload.Model
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-spill"}`))
+	}))
+	defer peer.Close()
+
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "x --port {port}"
+    vram_mb: 22000
+    device: "1"
+    match: {body_field: model}
+  - model_id: krea2turbo
+    command: "x --port {port}"
+    vram_mb: 16000
+    device: "1"
+pools:
+  daily-driver:
+    targets: [agents-a1, digger/daily-model]
+    spillover: 2
+peers:
+  - name: digger
+    kind: router
+    base_url: http://127.0.0.1:9
+    models: [daily-model]
+`)
+	r.cfg.Peer("digger").BaseURL = peer.URL
+	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
+	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+		t.Fatal("krea should reserve")
+	}
+	r.holdOccupancy("krea2turbo")
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 20000}},
+	})
+
+	h := NewHandler(r, NewLogger(io.Discard, false))
+	body := `{"model":"daily-driver","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if proxiedModel != "daily-model" {
+		t.Fatalf("proxied model = %q, want daily-model", proxiedModel)
+	}
+}

@@ -11,11 +11,12 @@ import (
 
 // GPUState is the live view of one GPU, refreshed by the telemetry poller.
 type GPUState struct {
-	Index        int    `json:"index"`
-	Name         string `json:"name"`
-	TotalMB      int64  `json:"total_mb"`
-	FreeMB       int64  `json:"free_mb"`
-	LastSeenUnix int64  `json:"last_seen_unix"`
+	Index                int    `json:"index"`
+	Name                 string `json:"name"`
+	TotalMB              int64  `json:"total_mb"`
+	FreeMB               int64  `json:"free_mb"`
+	FreeIfStaleEvictedMB int64  `json:"free_if_stale_evicted_mb,omitempty"`
+	LastSeenUnix         int64  `json:"last_seen_unix"`
 }
 
 // Ledger is the sole authority over this node's GPU reservations. Peers only
@@ -58,8 +59,10 @@ func (l *Ledger) GPUs() []*GPUState {
 	return out
 }
 
-// available is TotalMB minus reservations on that GPU. Polled FreeMB is
-// telemetry, not a second source of truth for fit.
+// available is the VRAM that can still be admitted on g. Live nvidia-smi
+// FreeMB is the physical ceiling; the reservation ledger covers spin-up lag
+// so two concurrent loads cannot both see the same free bytes. Fit is the
+// tighter of the two.
 func (l *Ledger) available(g *GPUState) int64 {
 	used := int64(0)
 	for _, r := range l.reservations {
@@ -67,11 +70,18 @@ func (l *Ledger) available(g *GPUState) int64 {
 			used += r.vramMB
 		}
 	}
-	avail := g.TotalMB - used
-	if avail < 0 {
-		avail = 0
+	ledger := g.TotalMB - used
+	if ledger < 0 {
+		ledger = 0
 	}
-	return avail
+	live := g.FreeMB
+	if live < 0 {
+		live = 0
+	}
+	if live < ledger {
+		return live
+	}
+	return ledger
 }
 
 // deviceIndex resolves a stanza's device string ("CUDA0", "0", "gpu:0") to a
@@ -124,6 +134,19 @@ func (l *Ledger) Reserve(s *config.Stanza) (int, bool) {
 // concurrent Load may already hold. Reserve is idempotent for an already
 // reserved model, so a reserve-then-release probe would drop that reservation.
 func (l *Ledger) CanAdmit(s *config.Stanza) bool {
+	return l.CanAdmitEvicting(s, nil)
+}
+
+// CanAdmitEvicting is CanAdmit as if evict were already unloaded. Live FreeMB
+// is credited with those reservations so the probe is not stuck on a stale
+// nvidia-smi snapshot from before the unload.
+func (l *Ledger) CanAdmitEvicting(s *config.Stanza, evict []string) bool {
+	drop := map[string]bool{}
+	for _, id := range evict {
+		if id != "" {
+			drop[id] = true
+		}
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, exists := l.reservations[s.ModelID]; exists {
@@ -132,8 +155,43 @@ func (l *Ledger) CanAdmit(s *config.Stanza) bool {
 	if len(l.gpus) == 0 {
 		return s.VramMB <= 0
 	}
-	_, ok := l.fit(s)
-	return ok
+	want := deviceIndex(s.Device)
+	credit := map[int]int64{}
+	used := map[int]int64{}
+	for id, r := range l.reservations {
+		if drop[id] {
+			credit[r.gpuIndex] += r.vramMB
+			continue
+		}
+		used[r.gpuIndex] += r.vramMB
+	}
+	for _, g := range l.gpus {
+		if want >= 0 && g.Index != want {
+			continue
+		}
+		ledger := g.TotalMB - used[g.Index]
+		if ledger < 0 {
+			ledger = 0
+		}
+		live := g.FreeMB + credit[g.Index]
+		if live < 0 {
+			live = 0
+		}
+		if g.TotalMB > 0 && live > g.TotalMB {
+			live = g.TotalMB
+		}
+		avail := ledger
+		if live < avail {
+			avail = live
+		}
+		if avail >= s.VramMB {
+			return true
+		}
+		if want >= 0 {
+			return false
+		}
+	}
+	return false
 }
 
 // fit returns the GPU index a stanza would be admitted to, or false. The
@@ -172,6 +230,7 @@ func (l *Ledger) fit(s *config.Stanza) (int, bool) {
 }
 
 // occupantsOnGPU returns other reserved model ids on gpu, largest first.
+// gpu < 0 means every GPU.
 func (l *Ledger) occupantsOnGPU(gpu int, except string) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -181,7 +240,10 @@ func (l *Ledger) occupantsOnGPU(gpu int, except string) []string {
 	}
 	var list []occ
 	for id, r := range l.reservations {
-		if id == except || r.gpuIndex != gpu {
+		if id == except {
+			continue
+		}
+		if gpu >= 0 && r.gpuIndex != gpu {
 			continue
 		}
 		list = append(list, occ{id: id, mb: r.vramMB})

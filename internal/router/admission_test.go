@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"testing"
+	"time"
 
 	"model-router/internal/config"
 )
@@ -66,6 +67,25 @@ func TestNoDoubleBooking(t *testing.T) {
 	}
 }
 
+func TestCanAdmitEvictingCreditsIdleReservation(t *testing.T) {
+	l := NewLedger()
+	l.SetGPUs([]*GPUState{gpu(1, 32768)})
+	krea := &config.Stanza{ModelID: "krea2turbo", VramMB: 16000, Device: "1"}
+	agents := &config.Stanza{ModelID: "agents-a1", VramMB: 22000, Device: "1"}
+	if _, ok := l.Reserve(krea); !ok {
+		t.Fatal("krea should admit")
+	}
+	if l.CanAdmit(agents) {
+		t.Fatal("agents must not fit beside krea")
+	}
+	if !l.CanAdmitEvicting(agents, []string{"krea2turbo"}) {
+		t.Fatal("agents should fit after idle-evicting krea")
+	}
+	if l.CanAdmitEvicting(agents, nil) {
+		t.Fatal("agents must not fit while keeping krea")
+	}
+}
+
 func TestReserveSameModelIdempotent(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 10000)})
@@ -120,23 +140,27 @@ func TestCanAdmitInsufficient(t *testing.T) {
 	}
 }
 
-func TestAdmitFromTotalsNotPolledFree(t *testing.T) {
+func TestAdmitUsesLiveFreeAndLedger(t *testing.T) {
 	l := NewLedger()
-	// nvidia-smi shows almost no free VRAM; admission still uses TotalMB.
+	// Other process occupying the card: live probe must block admission.
 	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 500}})
 	a := &config.Stanza{ModelID: "a", VramMB: 6000, Device: "CUDA0"}
+	if _, ok := l.Reserve(a); ok {
+		t.Fatal("must not admit 6000 when nvidia-smi free is 500")
+	}
+
+	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 8000}})
 	if _, ok := l.Reserve(a); !ok {
-		t.Fatal("should admit from TotalMB even when polled FreeMB is 500")
+		t.Fatal("should admit when live free is 8000")
 	}
-	// Poll now reflects the running model; reservation must not double-count.
-	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 4000}})
-	b := &config.Stanza{ModelID: "b", VramMB: 3000, Device: "CUDA0"}
-	if _, ok := l.Reserve(b); !ok {
-		t.Fatal("3000 should fit in remaining 4000 (total minus reservations)")
+	// Spin-up lag: smi still shows 8000 free; ledger must stop a second 6000.
+	b := &config.Stanza{ModelID: "b", VramMB: 6000, Device: "CUDA0"}
+	if _, ok := l.Reserve(b); ok {
+		t.Fatal("ledger must block double-book while smi has not dropped yet")
 	}
-	c := &config.Stanza{ModelID: "c", VramMB: 2000, Device: "CUDA0"}
-	if _, ok := l.Reserve(c); ok {
-		t.Fatal("2000 should not fit in remaining 1000")
+	c := &config.Stanza{ModelID: "c", VramMB: 3000, Device: "CUDA0"}
+	if _, ok := l.Reserve(c); !ok {
+		t.Fatal("3000 should fit in remaining 4000 ledger / 8000 live")
 	}
 }
 
@@ -227,7 +251,7 @@ func TestFailedStartReleasesReservation(t *testing.T) {
 	}
 }
 
-func TestLoadEvictsSameGPUNeighbor(t *testing.T) {
+func TestLoadDoesNotEvictFreshNeighbor(t *testing.T) {
 	r := loadTestRouter(t)
 	r.cfg.Stanza("a").Device = "0"
 	r.cfg.Stanza("b").Device = "0"
@@ -237,11 +261,31 @@ func TestLoadEvictsSameGPUNeighbor(t *testing.T) {
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
+	if _, err := r.Load("b"); err == nil {
+		t.Fatal("Load b must not evict fresh a")
+	}
+	if r.managed["a"] == nil {
+		t.Fatal("a must still be loaded")
+	}
+}
+
+func TestLoadEvictsStaleNeighbor(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("a").IdleTTLSeconds = 1
+	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.managed["a"].setLastUsed(time.Now().Add(-2 * time.Second))
 	if _, err := r.Load("b"); err != nil {
-		t.Fatalf("Load b should evict a: %v", err)
+		t.Fatalf("Load b should evict stale a: %v", err)
 	}
 	if _, ok := r.managed["a"]; ok {
-		t.Fatal("a should have been evicted")
+		t.Fatal("stale a should have been evicted")
 	}
 	if r.managed["b"] == nil || r.managed["b"].State() != StateRunning {
 		t.Fatal("b should be running")
