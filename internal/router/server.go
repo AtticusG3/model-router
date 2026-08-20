@@ -181,11 +181,15 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 	})
 
 	// The native llama.cpp WebUI may request root/static paths with a model
-	// query parameter. Route those through the same matcher while keeping
-	// unqualified unknown paths fail-closed.
+	// query parameter. Route those through the same matcher. A browser visiting
+	// the bare listener root gets the operator UI instead.
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Query().Get("model") != "" {
 			r.ServeHTTP(w, req)
+			return
+		}
+		if req.Method == http.MethodGet || req.Method == http.MethodHead {
+			http.Redirect(w, req, "/ui/", http.StatusFound)
 			return
 		}
 		http.NotFound(w, req)
