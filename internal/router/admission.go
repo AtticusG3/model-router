@@ -171,6 +171,29 @@ func (l *Ledger) fit(s *config.Stanza) (int, bool) {
 	return cands[0].idx, true
 }
 
+// occupantsOnGPU returns other reserved model ids on gpu, largest first.
+func (l *Ledger) occupantsOnGPU(gpu int, except string) []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	type occ struct {
+		id string
+		mb int64
+	}
+	var list []occ
+	for id, r := range l.reservations {
+		if id == except || r.gpuIndex != gpu {
+			continue
+		}
+		list = append(list, occ{id: id, mb: r.vramMB})
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].mb > list[j].mb })
+	ids := make([]string, len(list))
+	for i, o := range list {
+		ids[i] = o.id
+	}
+	return ids
+}
+
 // Release frees a reservation (on unload or failed spin-up).
 func (l *Ledger) Release(modelID string) {
 	l.mu.Lock()

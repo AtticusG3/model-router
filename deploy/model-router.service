@@ -21,7 +21,8 @@ ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml
 Restart=always
 RestartSec=3
 TimeoutStopSec=30
-KillMode=mixed
+# control-group so leftover llama-server children die with the unit.
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target

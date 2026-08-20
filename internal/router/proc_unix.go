@@ -3,13 +3,20 @@
 package router
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
 )
 
 func spawnProc(command string, env []string) (Proc, error) {
-	cmd := exec.Command("/bin/sh", "-c", command)
+	argv := splitCommand(command)
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("empty command")
+	}
+	// Exec the binary directly. Wrapping /bin/sh -c made Wait() return when
+	// the shell died on SIGTERM while llama-server kept the GPU.
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	return startProc(cmd)
@@ -29,7 +36,7 @@ func (p *osProc) signalGroup(sig syscall.Signal) error {
 	}
 	pgid, err := syscall.Getpgid(p.cmd.Process.Pid)
 	if err == nil {
-		return syscall.Kill(-pgid, sig)
+		_ = syscall.Kill(-pgid, sig)
 	}
 	if sig == syscall.SIGKILL {
 		return p.cmd.Process.Kill()

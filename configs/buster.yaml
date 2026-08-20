@@ -237,7 +237,10 @@ stanzas:
       --steps 8
       --cfg-scale 2.0
     env: ["CUDA_VISIBLE_DEVICES=1", "GGML_CUDA_PDL=0"]
-    vram_mb: 10000
+    # Peak generate VRAM, not weights-only. 10000 fit beside agents-a1 (22000)
+    # on a 32 GB card in the ledger, then generate_image returned no results.
+    # llama-swap matrix set `tasks` XOR `daily` so krea never co-resides.
+    vram_mb: 16000
     device: 1
     spin_up_seconds: 60
     api_type: image
