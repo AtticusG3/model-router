@@ -143,7 +143,7 @@ peers:
 	}
 }
 
-func TestResolvePoolPeerOnlyCatalogRejectsUnknownVram(t *testing.T) {
+func TestResolvePoolUnknownVramTriesFreshPeer(t *testing.T) {
 	r := spilloverRouter(t, `
 start_port: 5900
 pools:
@@ -160,16 +160,91 @@ peers:
 		Node: "digger",
 		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 2000}},
 	})
-	if _, err := r.resolvePool("p"); err == nil {
-		t.Fatal("peer-only 8000 MB model must not fit a 2000 MB GPU via FreeMB >= 0")
+	tgt, err := r.resolvePool("p")
+	if err != nil {
+		t.Fatalf("fresh peer with unknown model VRAM should be tried: %v", err)
 	}
+	if tgt.Peer != "digger" || tgt.PeerID != "coding-model" {
+		t.Fatalf("target = %+v, want digger/coding-model", tgt)
+	}
+}
 
+func TestResolvePoolSpillsWhenBusyNeighborBlocksLocal(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "x --port {port}"
+    vram_mb: 22000
+    device: "1"
+  - model_id: krea2turbo
+    command: "x --port {port}"
+    vram_mb: 16000
+    device: "1"
+pools:
+  daily-driver:
+    targets: [agents-a1, digger/daily-model]
+    spillover: 2
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [daily-model]
+`)
+	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
+	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+		t.Fatal("krea should reserve")
+	}
+	r.holdOccupancy("krea2turbo")
 	r.peers.Set("digger", &Telemetry{
 		Node: "digger",
-		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 9000}},
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 20000}},
 	})
-	if _, err := r.resolvePool("p"); err == nil {
-		t.Fatal("unknown peer VRAM must fail closed even when the GPU has 9000 MB free")
+	tgt, err := r.resolvePool("daily-driver")
+	if err != nil {
+		t.Fatalf("chat should spill to digger while krea is in-flight: %v", err)
+	}
+	if tgt.Peer != "digger" || tgt.PeerID != "daily-model" {
+		t.Fatalf("target = %+v, want digger/daily-model", tgt)
+	}
+}
+
+func TestResolvePoolPrefersLocalWhenNeighborIdle(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "x --port {port}"
+    vram_mb: 22000
+    device: "1"
+  - model_id: krea2turbo
+    command: "x --port {port}"
+    vram_mb: 16000
+    device: "1"
+pools:
+  daily-driver:
+    targets: [agents-a1, digger/daily-model]
+    spillover: 2
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [daily-model]
+`)
+	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
+	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+		t.Fatal("krea should reserve")
+	}
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 20000}},
+	})
+	tgt, err := r.resolvePool("daily-driver")
+	if err != nil {
+		t.Fatalf("idle krea should be evictable for local chat: %v", err)
+	}
+	if tgt.Local != "agents-a1" {
+		t.Fatalf("target = %+v, want local agents-a1", tgt)
 	}
 }
 
@@ -312,5 +387,35 @@ peers:
 	}
 	if tgt.Local != "qwen38-27b" || tgt.Peer != "" {
 		t.Fatalf("target = %+v, want local qwen38-27b", tgt)
+	}
+}
+
+func TestPeerFitsUsesStaleReclaim(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwopus-27b-coder
+    command: "x --port {port}"
+    vram_mb: 8000
+    aliases: [coding-model]
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [coding-model]
+`)
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 2000, FreeIfStaleEvictedMB: 9000}},
+	})
+	if !r.peerFits("digger", 8000) {
+		t.Fatal("peer with 9000 MB after stale eviction should fit an 8000 MB model")
+	}
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 2000, FreeIfStaleEvictedMB: 3000}},
+	})
+	if r.peerFits("digger", 8000) {
+		t.Fatal("peer with only 3000 MB even after stale eviction must not fit 8000")
 	}
 }

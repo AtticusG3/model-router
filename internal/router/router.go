@@ -110,20 +110,17 @@ func (r *Router) Unload(modelID string) error {
 	return nil
 }
 
-// evictToFit unloads other models on the stanza's pinned GPU until the ledger
-// can admit it. Matches llama-swap matrix exclusivity (krea vs agents-a1 on
-// the V100) without a full eviction-cost policy.
+// evictToFit unloads stale models until the ledger can admit s. Fresh and
+// in-flight models are held: reload is expensive, unload is cheap, so idle
+// backends stay until their VRAM is needed. gpu < 0 (auto device) considers
+// every GPU's stale occupants.
 func (r *Router) evictToFit(s *config.Stanza) {
 	want := deviceIndex(s.Device)
-	if want < 0 {
-		return
-	}
 	for _, id := range r.ledger.occupantsOnGPU(want, s.ModelID) {
-		if r.busy(id) {
-			r.logger.Infof("skip evict %s (in-flight) while admitting %s", id, s.ModelID)
+		if r.busy(id) || !r.modelStale(id) {
 			continue
 		}
-		r.logger.Infof("evicting %s to admit %s on gpu %d", id, s.ModelID, want)
+		r.logger.Infof("evicting stale %s to admit %s", id, s.ModelID)
 		if err := r.Unload(id); err != nil {
 			r.logger.Errorf("evict %s: %v", id, err)
 		}
@@ -131,6 +128,16 @@ func (r *Router) evictToFit(s *config.Stanza) {
 			return
 		}
 	}
+}
+
+func (r *Router) modelStale(id string) bool {
+	r.mu.Lock()
+	m := r.managed[id]
+	r.mu.Unlock()
+	if m == nil {
+		return false
+	}
+	return m.IsStale(time.Now())
 }
 
 // Target is a concrete serving destination after pool/spillover resolution.
@@ -179,11 +186,7 @@ func (r *Router) resolveMesh(modelID string) (Target, error) {
 		if p.Kind == "openai" {
 			return Target{Peer: p.Name, PeerID: modelID}, nil
 		}
-		if !r.peers.Fresh(p.Name) {
-			continue
-		}
-		vram := r.modelVram(modelID)
-		if vram > 0 && !r.peerFits(p.Name, vram) {
+		if !r.peerEligible(p.Name, modelID) {
 			continue
 		}
 		return Target{Peer: p.Name, PeerID: modelID}, nil
@@ -234,6 +237,39 @@ func (r *Router) holdOccupancy(id string) {
 	r.mu.Unlock()
 }
 
+func (r *Router) localCanServe(s *config.Stanza) bool {
+	if s == nil {
+		return false
+	}
+	var evict []string
+	for _, id := range r.ledger.occupantsOnGPU(deviceIndex(s.Device), s.ModelID) {
+		if !r.busy(id) {
+			evict = append(evict, id)
+		}
+	}
+	return r.ledger.CanAdmitEvicting(s, evict)
+}
+
+// peerEligible reports whether a peer is a spillover candidate. Known VRAM is
+// a hint; unknown VRAM still tries a fresh peer and lets that node admit.
+func (r *Router) peerEligible(name, modelID string) bool {
+	p := r.cfg.Peer(name)
+	if p == nil {
+		return false
+	}
+	if p.Kind == "openai" {
+		return true
+	}
+	if !r.peers.Fresh(name) {
+		return false
+	}
+	vram := r.modelVram(modelID)
+	if vram > 0 && !r.peerFits(name, vram) {
+		return false
+	}
+	return true
+}
+
 func (r *Router) modelVram(modelID string) int64 {
 	if s := r.cfg.Stanza(modelID); s != nil {
 		return s.VramMB
@@ -244,10 +280,10 @@ func (r *Router) modelVram(modelID string) int64 {
 	return 0
 }
 
-// peerFits reports whether cached peer telemetry shows a GPU with at least
-// vramMB free. Used only to pick a candidate; the peer admits for real.
-// Unknown or zero vram (no local stanza/alias) fails closed: FreeMB >= 0
-// must not count as a fit.
+// peerFits reports whether cached peer telemetry shows a GPU that can take
+// vramMB now, or after that peer evicts its own stale models. Used only to
+// pick a candidate; the peer admits for real. Unknown or zero vram (no local
+// stanza/alias) fails closed.
 func (r *Router) peerFits(name string, vramMB int64) bool {
 	if vramMB <= 0 {
 		return false
@@ -260,7 +296,7 @@ func (r *Router) peerFits(name string, vramMB int64) bool {
 		return false
 	}
 	for _, g := range t.GPUs {
-		if g.FreeMB >= vramMB {
+		if g.FreeMB >= vramMB || g.FreeIfStaleEvictedMB >= vramMB {
 			return true
 		}
 	}
@@ -268,24 +304,48 @@ func (r *Router) peerFits(name string, vramMB int64) bool {
 }
 
 // resolvePool implements spillover selection. Targets are tried in order; a
-// target is used when occupancy is below the spillover cap and it is loaded
-// or can be admitted locally / reached on a peer. Occupancy increments when
-// a target is chosen.
+// local target is used when occupancy is below the spillover cap and it is
+// running or can start (including by evicting idle neighbors). A peer is used
+// when occupancy is below the cap and the peer is eligible. Occupancy
+// increments when a target is chosen.
 func (r *Router) resolvePool(poolName string) (Target, error) {
 	pool := r.cfg.Pool(poolName)
 	if pool == nil {
 		return Target{}, fmt.Errorf("unknown pool %q", poolName)
 	}
+	t, err := r.pickPoolTarget(pool, nil)
+	if err != nil {
+		return Target{}, err
+	}
+	return t, nil
+}
+
+func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target, error) {
 	limit := pool.Spillover
 	if limit <= 0 {
 		limit = 1
 	}
 
 	for _, target := range pool.Targets {
+		if skip[target] {
+			continue
+		}
 		ref := resolveRef(target, r.cfg)
+		var cand Target
 		switch {
 		case ref.Local != "":
-			t := Target{Local: ref.Local}
+			cand = Target{Local: ref.Local}
+		case ref.Peer != "":
+			cand = Target{Peer: ref.Peer, PeerID: ref.PeerID}
+		default:
+			continue
+		}
+		if skip[occupancyKey(cand)] {
+			continue
+		}
+		switch {
+		case ref.Local != "":
+			t := cand
 			key := occupancyKey(t)
 			r.mu.Lock()
 			busy := r.occupancy[key]
@@ -301,7 +361,7 @@ func (r *Router) resolvePool(poolName string) (Target, error) {
 				return t, nil
 			}
 			r.mu.Unlock()
-			if s := r.cfg.Stanza(ref.Local); s != nil && r.ledger.CanAdmit(s) {
+			if r.localCanServe(r.cfg.Stanza(ref.Local)) {
 				r.mu.Lock()
 				if r.occupancy[key] >= limit {
 					r.mu.Unlock()
@@ -321,7 +381,7 @@ func (r *Router) resolvePool(poolName string) (Target, error) {
 				continue
 			}
 			r.mu.Unlock()
-			if r.peerFits(ref.Peer, r.modelVram(ref.PeerID)) {
+			if r.peerEligible(ref.Peer, ref.PeerID) {
 				r.mu.Lock()
 				if r.occupancy[key] >= limit {
 					r.mu.Unlock()
@@ -333,7 +393,7 @@ func (r *Router) resolvePool(poolName string) (Target, error) {
 			}
 		}
 	}
-	return Target{}, fmt.Errorf("no capacity for pool %q (all targets busy/unreachable)", poolName)
+	return Target{}, fmt.Errorf("no capacity for pool %q (all targets busy/unreachable)", pool.Name)
 }
 
 // ServeHTTP is the entry for model-routed endpoints.
@@ -343,59 +403,159 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if ref.Pool != "" {
+		r.servePool(w, req, ref.Pool)
+		return
+	}
 	tgt, err := r.resolveTarget(ref)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	if ref.Pool != "" {
-		defer r.releaseOccupancy(tgt)
-	}
-
 	switch {
 	case tgt.Local != "":
-		r.serveLocal(w, req, tgt.Local)
+		if err := r.proxyLocal(w, req, tgt.Local); err != nil {
+			if r.serveSpill(w, req, tgt.Local) {
+				return
+			}
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		}
 	case tgt.Peer != "":
-		r.servePeer(w, req, tgt.Peer, tgt.PeerID)
+		if err := r.proxyPeer(w, req, tgt.Peer, tgt.PeerID); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		}
 	default:
 		http.Error(w, "no router for requested model", http.StatusNotFound)
 	}
 }
 
+func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName string) {
+	pool := r.cfg.Pool(poolName)
+	if pool == nil {
+		http.Error(w, fmt.Sprintf("unknown pool %q", poolName), http.StatusServiceUnavailable)
+		return
+	}
+	skip := map[string]bool{}
+	var last error
+	for {
+		tgt, err := r.pickPoolTarget(pool, skip)
+		if err != nil {
+			if last != nil {
+				http.Error(w, last.Error(), http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		skip[occupancyKey(tgt)] = true
+		var serveErr error
+		switch {
+		case tgt.Local != "":
+			serveErr = r.proxyLocal(w, req, tgt.Local)
+		case tgt.Peer != "":
+			serveErr = r.proxyPeer(w, req, tgt.Peer, tgt.PeerID)
+		default:
+			serveErr = fmt.Errorf("no router for requested model")
+		}
+		r.releaseOccupancy(tgt)
+		if serveErr == nil {
+			return
+		}
+		last = serveErr
+	}
+}
+
+// serveSpill tries later pool targets after a direct local id could not start
+// (krea holding the V100, chat named agents-a1 instead of daily-driver).
+func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLocal string) bool {
+	for _, raw := range r.spillTargets(failedLocal) {
+		ref := resolveRef(raw, r.cfg)
+		switch {
+		case ref.Local != "" && ref.Local != failedLocal:
+			if !r.localCanServe(r.cfg.Stanza(ref.Local)) {
+				continue
+			}
+			if err := r.proxyLocal(w, req, ref.Local); err == nil {
+				return true
+			}
+		case ref.Peer != "":
+			if !r.peerEligible(ref.Peer, ref.PeerID) {
+				continue
+			}
+			if err := r.proxyPeer(w, req, ref.Peer, ref.PeerID); err == nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *Router) spillTargets(failedLocal string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range r.cfg.Pools {
+		found := false
+		for _, t := range p.Targets {
+			ref := resolveRef(t, r.cfg)
+			if !found {
+				if ref.Local == failedLocal {
+					found = true
+				}
+				continue
+			}
+			if seen[t] {
+				continue
+			}
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 // serveLocal proxies to a local backend, spawning it if needed.
 func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID string) {
+	if err := r.proxyLocal(w, req, modelID); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	}
+}
+
+func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID string) error {
 	r.holdOccupancy(modelID)
 	defer r.releaseOccupancy(Target{Local: modelID})
 	if _, err := r.Load(modelID); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
+		return err
 	}
 	r.mu.Lock()
 	m := r.managed[modelID]
 	r.mu.Unlock()
 	if m == nil || m.State() != StateRunning {
-		http.Error(w, "model failed to start", http.StatusServiceUnavailable)
-		return
+		return fmt.Errorf("model failed to start")
 	}
 	m.markUsed()
 	defer m.markUsed()
 	r.proxyTo(w, req, m.stanza.Proxy)
+	return nil
 }
 
 // servePeer proxies to a peer, first asking it to load the model (the peer runs
 // its own admission control — no split-brain).
 func (r *Router) servePeer(w http.ResponseWriter, req *http.Request, peerName, peerModel string) {
+	if err := r.proxyPeer(w, req, peerName, peerModel); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	}
+}
+
+func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, peerModel string) error {
 	p := r.cfg.Peer(peerName)
 	if p == nil {
-		http.Error(w, fmt.Sprintf("unknown peer %q", peerName), http.StatusServiceUnavailable)
-		return
+		return fmt.Errorf("unknown peer %q", peerName)
 	}
 	// OpenAI-kind peers (openrouter etc.) have no /_router control API and no
 	// load step — the upstream serves the model id directly.
 	if p.Kind != "openai" {
 		if err := r.peerLoad(p, peerModel); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-			return
+			return err
 		}
 	}
 	// The request may still name the model as "peerName/peerModel"; the peer
@@ -403,10 +563,10 @@ func (r *Router) servePeer(w http.ResponseWriter, req *http.Request, peerName, p
 	// (llama-swap's ReplaceRequestModel does the same). The field rewritten is
 	// the peer's configured body_field, not a hardcoded "model".
 	if err := rewriteBodyModel(req, peerModel, p.BodyField); err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+		return err
 	}
 	r.proxyTo(w, req, p.BaseURL)
+	return nil
 }
 
 // rewriteBodyModel replaces the model field in a request body (or query) with
@@ -513,23 +673,6 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL strin
 	proxy.ServeHTTP(w, req)
 }
 
-// ReapIdle unloads local backends idle past their TTL. Called on an interval.
-func (r *Router) ReapIdle() {
-	now := time.Now()
-	r.mu.Lock()
-	ids := make([]string, 0, len(r.managed))
-	for id, m := range r.managed {
-		if m.IsIdle(now) {
-			ids = append(ids, id)
-		}
-	}
-	r.mu.Unlock()
-	for _, id := range ids {
-		r.logger.Infof("unloading idle model %s", id)
-		r.Unload(id)
-	}
-}
-
 // Preload loads the configured startup models in order.
 func (r *Router) Preload() {
 	for _, id := range r.cfg.Preload {
@@ -546,13 +689,14 @@ func (r *Router) Preload() {
 
 // ModelStatus is one unique model id for /v1/models and /_router/status.
 type ModelStatus struct {
-	ID      string `json:"id"`
-	Name    string `json:"name,omitempty"`
-	Type    string `json:"type,omitempty"`   // always "model"
-	Origin  string `json:"origin,omitempty"` // local | remote
-	State   string `json:"state,omitempty"`
-	VramMB  int64  `json:"vram_mb,omitempty"`
-	APIType string `json:"api_type,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	Type      string `json:"type,omitempty"`   // always "model"
+	Origin    string `json:"origin,omitempty"` // local | remote
+	State     string `json:"state,omitempty"`
+	Freshness string `json:"freshness,omitempty"` // fresh | stale when running locally
+	VramMB    int64  `json:"vram_mb,omitempty"`
+	APIType   string `json:"api_type,omitempty"`
 }
 
 // LocalModelStatuses lists unique mesh models (local + reachable remotes).
@@ -577,9 +721,17 @@ func (r *Router) catalogStatuses() []ModelStatus {
 			st = m.State()
 		}
 		r.mu.Unlock()
+		freshness := ""
+		if ok && st == StateRunning {
+			if m.IsStale(time.Now()) {
+				freshness = "stale"
+			} else {
+				freshness = "fresh"
+			}
+		}
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
-			State: string(st), VramMB: s.VramMB, APIType: s.APIType,
+			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
 		})
 		seen[id] = true
 		for _, a := range s.Aliases {
@@ -602,22 +754,51 @@ func (r *Router) catalogStatuses() []ModelStatus {
 	return out
 }
 
-// TelemetrySnapshot assembles this node's telemetry for peers.
+// TelemetrySnapshot assembles this node's telemetry for peers: live nvidia-smi
+// free VRAM, projected free if stale models were evicted, and each loaded
+// model marked fresh or stale.
 func (r *Router) TelemetrySnapshot() *Telemetry {
 	gpus := r.ledger.GPUs()
-	var loaded []string
+	now := time.Now()
+	staleByGPU := map[int]int64{}
 	r.mu.Lock()
+	type running struct {
+		id string
+		m  *Managed
+	}
+	var live []running
 	for id, m := range r.managed {
-		if m.State() == StateRunning {
-			loaded = append(loaded, id)
-		}
+		live = append(live, running{id: id, m: m})
 	}
 	r.mu.Unlock()
+	var loaded []LoadedModel
+	for _, item := range live {
+		if item.m.State() != StateRunning {
+			continue
+		}
+		gpu := item.m.gpuIndex()
+		vram := r.modelVram(item.id)
+		freshness := "fresh"
+		if item.m.IsStale(now) {
+			freshness = "stale"
+			if gpu >= 0 {
+				staleByGPU[gpu] += vram
+			}
+		}
+		loaded = append(loaded, LoadedModel{ID: item.id, Freshness: freshness, VramMB: vram, GPU: gpu})
+	}
+	for _, g := range gpus {
+		reclaim := staleByGPU[g.Index]
+		g.FreeIfStaleEvictedMB = g.FreeMB + reclaim
+		if g.TotalMB > 0 && g.FreeIfStaleEvictedMB > g.TotalMB {
+			g.FreeIfStaleEvictedMB = g.TotalMB
+		}
+	}
 	return &Telemetry{
 		Node:         r.node,
 		GPUs:         gpus,
 		LoadedModels: loaded,
-		Timestamp:    time.Now().Unix(),
+		Timestamp:    now.Unix(),
 	}
 }
 
