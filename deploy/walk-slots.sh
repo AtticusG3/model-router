@@ -226,8 +226,8 @@ case "$NODE" in
       || true
     fi
 
-    OR=( "$BIN" --model "$BASE/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf"
-      --mmproj "$BASE/models/ornith-model/mmproj-F16.gguf"
+    OR=( "$BIN" --model "$BASE/models/ornith-model/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf"
+      --mmproj "$BASE/models/ornith-model/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf"
       --cont-batching --flash-attn on --mlock --no-mmap --metrics
       --spec-type draft-mtp --split-mode none --device CUDA0 )
     if try "ornith-1x256k-turbo4-extras" "$SMI" 120 "${OR[@]}" \

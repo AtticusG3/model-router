@@ -49,7 +49,7 @@ case "$NODE" in
     TPL=/opt/ai/config/qwen-fixed-chat-template.jinja
     SMI=0
     try "qwen36-256k-turbo4-p4" "$SMI" 120 "$BIN" --model "$BASE/models/qwen36/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Compact.gguf" --cont-batching --flash-attn on --mlock --no-mmap --jinja --chat-template-file "$TPL" --reasoning-format deepseek --metrics --split-mode none --device CUDA0 --ctx-size 262144 --threads 8 --parallel 4 --cache-type-k turbo4 --cache-type-v turbo4 || true
-    try "ornith-256k-turbo4-extras-p4" "$SMI" 120 "$BIN" --model "$BASE/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf" --mmproj "$BASE/models/ornith-model/mmproj-F16.gguf" --cont-batching --flash-attn on --mlock --no-mmap --metrics --spec-type draft-mtp --split-mode none --device CUDA0 --ctx-size 262144 --threads 8 --parallel 4 --cache-type-k turbo4 --cache-type-v turbo4 || true
+    try "ornith-256k-turbo4-extras-p4" "$SMI" 120 "$BIN" --model "$BASE/models/ornith-model/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf" --mmproj "$BASE/models/ornith-model/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf" --cont-batching --flash-attn on --mlock --no-mmap --metrics --spec-type draft-mtp --split-mode none --device CUDA0 --ctx-size 262144 --threads 8 --parallel 4 --cache-type-k turbo4 --cache-type-v turbo4 || true
     ;;
   nomad)
     A=/opt/ai/models/llm/qwen35-9b-vision

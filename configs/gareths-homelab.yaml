@@ -75,13 +75,13 @@ stanzas:
     unlisted: false
     port: 5803
 
-  - model_id: ornith-1.0-35b
-    name: "Ornith-1.0-35B Compact"
-    aliases: [llm-ornith-waldron, ornith-1.0-35b-compact]
+  - model_id: ornith-1.0-35b-heretic
+    name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact"
+    aliases: [llm-ornith-waldron, ornith-1.0-35b, ornith-1.0-35b-compact, ornith-1.0-35b-heretic-compact, ornith-1.0-35b-heretic-quality]
     command: >
       /opt/ai/bin/llama-server
-      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/Ornith-1.0-35B-MTP-APEX-I-Compact.gguf
-      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/mmproj-F16.gguf
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf
       --port {port}
       --host 127.0.0.1
       --ctx-size 262144
