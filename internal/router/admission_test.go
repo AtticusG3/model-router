@@ -226,3 +226,24 @@ func TestFailedStartReleasesReservation(t *testing.T) {
 		t.Fatal("failed Start must release so the model can be reserved again")
 	}
 }
+
+func TestLoadEvictsSameGPUNeighbor(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	if _, err := r.Load("b"); err != nil {
+		t.Fatalf("Load b should evict a: %v", err)
+	}
+	if _, ok := r.managed["a"]; ok {
+		t.Fatal("a should have been evicted")
+	}
+	if r.managed["b"] == nil || r.managed["b"].State() != StateRunning {
+		t.Fatal("b should be running")
+	}
+}

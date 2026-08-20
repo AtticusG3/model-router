@@ -80,6 +80,10 @@ func (r *Router) Load(modelID string) (int, error) {
 	// or failed Start so crash-restart does not need to re-reserve.
 	gpu, ok := r.ledger.Reserve(s)
 	if !ok {
+		r.evictToFit(s)
+		gpu, ok = r.ledger.Reserve(s)
+	}
+	if !ok {
 		return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, modelID)
 	}
 
@@ -104,6 +108,25 @@ func (r *Router) Unload(modelID string) error {
 	m.Stop()
 	r.ledger.Release(modelID)
 	return nil
+}
+
+// evictToFit unloads other models on the stanza's pinned GPU until the ledger
+// can admit it. Matches llama-swap matrix exclusivity (krea vs agents-a1 on
+// the V100) without a full eviction-cost policy.
+func (r *Router) evictToFit(s *config.Stanza) {
+	want := deviceIndex(s.Device)
+	if want < 0 {
+		return
+	}
+	for _, id := range r.ledger.occupantsOnGPU(want, s.ModelID) {
+		r.logger.Infof("evicting %s to admit %s on gpu %d", id, s.ModelID, want)
+		if err := r.Unload(id); err != nil {
+			r.logger.Errorf("evict %s: %v", id, err)
+		}
+		if r.ledger.CanAdmit(s) {
+			return
+		}
+	}
 }
 
 // Target is a concrete serving destination after pool/spillover resolution.

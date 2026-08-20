@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
+	"unicode"
 )
 
 // Proc is an OS-agnostic handle for a spawned backend process.
@@ -39,6 +41,33 @@ func (p *osProc) Wait() error {
 
 func (p *osProc) Stdout() io.Reader { return p.stdout }
 func (p *osProc) Stderr() io.Reader { return p.stderr }
+
+// splitCommand tokenizes a backend command without a shell. Double-quoted
+// segments stay one argument (fleet cmds use quotes only around messages).
+func splitCommand(command string) []string {
+	var args []string
+	var cur strings.Builder
+	inQuote := false
+	flush := func() {
+		if cur.Len() == 0 {
+			return
+		}
+		args = append(args, cur.String())
+		cur.Reset()
+	}
+	for _, r := range strings.TrimSpace(command) {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case unicode.IsSpace(r) && !inQuote:
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
+	return args
+}
 
 func startProc(cmd *exec.Cmd) (Proc, error) {
 	stdout, err := cmd.StdoutPipe()
