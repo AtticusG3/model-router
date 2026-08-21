@@ -21,6 +21,9 @@ kill_probe() {
 
 run_n() {
   local name="$1" nmax="$2"
+  if [ -n "${ONLY:-}" ] && [ "$ONLY" != "$name" ]; then
+    return 0
+  fi
   shift 2
   kill_probe
   export CUDA_VISIBLE_DEVICES="$SMI"
@@ -107,6 +110,12 @@ case "$NODE" in
         --n-gpu-layers 99 --ctx-size 524288 --threads 4 --parallel 2 \
         --jinja --chat-template-file "$TPL" --reasoning-format deepseek "${COMMON[@]}" || true
     done
+    for n in 1 2 3 4; do
+      run_n qwen3.8-27b "$n" "$BIN" --model "$A/Qwen3.8-27B-UD-Q5_K_XL.gguf" \
+        --n-gpu-layers 99 --ctx-size 262144 --threads 3 --parallel 1 \
+        --batch-size 512 --ubatch-size 512 --jinja --chat-template-file "$TPL" \
+        --reasoning-format deepseek "${COMMON[@]}" || true
+    done
     ;;
   nugget)
     SMI=0
@@ -130,6 +139,12 @@ case "$NODE" in
         --n-gpu-layers 99 --ctx-size 524288 --threads 3 --parallel 2 \
         --jinja --chat-template-file "$TPL" --reasoning-format deepseek "${COMMON[@]}" || true
     done
+    for n in 1 2 3 4; do
+      run_n qwen3.8-27b "$n" "$BIN" --model "$A/Qwen3.8-27B-UD-Q5_K_XL.gguf" \
+        --n-gpu-layers 99 --ctx-size 262144 --threads 2 --parallel 1 \
+        --batch-size 512 --ubatch-size 256 --jinja --chat-template-file "$TPL" \
+        --reasoning-format deepseek "${COMMON[@]}" || true
+    done
     ;;
   digger)
     SMI=0
@@ -140,6 +155,13 @@ case "$NODE" in
     for n in 1 2 3 4; do
       run_n ornith-1.0-35b-heretic "$n" "$BIN" --model "$A/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf" \
         --n-gpu-layers 99 --ctx-size 262144 --threads 3 --parallel 1 "${COMMON[@]}" || true
+    done
+    TPL=/opt/ai/config/qwen-fixed-chat-template.jinja
+    for n in 1 2 3 4; do
+      run_n qwen3.8-27b "$n" "$BIN" --model "$A/Qwen3.8-27B-UD-Q5_K_XL.gguf" \
+        --n-gpu-layers 99 --ctx-size 131072 --threads 2 --parallel 1 \
+        --batch-size 512 --ubatch-size 128 --jinja --chat-template-file "$TPL" \
+        --reasoning-format deepseek "${COMMON[@]}" || true
     done
     ;;
   gareths-homelab)

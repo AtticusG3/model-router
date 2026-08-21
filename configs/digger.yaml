@@ -66,6 +66,7 @@ stanzas:
       --batch-size 512 --ubatch-size 128
       --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
       --reasoning-format deepseek --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 3
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
     vram_mb: 23300
