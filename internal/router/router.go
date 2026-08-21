@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,7 @@ type Router struct {
 	managed   map[string]*Managed // local stanza id -> supervisor
 	occupancy map[string]int      // target key -> in-flight selected requests
 	spawn     spawner             // tests inject a fake; nil uses the GOOS default
+	admitWait chan struct{}       // 1-buffer poke when occupancy/unload may free VRAM
 
 	httpc *http.Client
 }
@@ -43,6 +45,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		node:      node,
 		managed:   map[string]*Managed{},
 		occupancy: map[string]int{},
+		admitWait: make(chan struct{}, 1),
 		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
 	}
 }
@@ -53,46 +56,101 @@ func (r *Router) Ledger() *Ledger { return r.ledger }
 // Peers returns the peer cache (used by the peer syncer and status).
 func (r *Router) Peers() *PeerCache { return r.peers }
 
-// Load ensures the given local stanza is running. It runs the node's own
-// admission control and returns the GPU index used.
+// Load ensures the given local stanza is running. Fail-fast: preload and
+// tests use this. Request paths use load(..., true) so a busy GPU queues
+// instead of 503.
 func (r *Router) Load(modelID string) (int, error) {
+	return r.load(context.Background(), modelID, false)
+}
+
+func (r *Router) load(ctx context.Context, modelID string, wait bool) (int, error) {
 	s := r.cfg.Stanza(modelID)
 	if s == nil {
 		return -1, fmt.Errorf("unknown local model %q", modelID)
 	}
 
-	r.mu.Lock()
-	m, ok := r.managed[modelID]
-	if !ok {
-		m = newManaged(s, s.Port, r.logger)
-		if r.spawn != nil {
-			m.spawn = r.spawn
+	loggedWait := false
+	for {
+		r.mu.Lock()
+		m, ok := r.managed[modelID]
+		if !ok {
+			m = newManaged(s, s.Port, r.logger)
+			if r.spawn != nil {
+				m.spawn = r.spawn
+			}
+			r.managed[modelID] = m
 		}
-		r.managed[modelID] = m
-	}
-	r.mu.Unlock()
+		r.mu.Unlock()
 
-	if m.State() == StateRunning {
-		return m.gpuIndex(), nil
-	}
+		if m.State() == StateRunning {
+			return m.gpuIndex(), nil
+		}
 
-	// Admission control: reserve VRAM before spawning. Keep it until Unload
-	// or failed Start so crash-restart does not need to re-reserve.
-	gpu, ok := r.ledger.Reserve(s)
-	if !ok {
-		r.evictToFit(s)
-		gpu, ok = r.ledger.Reserve(s)
+		// Admission control: reserve VRAM before spawning. Keep it until Unload
+		// or failed Start so crash-restart does not need to re-reserve.
+		gpu, ok := r.ledger.Reserve(s)
+		if !ok {
+			r.evictToFit(s)
+			gpu, ok = r.ledger.Reserve(s)
+		}
+		if ok {
+			if _, err := m.Start(); err != nil {
+				r.ledger.Release(modelID)
+				return -1, err
+			}
+			m.SetGPU(gpu)
+			return gpu, nil
+		}
+		if !wait || !r.canEventuallyAdmit(s) {
+			return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, modelID)
+		}
+		if !loggedWait {
+			r.logger.Infof("waiting for %d MB for %s (GPU busy)", s.VramMB, modelID)
+			loggedWait = true
+		}
+		if err := r.waitAdmit(ctx); err != nil {
+			return -1, err
+		}
 	}
-	if !ok {
-		return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, modelID)
-	}
+}
 
-	if _, err := m.Start(); err != nil {
-		r.ledger.Release(modelID)
-		return -1, err
+// canEventuallyAdmit is true when some GPU is large enough for s. Occupied
+// VRAM can free (idle eviction or in-flight finish); a too-small card cannot.
+func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
+	want := deviceIndex(s.Device)
+	gpus := r.ledger.GPUs()
+	if len(gpus) == 0 {
+		return s.VramMB <= 0
 	}
-	m.SetGPU(gpu)
-	return gpu, nil
+	for _, g := range gpus {
+		if want >= 0 && g.Index != want {
+			continue
+		}
+		if g.TotalMB >= s.VramMB {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Router) pokeAdmit() {
+	select {
+	case r.admitWait <- struct{}{}:
+	default:
+	}
+}
+
+func (r *Router) waitAdmit(ctx context.Context) error {
+	timer := time.NewTimer(200 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.admitWait:
+		return nil
+	case <-timer.C:
+		return nil
+	}
 }
 
 // Unload stops a local model and releases its VRAM reservation.
@@ -110,6 +168,7 @@ func (r *Router) Unload(modelID string) error {
 	m.Stop()
 	r.ledger.Release(modelID)
 	r.ledger.Credit(gpu, vram)
+	r.pokeAdmit()
 	return nil
 }
 
@@ -288,6 +347,7 @@ func (r *Router) releaseOccupancy(t Target) {
 		r.occupancy[key]--
 	}
 	r.mu.Unlock()
+	r.pokeAdmit()
 }
 
 func (r *Router) busy(id string) bool {
@@ -408,7 +468,14 @@ func (r *Router) peerFits(name string, vramMB int64) bool {
 		return false
 	}
 	for _, g := range t.GPUs {
-		if g.FreeMB >= vramMB || g.FreeIfStaleEvictedMB >= vramMB || g.FreeIfIdleEvictedMB >= vramMB {
+		// Peer stanzas can be smaller than ours (digger 24GB vs buster 32GB
+		// for the same model_id). Cap the need at that card's total so we
+		// still pick a peer that advertises the model.
+		need := vramMB
+		if g.TotalMB > 0 && need > g.TotalMB {
+			need = g.TotalMB
+		}
+		if g.FreeMB >= need || g.FreeIfStaleEvictedMB >= need || g.FreeIfIdleEvictedMB >= need {
 			return true
 		}
 	}
@@ -541,6 +608,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
+	// If this GPU cannot admit now, try an idle peer before waiting locally.
+	if !incomingPeer {
+		if s := r.cfg.Stanza(modelID); s != nil && !r.localCanServe(s) {
+			if r.serveSpill(w, req, modelID) {
+				return
+			}
+		}
+	}
 	if !incomingPeer && r.tryHoldLocalSlot(modelID) {
 		err := r.proxyLocalHeld(w, req, modelID)
 		r.releaseOccupancy(Target{Local: modelID})
@@ -684,7 +759,7 @@ func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID st
 }
 
 func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, modelID string) error {
-	if _, err := r.Load(modelID); err != nil {
+	if _, err := r.load(req.Context(), modelID, true); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -715,7 +790,7 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	// OpenAI-kind peers (openrouter etc.) have no /_router control API and no
 	// load step — the upstream serves the model id directly.
 	if p.Kind != "openai" {
-		if err := r.peerLoad(p, peerModel); err != nil {
+		if err := r.peerLoad(req.Context(), p, peerModel); err != nil {
 			return err
 		}
 	}
@@ -792,10 +867,15 @@ func jsonSetField(raw []byte, field, value string) ([]byte, bool) {
 
 // peerLoad asks a peer to load a model. The peer's own admission control
 // decides; we only use cached telemetry for *candidate* selection.
-func (r *Router) peerLoad(p *config.Peer, modelID string) error {
+func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) error {
 	body, _ := json.Marshal(map[string]string{"model_id": modelID})
 	url := p.BaseURL + "/_router/load"
-	resp, err := r.httpc.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("peer %s load: %w", p.Name, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := r.httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("peer %s load: %w", p.Name, err)
 	}
@@ -1025,7 +1105,7 @@ func (r *Router) BackendMetrics() []BackendMetric {
 // HandleLoad is the control endpoint handler for peer load() calls. Accepts
 // stanza ids and aliases (so a peer can load "coding-model" on a node whose
 // stanza is "qwopus-27b-coder").
-func (r *Router) HandleLoad(modelID string) error {
+func (r *Router) HandleLoad(ctx context.Context, modelID string) error {
 	s := r.cfg.Stanza(modelID)
 	if s == nil {
 		s = r.cfg.Alias(modelID)
@@ -1033,6 +1113,6 @@ func (r *Router) HandleLoad(modelID string) error {
 	if s == nil {
 		return fmt.Errorf("unknown local model %q", modelID)
 	}
-	_, err := r.Load(s.ModelID)
+	_, err := r.load(ctx, s.ModelID, true)
 	return err
 }

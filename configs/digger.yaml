@@ -2,6 +2,8 @@
 # GPU: NVIDIA RTX PRO 4000 Blackwell 24GB. Image node (sd.cpp) + LLM stanzas.
 # 2026-08-21: ornith 1x256k turbo4 MTP+mmproj (used=20689).
 # qwen3.8-27b 1x128k turbo4 (256k lost, used=22753). Intent is CPU (ngl 0).
+# ornith-1.5-35b-a3b-bigbang Q4_K_M 1x256k turbo4 no MTP (used=23788,
+# delta=23063 over intent CUDA crumbs; 2x256k --ctx-size 524288 died).
 # qwen3.8-27b uses /opt/ai/config/qwen-fixed-chat-template.jinja.
 # Note: this node's sd.cpp stanzas share ONE /sdapi/v1 path; krea-2-turbo is the
 # path_default (requests without a body `model` field land there). Clients that
@@ -52,6 +54,29 @@ stanzas:
     idle_ttl_seconds: 300
     unlisted: true
     port: 5971
+
+  - model_id: ornith-1.5-35b-a3b-bigbang
+    name: "Ornith-1.5-35B-A3B-BigBang Q4_K_M"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/ssd/models/llm/Ornith-1.5-35B-A3B-BigBang-MTP-Q4_K_M.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k turbo4 --cache-type-v turbo4 --cache-reuse 256
+      --batch-size 512 --ubatch-size 512
+      --jinja --metrics --no-mmap --mlock
+      --n-predict 65536
+      --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
+    vram_mb: 23200
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5972
 
   - model_id: qwen3.8-27b
     name: "Qwen3.8 27B (UD-Q5_K_XL)"
@@ -592,7 +617,7 @@ peers:
     base_url: http://192.168.1.61:18080
     models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nomad
     kind: router
     base_url: http://192.168.1.202:8081
@@ -607,4 +632,4 @@ peers:
     base_url: http://192.168.1.62:8081
     models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              ornith-1.0-35b-heretic, qwen3.8-27b, qwen3.6-35b-a3b,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]

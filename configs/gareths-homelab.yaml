@@ -284,12 +284,12 @@ peers:
     base_url: http://100.95.55.77:18080
     models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: digger
     kind: router
     base_url: http://100.76.234.71:8082
     models: [qwen3-0.6b-instruct, qwen3.8-27b, ornith-1.0-35b-heretic,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nomad
     kind: router
     base_url: http://100.107.91.127:8081
@@ -299,4 +299,4 @@ peers:
     base_url: http://100.86.152.126:8081
     models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              ornith-1.0-35b-heretic, qwen3.8-27b, qwen3.6-35b-a3b,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]

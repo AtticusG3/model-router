@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -331,5 +332,75 @@ func TestLoadDoesNotEvictInFlight(t *testing.T) {
 	}
 	if r.managed["a"] == nil {
 		t.Fatal("a must still be loaded")
+	}
+}
+
+func TestLoadWaitsForInFlightThenEvicts(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.holdOccupancy("a")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.load(ctx, "b", true)
+		done <- err
+	}()
+
+	time.Sleep(30 * time.Millisecond)
+	r.releaseOccupancy(Target{Local: "a"})
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Load b after a finished: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("Load b did not finish after a occupancy released")
+	}
+	if _, ok := r.managed["a"]; ok {
+		t.Fatal("idle a should have been evicted")
+	}
+	if r.managed["b"] == nil || r.managed["b"].State() != StateRunning {
+		t.Fatal("b should be running")
+	}
+}
+
+func TestLoadWaitCanceled(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.holdOccupancy("a")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := r.load(ctx, "b", true); err == nil {
+		t.Fatal("canceled wait must fail")
+	}
+}
+
+func TestLoadWaitDoesNotWaitForTooSmallGPU(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("a").VramMB = 22000
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := r.load(ctx, "a", true); err == nil {
+		t.Fatal("22000 MB model must not fit a 10000 MB GPU")
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Fatal("impossible fit must fail immediately, not wait")
 	}
 }

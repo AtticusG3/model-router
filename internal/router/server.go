@@ -86,7 +86,7 @@ func handleLoad(r *Router) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if err := r.HandleLoad(id); err != nil {
+		if err := r.HandleLoad(req.Context(), id); err != nil {
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}

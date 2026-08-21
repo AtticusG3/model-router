@@ -69,14 +69,14 @@ without multiplying ctx. Never cut per-slot ctx to buy a slot.
    `--ctx-size 262144 --parallel 1`. If that fails, one 128k slot
    (`131072`, parallel 1). Never below 128k per slot (specialists are
    not this ladder).
-2. **MoE only** (`qwen3.6-35b-a3b`): the slot goal is **two** full 256k
+2. **MoE only** (`qwen3.6-35b-a3b`, `ornith-1.5-35b-a3b-bigbang`): the slot goal is **two** full 256k
    slots (`--ctx-size 524288 --parallel 2`). Drop MTP, then mmproj, only
    if that unlocks those two 256k slots. Prefer one 256k slot with extras
    over two 128k slots. If two 256k slots fit, **stop** — do not probe a
    third. A third 256k slot (`--ctx-size 786432 --parallel 3`) is
    opportunistic only: take it only if it loads with extras still on and
    without cutting per-slot ctx. Do not drop ctx for a third slot.
-3. **Dense** (agents-a1, ornith, qwen3.8, nomad): do not chase a second
+3. **Dense** (agents-a1, ornith-1.0, qwen3.8, nomad): do not chase a second
    slot. One 256k (or one 128k if that is the floor) is the target. A
    second full-size slot is opportunistic only: same extras, same
    per-slot ctx, `--ctx-size` doubled. If it OOMs, keep parallel 1.
@@ -151,6 +151,7 @@ Legacy pool/proxy names are aliases only.
 | `jina-reranker-v3.5` | Jina Reranker v3.5 (rag-proxy) | buster, nugget |
 | `qwen3.8-27b` | Qwen3.8 27B UD-Q5_K_XL | buster, nugget, digger |
 | `ornith-1.0-35b-heretic` | Ornith 1.0 35B Heretic (APEX Quality on 32GB, Compact on 24GB/16GB) | buster, nugget, digger, gareth |
+| `ornith-1.5-35b-a3b-bigbang` | Ornith 1.5 35B A3B BigBang (Q5 grafted MTP on 32GB, Q4 no-MTP on 24GB) | buster, nugget, digger |
 | `qwen3.5-9b` | Qwen 3.5 9B Abliterated | nomad |
 | `qwen3.6-35b-a3b` | Qwen 3.6 35B A3B heretic (APEX Quality on 32GB, Compact on 16GB) | buster, nugget, gareth |
 | `krea-2-turbo` | Krea 2 Turbo | buster, nugget, digger, gareth |
@@ -192,6 +193,7 @@ a second 256k cache, so it stays one slot.
 | buster | V100 32GB | `qwen3.8-27b` | 1×256k turbo4 | 26451 | 27000 |
 | buster | V100 32GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Quality) | 26027 | 26600 |
 | buster | V100 32GB | `qwen3.6-35b-a3b` | 2×256k turbo4, MTP+mmproj (Quality), `--ctx-size 524288 --parallel 2` | 29713 | 30300 |
+| buster | V100 32GB | `ornith-1.5-35b-a3b-bigbang` | 2×256k turbo4, grafted MTP Q5_K_M, `--ctx-size 524288 --parallel 2` | 32099 | 32600 |
 | buster | 4060 8GB | `qwen3-0.6b-instruct` | specialist | 1019 | 1500 |
 | buster | 4060 8GB | `qwen3-embedding-4b` | specialist | 3419 | 3600 |
 | buster | 4060 8GB | `jina-reranker-v3.5` | specialist | 1269 | 1500 |
@@ -199,10 +201,12 @@ a second 256k cache, so it stays one slot.
 | nugget | V100 32GB | `qwen3.8-27b` | 1×256k turbo4 | 26819 | 27400 |
 | nugget | V100 32GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Quality) | 26331 | 26900 |
 | nugget | V100 32GB | `qwen3.6-35b-a3b` | 2×256k turbo4, MTP+mmproj (Quality), `--ctx-size 524288 --parallel 2` | 30081 | 30600 |
+| nugget | V100 32GB | `ornith-1.5-35b-a3b-bigbang` | 2×256k turbo4, grafted MTP Q5_K_M, `--ctx-size 524288 --parallel 2` | 32161 | 32700 |
 | nugget | V100 32GB | `qwen3-embedding-4b` | specialist | 4029 | 4200 |
 | nugget | V100 32GB | `jina-reranker-v3.5` | specialist | 1881 | 2000 |
 | digger | RTX PRO 4000 24GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Compact) | 20689 | 21200 |
 | digger | RTX PRO 4000 24GB | `qwen3.8-27b` | 1×128k turbo4 (256k lost) | 22753 | 23300 |
+| digger | RTX PRO 4000 24GB | `ornith-1.5-35b-a3b-bigbang` | 1×256k turbo4, no MTP (Q4_K_M). 2×256k `--ctx-size 524288` died | 23788 | 23200 |
 | digger | CPU | `qwen3-0.6b-instruct` | ngl 0 | 0 | 0 |
 | gareth | 5060 Ti 16GB | `qwen3.6-35b-a3b` | 1×256k turbo4, no MTP, no mmproj (Compact) | 14732 | 15200 |
 | gareth | 5060 Ti 16GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Compact) | 13808 | 14300 |

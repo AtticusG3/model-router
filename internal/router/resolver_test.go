@@ -427,6 +427,35 @@ peers:
 	}
 }
 
+func TestPeerFitsClampsToPeerGPU(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwen3.8-27b
+    command: "x --port {port}"
+    vram_mb: 27000
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [qwen3.8-27b]
+`)
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 2000, FreeIfIdleEvictedMB: 24000}},
+	})
+	if !r.peerFits("digger", 27000) {
+		t.Fatal("digger 24GB card with idle eviction to 24000 must fit our 27000 stanza")
+	}
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 2000}},
+	})
+	if r.peerFits("digger", 27000) {
+		t.Fatal("digger with only 2000 free and no idle reclaim must not look like a fit")
+	}
+}
+
 func TestResolveMeshPrefersPeerWithFreeSlot(t *testing.T) {
 	r := spilloverRouter(t, `
 start_port: 5900

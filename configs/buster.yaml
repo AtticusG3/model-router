@@ -7,8 +7,9 @@
 # vram_mb is nvidia-smi used rounded up after a successful ladder load
 # (docs/vram-fit-ladder.md). Chat + image on V100; specialists on 4060.
 # 2026-08-21 per-slot walk: MoE qwen3.6 is 2x256k (--ctx-size 524288
-# --parallel 2, used=29713). Dense chat is one 256k slot. Specialists
-# on 4060 unchanged. Qwen 3.6/3.8 use qwen-fixed-chat-template.jinja.
+# --parallel 2, used=29713). ornith-1.5 Q5 grafted MTP is 2x256k
+# (used=32099). Dense chat is one 256k slot. Specialists on 4060
+# unchanged. Qwen 3.6/3.8 use qwen-fixed-chat-template.jinja.
 
 listen: 0.0.0.0:18080
 start_port: 5901
@@ -206,6 +207,32 @@ stanzas:
     unlisted: true
     port: 5917
 
+  - model_id: ornith-1.5-35b-a3b-bigbang
+    name: "Ornith-1.5-35B-A3B-BigBang Q5_K_M grafted MTP"
+    command: >
+      /opt/ai/bin/llama-server
+      --model /home/kevyn/models/Ornith-1.5-35B-A3B-BigBang-MTP-Q5_K_M-grafted.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 524288 --threads 4 --parallel 2 --cont-batching --flash-attn on
+      --cache-type-k turbo4 --cache-type-v turbo4 --cache-reuse 256
+      --batch-size 512 --ubatch-size 512
+      --jinja --metrics --no-mmap --mlock
+      --spec-type draft-mtp --spec-draft-n-max 4 --spec-draft-n-min 1
+      --n-predict 65536
+      --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
+      --split-mode none --device CUDA0
+    env: ["CUDA_VISIBLE_DEVICES=1"]
+    vram_mb: 32600
+    device: 1
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5914
+
   - model_id: krea-2-turbo
     name: "Krea 2.0 Turbo (text-to-image, Q8_0)"
     command: >
@@ -283,7 +310,7 @@ peers:
     kind: router
     base_url: http://192.168.1.36:8082
     models: [qwen3-0.6b-instruct, qwen3.8-27b, ornith-1.0-35b-heretic,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: gareths-homelab
     kind: router
     base_url: http://100.89.49.44:8081
@@ -298,4 +325,4 @@ peers:
     base_url: http://192.168.1.62:8081
     models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              ornith-1.0-35b-heretic, qwen3.8-27b, qwen3.6-35b-a3b,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
