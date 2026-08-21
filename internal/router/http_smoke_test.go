@@ -3,7 +3,9 @@ package router
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,6 +121,9 @@ func TestHTTPServerWebUI(t *testing.T) {
 	}
 	if !strings.Contains(uiJS, `data-act="load"`) || !strings.Contains(uiJS, "sameOptions") {
 		t.Fatal("UI missing data-act load buttons or select-preservation helper")
+	}
+	if !strings.Contains(uiJS, "/upstream/") || !strings.Contains(uiJS, "Open UI") || !strings.Contains(uiJS, "encodeURIComponent(m.id)") {
+		t.Fatal("UI missing Open UI link to /upstream/{id}/")
 	}
 
 	req = httptest.NewRequest("GET", "/_router/status", nil)
@@ -315,5 +320,60 @@ peers:
 	}
 	if proxiedModel != "qwen3.6-35b-a3b" {
 		t.Fatalf("proxied model = %q, want qwen3.6-35b-a3b on nugget", proxiedModel)
+	}
+}
+
+func TestHTTPUpstreamStripsPrefixAndProxies(t *testing.T) {
+	var gotPath string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotPath = req.URL.Path
+		if req.URL.Path == "/" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html>llama.cpp ui</html>"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer backend.Close()
+	port := backend.Listener.Addr().(*net.TCPAddr).Port
+
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "fake --port {port}"
+    vram_mb: 0
+    health_check: /
+    spin_up_seconds: 5
+    port: %d
+`, port)))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	r := New(cfg, NewLogger(io.Discard, false), "test")
+	r.spawn = func(string, []string) (Proc, error) { return newFakeProc(), nil }
+	r.ledger.SetGPUs([]*GPUState{gpu(0, 10000)})
+	t.Cleanup(func() { _ = r.Unload("agents-a1") })
+	h := NewHandler(r, NewLogger(io.Discard, false))
+
+	req := httptest.NewRequest("GET", "/upstream/agents-a1/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "llama.cpp ui") {
+		t.Fatalf("GET /upstream/agents-a1/: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/" {
+		t.Fatalf("backend path = %q, want / (prefix must be stripped)", gotPath)
+	}
+
+	req = httptest.NewRequest("GET", "/upstream/agents-a1/props", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != `{"ok":true}` {
+		t.Fatalf("GET /upstream/agents-a1/props: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if gotPath != "/props" {
+		t.Fatalf("backend path = %q, want /props", gotPath)
 	}
 }
