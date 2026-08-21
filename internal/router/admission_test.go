@@ -335,6 +335,58 @@ func TestLoadDoesNotEvictInFlight(t *testing.T) {
 	}
 }
 
+func TestLoadEvictsStartingNeighbor(t *testing.T) {
+	r := loadTestRouter(t)
+	healthPort := r.cfg.Stanza("a").Port
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("a").Port = 1
+	r.cfg.Stanza("a").SpinUpSeconds = 30
+	r.cfg.Stanza("b").Port = healthPort
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := r.Load("a")
+		errCh <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for r.managed["a"] == nil || r.managed["a"].State() != StateStarting {
+		if time.Now().After(deadline) {
+			t.Fatal("a never entered starting")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := r.Load("b"); err != nil {
+		t.Fatalf("Load b should evict starting (non-generating) a: %v", err)
+	}
+	if _, ok := r.managed["a"]; ok {
+		t.Fatal("starting a should have been evicted")
+	}
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Load a goroutine did not return after evict")
+	}
+}
+
+func TestEvictReleasesOrphanReservation(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	if _, ok := r.ledger.Reserve(r.cfg.Stanza("a")); !ok {
+		t.Fatal("reserve a")
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 1500}})
+	if _, err := r.Load("b"); err != nil {
+		t.Fatalf("orphan reservation for a must be released so b can load: %v", err)
+	}
+}
+
 func TestLoadWaitsForInFlightThenEvicts(t *testing.T) {
 	r := loadTestRouter(t)
 	r.cfg.Stanza("a").Device = "0"
@@ -402,5 +454,64 @@ func TestLoadWaitDoesNotWaitForTooSmallGPU(t *testing.T) {
 	}
 	if time.Since(start) > 200*time.Millisecond {
 		t.Fatal("impossible fit must fail immediately, not wait")
+	}
+}
+
+func TestLoadAlreadyRunningIgnoresLiveFree(t *testing.T) {
+	r := loadTestRouter(t)
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 500}})
+	if _, err := r.load(context.Background(), "a", true); err != nil {
+		t.Fatalf("already-running idle model must serve when smi free is 500: %v", err)
+	}
+}
+
+func TestLocalCanServeIdleWhenLiveFreeShort(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 1500}})
+	if r.protected("a") {
+		t.Fatal("idle a must not be treated as generating")
+	}
+	if !r.localCanServe(r.cfg.Stanza("b")) {
+		t.Fatal("idle a must be evictable so b can wait locally instead of 503")
+	}
+}
+
+func TestLocalCanServeAlreadyRunningDespiteLowFree(t *testing.T) {
+	r := loadTestRouter(t)
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 500}})
+	if !r.localCanServe(r.cfg.Stanza("a")) {
+		t.Fatal("already-running a must be servable without 27500 free")
+	}
+}
+
+func TestLoadEvictsIdleDespiteLowLiveFree(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 8000
+	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 1500}})
+	if _, err := r.Load("b"); err != nil {
+		t.Fatalf("Load b should evict idle a even when smi free is 1500: %v", err)
+	}
+	if _, ok := r.managed["a"]; ok {
+		t.Fatal("idle a should have been evicted")
 	}
 }

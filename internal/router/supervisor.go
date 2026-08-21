@@ -110,7 +110,12 @@ func (m *Managed) Start() (int, error) {
 
 	m.logger.Infof("started %s (pid %d, port %d)", m.stanza.ModelID, proc.PID(), m.port)
 
-	// Wait for health.
+	m.mu.Lock()
+	stopCh := m.stopCh
+	m.mu.Unlock()
+
+	// Wait for health. Unload/evict closes stopCh so a non-generating
+	// spin-up can be replaced instead of blocking admission for spin_up_seconds.
 	spinUp := time.Duration(m.stanza.SpinUpSeconds) * time.Second
 	deadline := time.Now().Add(spinUp)
 	healthOK := false
@@ -119,7 +124,14 @@ func (m *Managed) Start() (int, error) {
 			healthOK = true
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-stopCh:
+			timer.Stop()
+			m.fail("stopped during start")
+			return -1, fmt.Errorf("stopped during start for %s", m.stanza.ModelID)
+		case <-timer.C:
+		}
 	}
 	if !healthOK {
 		// Give a couple extra seconds in case the endpoint is slow, then fail.

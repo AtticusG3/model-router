@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +36,8 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 				"backend_metrics": r.BackendMetrics(),
 			})
 		}},
+		{"/_router/activity/{id}", handleActivityCapture(r)},
+		{"/_router/activity", handleActivity(r)},
 		{"/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, r.TelemetrySnapshot())
 		}},
@@ -110,6 +113,36 @@ func handleUnload(r *Router) http.HandlerFunc {
 			return
 		}
 		fmt.Fprintln(w, `{"status":"unloaded"}`)
+	}
+}
+
+func handleActivity(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, map[string]any{"entries": r.Activity().List()})
+	}
+}
+
+func handleActivityCapture(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.Atoi(req.PathValue("id"))
+		if err != nil || id < 1 {
+			http.Error(w, "invalid activity id", http.StatusBadRequest)
+			return
+		}
+		cap, ok := r.Activity().Capture(id)
+		if !ok {
+			http.Error(w, "capture not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, cap)
 	}
 }
 
