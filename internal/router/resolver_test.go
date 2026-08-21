@@ -248,6 +248,46 @@ peers:
 	}
 }
 
+func TestResolvePoolPrefersLocalWhenIdleLiveFreeShort(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "x --port {port}"
+    vram_mb: 27500
+    device: "1"
+  - model_id: krea2turbo
+    command: "x --port {port}"
+    vram_mb: 16000
+    device: "1"
+pools:
+  daily-driver:
+    targets: [agents-a1, digger/daily-model]
+    spillover: 2
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [daily-model]
+`)
+	r.ledger.SetGPUs([]*GPUState{{Index: 1, TotalMB: 32768, FreeMB: 32768}})
+	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+		t.Fatal("krea should reserve")
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 1, TotalMB: 32768, FreeMB: 6068}})
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24000, FreeMB: 20000}},
+	})
+	tgt, err := r.resolvePool("daily-driver")
+	if err != nil {
+		t.Fatalf("idle krea with low smi free should still take local agents-a1: %v", err)
+	}
+	if tgt.Local != "agents-a1" {
+		t.Fatalf("target = %+v, want local agents-a1 (evict/wait), not spill", tgt)
+	}
+}
+
 func TestResolveTargetReturnsLocalTarget(t *testing.T) {
 	r := New(testConfig(t), NewLogger(io.Discard, false), "test")
 	tgt, err := r.resolveTarget(ModelRef{Local: "agents-a1"})

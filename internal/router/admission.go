@@ -278,6 +278,17 @@ func (l *Ledger) occupantsOnGPU(gpu int, except string) []string {
 	return ids
 }
 
+// reservedGPU is the GPU a model is booked on, or -1.
+func (l *Ledger) reservedGPU(modelID string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r, ok := l.reservations[modelID]
+	if !ok {
+		return -1
+	}
+	return r.gpuIndex
+}
+
 // Release frees a reservation (on unload or failed spin-up).
 func (l *Ledger) Release(modelID string) {
 	l.mu.Lock()

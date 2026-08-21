@@ -54,7 +54,8 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/v1/models` | unique mesh models (local + reachable remotes, no selectors) |
 | `/_router/load`, `/_router/unload` | local-only control (this node's admission; peers call these) |
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
-| `/ui/` | embedded operator WebUI (dashboard, controls, chat, image, logs/metrics) |
+| `/_router/activity`, `/_router/activity/{id}` | in-memory generation request log and request/response captures |
+| `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
 
 ## Operator WebUI (`/ui/`)
@@ -68,7 +69,10 @@ fresh peer and streams the reply. Image lab is the same for `api_type:
 image` (or Path default for the configured sd.cpp route).
 
 The chat/image selectors keep the current choice across the 3s status poll.
-Hard-refresh `/ui/` after deploying a new binary.
+**Activity** lists proxied generation requests on this node (token stats, charts,
+click a row for request/response). Captures live in memory only (256 KB per
+body, 8 MB total) and reset on restart. Hard-refresh `/ui/` after deploying a
+new binary.
 
 ## Config
 

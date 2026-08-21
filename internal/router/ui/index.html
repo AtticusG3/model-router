@@ -21,6 +21,7 @@ __EMBED_CSS__
       <button class="active" data-view="dashboard" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>Overview</span></button>
       <button data-view="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.4 8.4 0 0 1-3.2-.6L4 20l1.7-3.4A7.3 7.3 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg><span>Chat lab</span></button>
       <button data-view="image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m20 15-4.5-4.5L7 19"/></svg><span>Image lab</span></button>
+      <button data-view="activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="m8 14 3-4 3 2 5-7"/></svg><span>Activity</span></button>
       <button data-view="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 5h14M5 9h14M5 13h9M5 17h6"/><path d="m17 15 3 3-3 3"/></svg><span>Logs & metrics</span></button>
     </nav>
     <div class="sidebar-bottom"><div class="node-chip"><span class="status-dot" id="side-dot"></span><div><strong id="side-node">Connecting…</strong><span id="side-health">Polling router status</span></div></div></div>
@@ -44,6 +45,29 @@ __EMBED_CSS__
 
     <main id="image" class="view"><div class="playground"><section class="panel"><div class="panel-header"><div><h2>Image playground</h2><p>Generate through the sd.cpp compatibility route.</p></div></div><div class="notice">Requests use <code>/sdapi/v1/txt2img</code>. Leave the model on Path default to use the configured image route.</div><div class="form"><label><span>Model</span><select id="image-model" aria-label="Image model"><option value="">Path default</option></select></label><label><span>Prompt</span><textarea id="image-prompt" rows="5">A small red square on a white background</textarea></label><label><span>Negative prompt</span><textarea id="image-negative" rows="3"></textarea></label><div class="two"><label><span>Width</span><input id="image-width" type="number" value="512" min="64" step="64"></label><label><span>Height</span><input id="image-height" type="number" value="512" min="64" step="64"></label></div><div class="two"><label><span>Steps</span><input id="image-steps" type="number" value="8" min="1"></label><label><span>Seed</span><input id="image-seed" type="number" value="-1"></label></div><button class="primary" onclick="generateImage()">Generate image</button></div></section><section class="panel"><div class="panel-header"><div><h2>Result</h2><p>Generated output will be shown at its native aspect ratio.</p></div></div><div id="image-output" class="image-result" aria-live="polite">Generated images appear here.</div></section></div></main>
 
+    <main id="activity" class="view">
+      <section class="overview" aria-label="Generation summary">
+        <div class="stat-card"><div class="stat-top"><span>Requests</span></div><div class="stat-value" id="act-count">0</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Avg generation</span></div><div class="stat-value" id="act-avg-gen">—<small> tok/s</small></div></div>
+        <div class="stat-card"><div class="stat-top"><span>Avg duration</span></div><div class="stat-value" id="act-avg-dur">—</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Errors</span></div><div class="stat-value" id="act-errors">0</div></div>
+      </section>
+      <section class="activity-charts" aria-label="Request charts">
+        <article class="panel chart-card"><div class="chart-head"><h2>Generation speed</h2><span class="subtle" id="chart-gen-label">tok/s</span></div><svg class="spark" id="chart-gen" viewBox="0 0 320 96" role="img" aria-label="Generation tokens per second"></svg></article>
+        <article class="panel chart-card"><div class="chart-head"><h2>Prompt speed</h2><span class="subtle" id="chart-prompt-label">tok/s</span></div><svg class="spark" id="chart-prompt" viewBox="0 0 320 96" role="img" aria-label="Prompt tokens per second"></svg></article>
+        <article class="panel chart-card"><div class="chart-head"><h2>Duration</h2><span class="subtle" id="chart-dur-label">ms</span></div><svg class="spark" id="chart-dur" viewBox="0 0 320 96" role="img" aria-label="Request duration"></svg></article>
+      </section>
+      <section class="section"><div class="section-heading"><div><h2>Generation requests</h2><p>Click a row to open the captured request and response.</p></div><span class="subtle" id="activity-hint">In-memory on this node</span></div>
+        <div class="panel"><div class="table-wrap"><table class="table activity-table"><thead><tr><th>Time</th><th>Model</th><th>Path</th><th>Status</th><th>Prompt</th><th>Generated</th><th>Prompt tok/s</th><th>Gen tok/s</th><th>Duration</th></tr></thead><tbody id="activity-rows"></tbody></table></div></div>
+      </section>
+    </main>
+    <dialog id="activity-dialog" class="capture-dialog" aria-labelledby="capture-title">
+      <div class="capture-bar"><div><h2 id="capture-title">Request capture</h2><p class="subtle" id="capture-meta"></p></div><button class="ghost" type="button" id="capture-close" aria-label="Close capture">Close</button></div>
+      <div class="capture-grid">
+        <section><h3>Request</h3><pre class="capture-body" id="capture-req"></pre></section>
+        <section><h3>Response</h3><pre class="capture-body" id="capture-resp"></pre></section>
+      </div>
+    </dialog>
     <main id="logs" class="view"><div class="section-heading"><div><h2>Logs & metrics</h2><p>Router Prometheus text, llama.cpp /metrics from running backends, plus router / upstream / mesh event rings.</p></div></div><div class="grid"><section class="panel"><div class="panel-header"><div><h2>Router metrics</h2><p>This process: running backends, GPU free, peer freshness.</p></div></div><div id="metrics" class="output metric-output">Loading metrics…</div></section><section class="panel"><div class="panel-header"><div><h2>Upstream metrics</h2><p>Scraped from each running backend's <code>/metrics</code>.</p></div></div><div id="upstream-metrics" class="output metric-output">Loading upstream metrics…</div></section><section class="panel"><div class="panel-header"><div><h2>Router events</h2><p>Admission, spawn, preload, errors.</p></div></div><div id="logs-output" class="logs">Loading logs…</div></section><section class="panel"><div class="panel-header"><div><h2>Upstream logs</h2><p>Backend stdout/stderr.</p></div></div><div id="upstream-logs" class="logs">Loading upstream logs…</div></section><section class="panel"><div class="panel-header"><div><h2>Mesh logs</h2><p>Peer telemetry and forwarded requests.</p></div></div><div id="mesh-logs" class="logs">Loading mesh logs…</div></section></div></main>
   </div>
 </div>

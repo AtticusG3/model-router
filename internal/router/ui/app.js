@@ -3,7 +3,7 @@
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
-  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],logs:['Observability','Logs & metrics','Router gauges, backend /metrics, and event rings.']};
+  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],logs:['Observability','Logs & metrics','Router gauges, backend /metrics, and event rings.']};
   document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2]});
   async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok)throw new Error(data.error||text||('HTTP '+r.status));return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
@@ -208,6 +208,98 @@
     }
   };
   window.generateImage=async function(){const out=$('image-output');out.className='image-result';out.textContent='Generating…';const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,width:Number($('image-width').value),height:Number($('image-height').value),steps:Number($('image-steps').value),seed:Number($('image-seed').value)};if($('image-model').value)body.model=$('image-model').value;try{const d=await json('/sdapi/v1/txt2img',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const imgs=d.images||[];out.innerHTML=imgs.length?imgs.map(x=>'<img alt="Generated image" src="data:image/png;base64,'+x+'">').join(''):'<span class="muted">No images returned.</span>'}catch(e){out.className='image-result error';out.textContent=e.message}};
+
+  function fmtDur(ms){ms=Number(ms)||0;if(ms<1000)return ms+' ms';if(ms<60000)return (ms/1000).toFixed(2)+' s';return Math.floor(ms/60000)+'m '+((ms/1000)%60).toFixed(0)+'s'}
+  function fmtSpeed(v){v=Number(v);return v>0?v.toFixed(v>=100?0:1)+' t/s':'—'}
+  function fmtTok(v){v=Number(v)||0;return v>0?v.toLocaleString():'—'}
+  function fmtTime(ts){const d=new Date(ts);return isNaN(d)?String(ts||''):d.toLocaleTimeString()}
+  function prettyBody(raw){
+    const s=String(raw??'');
+    if(!s)return '(empty)';
+    if(s.startsWith('data:'))return s;
+    try{return JSON.stringify(JSON.parse(s),null,2)}catch(e){return s}
+  }
+  function prettyHeaders(h){
+    const lines=[];
+    Object.keys(h||{}).sort().forEach(k=>(h[k]||[]).forEach(v=>lines.push(k+': '+v)));
+    return lines.join('\n');
+  }
+  function spark(el, values, color){
+    const w=320,h=96,pad=8;
+    if(!values.length){
+      el.innerHTML='<text x="160" y="52" text-anchor="middle" fill="#5d6c7f" font-size="11">No samples yet</text>';
+      return;
+    }
+    const min=Math.min(...values), max=Math.max(...values);
+    const span=max-min||1;
+    const pts=values.map((v,i)=>{
+      const x=pad+(i/(Math.max(values.length-1,1)))*(w-pad*2);
+      const y=h-pad-((v-min)/span)*(h-pad*2);
+      return x.toFixed(1)+','+y.toFixed(1);
+    }).join(' ');
+    const last=values[values.length-1];
+    el.innerHTML='<polyline fill="none" stroke="'+color+'" stroke-width="2" points="'+pts+'"/><circle cx="'+pts.split(' ').pop().split(',')[0]+'" cy="'+pts.split(' ').pop().split(',')[1]+'" r="3" fill="'+color+'"/><text x="'+(w-pad)+'" y="14" text-anchor="end" fill="'+color+'" font-size="11">'+last.toFixed(last>=100?0:1)+'</text>';
+  }
+  async function activity(){
+    try{
+      const d=await json('/_router/activity');
+      const rows=d.entries||[];
+      $('act-count').textContent=rows.length;
+      const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
+      const durs=rows.map(e=>Number(e.duration_ms)||0).filter(v=>v>0);
+      const errs=rows.filter(e=>e.status>=400).length;
+      $('act-avg-gen').innerHTML=gens.length?(gens.reduce((a,b)=>a+b,0)/gens.length).toFixed(1)+'<small> tok/s</small>':'—<small> tok/s</small>';
+      $('act-avg-dur').textContent=durs.length?fmtDur(durs.reduce((a,b)=>a+b,0)/durs.length):'—';
+      $('act-errors').textContent=errs;
+      const chrono=rows.slice().reverse();
+      spark($('chart-gen'), chrono.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0), '#63dda1');
+      spark($('chart-prompt'), chrono.map(e=>Number(e.tokens&&e.tokens.prompt_per_second)||0).filter(v=>v>0), '#58d6e6');
+      spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
+      $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
+      $('activity-rows').innerHTML=rows.map(e=>{
+        const tok=e.tokens||{};
+        const bad=e.status>=400;
+        return '<tr tabindex="0" data-id="'+e.id+'"'+(e.has_capture?'':' data-empty="1"')+'><td class="mono">'+esc(fmtTime(e.timestamp))+'</td><td><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></td><td class="mono">'+esc(e.method||'')+' '+esc(e.path||'')+'</td><td class="'+(bad?'status-bad':'status-ok')+'">'+esc(e.status)+'</td><td class="mono">'+fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')+'</td><td class="mono">'+fmtTok(tok.completion_tokens)+'</td><td class="mono">'+esc(fmtSpeed(tok.prompt_per_second))+'</td><td class="mono">'+esc(fmtSpeed(tok.tokens_per_second))+'</td><td class="mono">'+esc(fmtDur(e.duration_ms))+'</td></tr>';
+      }).join('')||'<tr><td colspan="9" class="empty">No generation requests yet. Send one from Chat lab or any client.</td></tr>';
+    }catch(e){
+      $('activity-rows').innerHTML='<tr><td colspan="9" class="empty">'+esc(e.message)+'</td></tr>';
+    }
+  }
+  async function openCapture(id, row){
+    const dlg=$('activity-dialog');
+    $('capture-title').textContent='Request '+id;
+    $('capture-meta').textContent='Loading capture…';
+    $('capture-req').textContent='';
+    $('capture-resp').textContent='';
+    if(row)row.setAttribute('aria-busy','true');
+    dlg.showModal();
+    try{
+      const cap=await json('/_router/activity/'+id);
+      $('capture-meta').textContent=(cap.truncated?'Bodies truncated to 256 KB. ':'')+'Click Close or press Escape.';
+      $('capture-req').textContent=prettyHeaders(cap.req_headers)+'\n\n'+prettyBody(cap.req_body);
+      $('capture-resp').textContent=prettyHeaders(cap.resp_headers)+'\n\n'+prettyBody(cap.resp_body);
+    }catch(e){
+      $('capture-meta').textContent='Capture unavailable';
+      $('capture-req').textContent=e.message;
+      $('capture-resp').textContent='';
+    }finally{
+      if(row)row.removeAttribute('aria-busy');
+    }
+  }
+  $('activity-rows').addEventListener('click',e=>{
+    const row=e.target.closest('tr[data-id]');
+    if(!row)return;
+    openCapture(row.dataset.id, row);
+  });
+  $('activity-rows').addEventListener('keydown',e=>{
+    if(e.key!=='Enter'&&e.key!==' ')return;
+    const row=e.target.closest('tr[data-id]');
+    if(!row)return;
+    e.preventDefault();
+    openCapture(row.dataset.id, row);
+  });
+  $('capture-close').onclick=()=>$('activity-dialog').close();
+
   async function logs(){try{const d=await json('/_router/logs');$('logs-output').textContent=(d.entries||[]).join('\n')||'No router events yet.';$('upstream-logs').textContent=(d.upstream||[]).join('\n')||'No upstream output yet.';$('mesh-logs').textContent=(d.mesh||[]).join('\n')||'No mesh events yet.';const bm=d.backend_metrics||[];$('upstream-metrics').textContent=bm.length?bm.map(x=>'# '+x.id+'\n'+(x.body||'')+'\n').join('\n'):'No running backends to scrape.'}catch(e){$('logs-output').textContent=e.message}try{$('metrics').textContent=await (await fetch('/metrics')).text()}catch(e){$('metrics').textContent=e.message}}
-  refresh();logs();setInterval(refresh,3000);setInterval(logs,3000);
+  refresh();logs();activity();setInterval(refresh,3000);setInterval(logs,3000);setInterval(activity,3000);
 })();

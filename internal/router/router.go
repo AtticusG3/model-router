@@ -31,7 +31,8 @@ type Router struct {
 	spawn     spawner             // tests inject a fake; nil uses the GOOS default
 	admitWait chan struct{}       // 1-buffer poke when occupancy/unload may free VRAM
 
-	httpc *http.Client
+	httpc    *http.Client
+	activity *ActivityLog
 }
 
 // New builds a Router from parsed config.
@@ -47,8 +48,12 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		occupancy: map[string]int{},
 		admitWait: make(chan struct{}, 1),
 		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
+		activity:  NewActivityLog(),
 	}
 }
+
+// Activity returns the in-memory generation request log for the operator UI.
+func (r *Router) Activity() *ActivityLog { return r.activity }
 
 // Ledger returns the admission ledger (used by the telemetry poller).
 func (r *Router) Ledger() *Ledger { return r.ledger }
@@ -114,23 +119,26 @@ func (r *Router) load(ctx context.Context, modelID string, wait bool) (int, erro
 	}
 }
 
-// canEventuallyAdmit is true when some GPU is large enough for s. Occupied
-// VRAM can free (idle eviction or in-flight finish); a too-small card cannot.
+// canEventuallyAdmit is true unless we know the pinned (or every) card is
+// smaller than s. Missing telemetry and a missing pinned GPU wait rather
+// than 503: occupied VRAM can free after idle eviction.
 func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 	want := deviceIndex(s.Device)
 	gpus := r.ledger.GPUs()
 	if len(gpus) == 0 {
-		return s.VramMB <= 0
+		return true
 	}
+	saw := false
 	for _, g := range gpus {
 		if want >= 0 && g.Index != want {
 			continue
 		}
-		if g.TotalMB >= s.VramMB {
+		saw = true
+		if g.TotalMB <= 0 || g.TotalMB >= s.VramMB {
 			return true
 		}
 	}
-	return false
+	return want >= 0 && !saw
 }
 
 func (r *Router) pokeAdmit() {
@@ -153,22 +161,29 @@ func (r *Router) waitAdmit(ctx context.Context) error {
 	}
 }
 
-// Unload stops a local model and releases its VRAM reservation.
+// Unload stops a local model and releases its VRAM reservation. A ledger
+// reservation without a process still gets released so eviction cannot 503
+// on a ghost occupant.
 func (r *Router) Unload(modelID string) error {
 	r.mu.Lock()
 	m, ok := r.managed[modelID]
-	if !ok {
-		r.mu.Unlock()
-		return fmt.Errorf("not loaded: %s", modelID)
-	}
 	delete(r.managed, modelID)
 	r.mu.Unlock()
-	gpu := m.gpuIndex()
+	gpu := r.ledger.reservedGPU(modelID)
+	if m != nil {
+		if g := m.gpuIndex(); g >= 0 {
+			gpu = g
+		}
+		m.Stop()
+	}
 	vram := r.modelVram(modelID)
-	m.Stop()
+	had := gpu >= 0 || ok
 	r.ledger.Release(modelID)
 	r.ledger.Credit(gpu, vram)
 	r.pokeAdmit()
+	if !had {
+		return fmt.Errorf("not loaded: %s", modelID)
+	}
 	return nil
 }
 
@@ -216,8 +231,9 @@ func (r *Router) modelStale(id string) bool {
 	return m.IsStale(time.Now())
 }
 
-// protected is true when a model must not be preempted: a request is in
-// flight, or the backend is still starting/stopping.
+// protected is true only while a request is mid-generation, or Unload is
+// already stopping the process. A loading (Starting) model is not generating
+// and is evicted so a new request does not 503.
 func (r *Router) protected(id string) bool {
 	r.mu.Lock()
 	busy := r.occupancy[id] > 0
@@ -226,11 +242,7 @@ func (r *Router) protected(id string) bool {
 	if busy {
 		return true
 	}
-	if m == nil {
-		return false
-	}
-	st := m.State()
-	return st == StateStarting || st == StateStopping
+	return m != nil && m.State() == StateStopping
 }
 
 // Target is a concrete serving destination after pool/spillover resolution.
@@ -389,13 +401,28 @@ func (r *Router) localCanServe(s *config.Stanza) bool {
 	if s == nil {
 		return false
 	}
-	var evict []string
-	for _, id := range r.ledger.occupantsOnGPU(deviceIndex(s.Device), s.ModelID) {
-		if !r.protected(id) {
-			evict = append(evict, id)
-		}
+	r.mu.Lock()
+	m := r.managed[s.ModelID]
+	running := m != nil && m.State() == StateRunning
+	r.mu.Unlock()
+	if running {
+		return true
 	}
-	return r.ledger.CanAdmitEvicting(s, evict)
+	var evict []string
+	blocked := false
+	for _, id := range r.ledger.occupantsOnGPU(deviceIndex(s.Device), s.ModelID) {
+		if r.protected(id) {
+			blocked = true
+			continue
+		}
+		evict = append(evict, id)
+	}
+	if r.ledger.CanAdmitEvicting(s, evict) {
+		return true
+	}
+	// nvidia-smi free can stay below vram_mb after idle eviction until the
+	// process dies. If nothing is generating, wait/evict locally instead of 503.
+	return !blocked && r.canEventuallyAdmit(s)
 }
 
 // peerEligible reports whether a peer is a spillover candidate. A peer that
@@ -770,7 +797,7 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, modelI
 	}
 	m.markUsed()
 	defer m.markUsed()
-	r.proxyTo(w, req, m.stanza.Proxy)
+	r.proxyTo(w, req, m.stanza.Proxy, modelID, r.node)
 	return nil
 }
 
@@ -803,7 +830,7 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	}
 	req.Header.Set("X-Model-Router-Peer", r.node)
 	r.logger.Meshf("%s %s -> %s (%s)", req.Method, req.URL.Path, peerName, peerModel)
-	r.proxyTo(w, req, p.BaseURL)
+	r.proxyTo(w, req, p.BaseURL, peerModel, peerName)
 	return nil
 }
 
@@ -889,12 +916,14 @@ func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) e
 
 // proxyTo reverse-proxies the request to baseURL, preserving path and body and
 // streaming SSE responses. Buffering is disabled for streaming.
-func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL string) {
+func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, model, target string) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	wrapped, done := r.wrapProxy(w, req, model, target)
+	defer done()
 	// The matcher already read the body and restored r.Body with a fresh
 	// reader, so the ReverseProxy can stream it downstream.
 	proxy := &httputil.ReverseProxy{
@@ -912,8 +941,8 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL strin
 		},
 	}
 	// Tell any fronting proxy (nginx on gareth) not to buffer SSE.
-	w.Header().Set("X-Accel-Buffering", "no")
-	proxy.ServeHTTP(w, req)
+	wrapped.Header().Set("X-Accel-Buffering", "no")
+	proxy.ServeHTTP(wrapped, req)
 }
 
 // Preload loads the configured startup models in order.

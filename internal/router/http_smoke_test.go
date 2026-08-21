@@ -108,7 +108,7 @@ func TestHTTPServerWebUI(t *testing.T) {
 	if !strings.Contains(rec.Header().Get("Content-Type"), "text/html") || !strings.Contains(body, "model-router") {
 		t.Fatalf("UI response missing HTML shell: content-type=%q", rec.Header().Get("Content-Type"))
 	}
-	for _, want := range []string{`id="chat-model"`, `id="image-model"`} {
+	for _, want := range []string{`id="chat-model"`, `id="image-model"`, `data-view="activity"`, `id="activity-rows"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("UI shell missing %q", want)
 		}
@@ -121,6 +121,9 @@ func TestHTTPServerWebUI(t *testing.T) {
 	}
 	if !strings.Contains(uiJS, `data-act="load"`) || !strings.Contains(uiJS, "sameOptions") {
 		t.Fatal("UI missing data-act load buttons or select-preservation helper")
+	}
+	if !strings.Contains(uiJS, "/_router/activity") || !strings.Contains(uiJS, "openCapture") {
+		t.Fatal("UI missing activity poll or capture opener")
 	}
 	if !strings.Contains(uiJS, "/upstream/") || !strings.Contains(uiJS, "Open UI") || !strings.Contains(uiJS, "encodeURIComponent(m.id)") {
 		t.Fatal("UI missing Open UI link to /upstream/{id}/")
@@ -375,5 +378,52 @@ stanzas:
 	}
 	if gotPath != "/props" {
 		t.Fatalf("backend path = %q, want /props", gotPath)
+	}
+}
+
+func TestHTTPChatAlreadyLoadedWhenSmiFreeBelowReservation(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/health" || req.URL.Path == "/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-local"}`))
+	}))
+	defer backend.Close()
+	port := backend.Listener.Addr().(*net.TCPAddr).Port
+
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "fake --port {port}"
+    vram_mb: 27500
+    device: "1"
+    health_check: /
+    spin_up_seconds: 5
+    match: {body_field: model}
+    port: %d
+`, port)))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	r := New(cfg, NewLogger(io.Discard, false), "buster")
+	r.spawn = func(string, []string) (Proc, error) { return newFakeProc(), nil }
+	r.ledger.SetGPUs([]*GPUState{{Index: 1, TotalMB: 32768, FreeMB: 32768}})
+	t.Cleanup(func() { _ = r.Unload("agents-a1") })
+	if _, err := r.Load("agents-a1"); err != nil {
+		t.Fatalf("Load agents-a1: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 1, TotalMB: 32768, FreeMB: 6068}})
+
+	h := NewHandler(r, NewLogger(io.Discard, false))
+	body := `{"model":"agents-a1","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("idle loaded agents-a1 must not 503 when smi free is 6068: status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
