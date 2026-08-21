@@ -45,6 +45,10 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			fmt.Fprint(w, webUIHTML)
 		}},
+		{"/upstream", func(w http.ResponseWriter, req *http.Request) {
+			http.Redirect(w, req, "/ui/", http.StatusFound)
+		}},
+		{"/upstream/{path...}", handleUpstream(r)},
 		{"/health", func(w http.ResponseWriter, req *http.Request) {
 			fmt.Fprintln(w, "OK")
 		}},
@@ -199,6 +203,47 @@ func handleModels(r *Router) http.HandlerFunc {
 		}
 		writeJSON(w, map[string]any{"object": "list", "data": data})
 	}
+}
+
+// handleUpstream reverse-proxies to a local backend after stripping
+// /upstream/{model_id}, same as llama-swap's /upstream/:model_id/*.
+func handleUpstream(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id, upPath, slash := splitUpstreamPath(req.URL.Path)
+		if id == "" {
+			http.Redirect(w, req, "/ui/", http.StatusFound)
+			return
+		}
+		ref := resolveRef(id, r.cfg)
+		if ref.Local == "" {
+			http.Error(w, fmt.Sprintf("unknown local model %q", id), http.StatusNotFound)
+			return
+		}
+		if !slash {
+			http.Redirect(w, req, "/upstream/"+id+"/", http.StatusFound)
+			return
+		}
+		req.URL.Path = upPath
+		if err := r.proxyLocal(w, req, ref.Local); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		}
+	}
+}
+
+func splitUpstreamPath(path string) (id, upPath string, hadSlash bool) {
+	rest := strings.TrimPrefix(path, "/upstream")
+	rest = strings.TrimPrefix(rest, "/")
+	if rest == "" {
+		return "", "", false
+	}
+	id, after, hadSlash := strings.Cut(rest, "/")
+	if !hadSlash {
+		return id, "", false
+	}
+	if after == "" {
+		return id, "/", true
+	}
+	return id, "/" + after, true
 }
 
 func handleRoot(r *Router) http.HandlerFunc {

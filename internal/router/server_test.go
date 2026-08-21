@@ -90,3 +90,58 @@ func TestHandlerUnloadCallsUnload(t *testing.T) {
 		t.Fatalf("unload GET: status=%d", rec.Code)
 	}
 }
+
+func TestSplitUpstreamPath(t *testing.T) {
+	cases := []struct {
+		path     string
+		id       string
+		upPath   string
+		hadSlash bool
+	}{
+		{"/upstream", "", "", false},
+		{"/upstream/", "", "", false},
+		{"/upstream/agents-a1", "agents-a1", "", false},
+		{"/upstream/agents-a1/", "agents-a1", "/", true},
+		{"/upstream/agents-a1/props", "agents-a1", "/props", true},
+		{"/upstream/agents-a1/v1/chat/completions", "agents-a1", "/v1/chat/completions", true},
+	}
+	for _, tc := range cases {
+		id, up, slash := splitUpstreamPath(tc.path)
+		if id != tc.id || up != tc.upPath || slash != tc.hadSlash {
+			t.Fatalf("%s: id=%q up=%q slash=%v, want id=%q up=%q slash=%v",
+				tc.path, id, up, slash, tc.id, tc.upPath, tc.hadSlash)
+		}
+	}
+}
+
+func TestHandlerUpstreamRedirects(t *testing.T) {
+	h := testHandler(t)
+
+	req := httptest.NewRequest("GET", "/upstream", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/ui/" {
+		t.Fatalf("/upstream: status=%d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	req = httptest.NewRequest("GET", "/upstream/agents-a1", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/upstream/agents-a1/" {
+		t.Fatalf("/upstream/agents-a1: status=%d location=%q", rec.Code, rec.Header().Get("Location"))
+	}
+
+	req = httptest.NewRequest("GET", "/upstream/not-a-model/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "unknown local model") {
+		t.Fatalf("/upstream/not-a-model/: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest("GET", "/upstream/coding-pool/", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/upstream/coding-pool/: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
