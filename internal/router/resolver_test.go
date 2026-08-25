@@ -494,6 +494,39 @@ peers:
 	if r.peerFits("digger", 27000) {
 		t.Fatal("digger with only 2000 free and no idle reclaim must not look like a fit")
 	}
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24467, FreeMB: 23004, FreeIfIdleEvictedMB: 23004}},
+	})
+	if !r.peerFits("digger", 27400) {
+		t.Fatal("empty 24GB digger must fit even when our local stanza is 27400")
+	}
+}
+
+func TestResolveMeshWaitsOnOccupiedPeer(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: qwen3.8-27b
+    command: "x --port {port}"
+    vram_mb: 27400
+peers:
+  - name: digger
+    kind: router
+    base_url: http://192.168.1.36:8082
+    models: [qwen3.8-27b]
+`)
+	r.peers.Set("digger", &Telemetry{
+		Node: "digger",
+		GPUs: []*GPUState{{Index: 0, TotalMB: 24467, FreeMB: 2000, FreeIfIdleEvictedMB: 2000}},
+	})
+	tgt, err := r.resolveMesh("qwen3.8-27b")
+	if err != nil {
+		t.Fatalf("occupied peer that lists the model must be a wait target, not 503: %v", err)
+	}
+	if tgt.Peer != "digger" {
+		t.Fatalf("target = %+v, want digger", tgt)
+	}
 }
 
 func TestResolveMeshPrefersPeerWithFreeSlot(t *testing.T) {

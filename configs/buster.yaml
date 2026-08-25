@@ -127,6 +127,8 @@ stanzas:
     command: >
       /opt/ai/bin/llama-server
       --model /home/kevyn/models/Qwen3.8-27B-UD-Q5_K_XL.gguf
+      --mmproj /home/kevyn/models/mmproj-Qwen3.8-27B-UD-F16.gguf
+      -md /home/kevyn/models/mtp-Qwen3.8-27B-Q4_0.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
       --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
@@ -139,7 +141,7 @@ stanzas:
       --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
     env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 27000
+    vram_mb: 31200
     device: 1
     spin_up_seconds: 90
     api_type: chat

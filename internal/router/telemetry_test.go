@@ -82,6 +82,24 @@ func TestTelemetrySnapshotReportsSlotsAndInFlight(t *testing.T) {
 	}
 }
 
+func TestTelemetrySnapshotIdleReclaimSkipsInFlight(t *testing.T) {
+	r := loadTestRouter(t)
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 4000}})
+	r.holdOccupancy("a")
+	snap := r.TelemetrySnapshot()
+	if snap.GPUs[0].FreeIfIdleEvictedMB != 4000 {
+		t.Fatalf("in-flight must not count as idle reclaim, got %d", snap.GPUs[0].FreeIfIdleEvictedMB)
+	}
+	r.releaseOccupancy(Target{Local: "a"})
+	snap = r.TelemetrySnapshot()
+	if snap.GPUs[0].FreeIfIdleEvictedMB != 10000 {
+		t.Fatalf("idle reclaim after release = %d, want 10000", snap.GPUs[0].FreeIfIdleEvictedMB)
+	}
+}
+
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }

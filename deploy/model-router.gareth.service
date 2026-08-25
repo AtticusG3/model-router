@@ -1,0 +1,23 @@
+# Install on gareths-homelab as /etc/systemd/system/model-router.service
+# nginx fronts 127.0.0.1:18080 on :8081 / :8082.
+
+[Unit]
+Description=model-router v0.1 unified LLM + sd.cpp (gareths-homelab)
+After=network-online.target
+Wants=network-online.target
+Conflicts=llama-swap.service
+
+[Service]
+Type=simple
+User=root
+LimitMEMLOCK=infinity
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=LD_LIBRARY_PATH=/srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/llama-cpp-turboquant/build/bin:/usr/local/cuda-13.3/targets/x86_64-linux/lib
+ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml --node gareths-homelab
+Restart=always
+RestartSec=3
+TimeoutStopSec=60
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

@@ -101,7 +101,19 @@ func (r *Router) load(ctx context.Context, modelID string, wait bool) (int, erro
 		if ok {
 			if _, err := m.Start(); err != nil {
 				r.ledger.Release(modelID)
-				return -1, err
+				r.forgetManaged(modelID, m)
+				if !wait || !r.canEventuallyAdmit(s) || !startRetryable(err) {
+					return -1, err
+				}
+				r.logger.Infof("retrying load of %s after %v", modelID, err)
+				if !loggedWait {
+					r.logger.Infof("waiting for %d MB for %s (GPU busy)", s.VramMB, modelID)
+					loggedWait = true
+				}
+				if err := r.waitAdmit(ctx); err != nil {
+					return -1, err
+				}
+				continue
 			}
 			m.SetGPU(gpu)
 			return gpu, nil
@@ -139,6 +151,28 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 		}
 	}
 	return want >= 0 && !saw
+}
+
+func startRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "stopped during start") ||
+		strings.Contains(s, "exited during start") ||
+		strings.Contains(s, "health check timed out") ||
+		strings.Contains(s, "process not alive")
+}
+
+func (r *Router) forgetManaged(modelID string, m *Managed) {
+	r.mu.Lock()
+	if r.managed[modelID] == m {
+		delete(r.managed, modelID)
+	}
+	r.mu.Unlock()
+	if m != nil {
+		m.Stop()
+	}
 }
 
 func (r *Router) pokeAdmit() {
@@ -189,7 +223,7 @@ func (r *Router) Unload(modelID string) error {
 
 // evictToFit unloads occupants until the ledger can admit s.
 // Pass 1: stale models. Pass 2 (last resort): any idle model that is not
-// mid-generation or still spinning up, including ttl=0 residents.
+// mid-generation or starting, including ttl=0 residents.
 func (r *Router) evictToFit(s *config.Stanza) {
 	want := deviceIndex(s.Device)
 	r.evictPass(s, want, true)
@@ -231,9 +265,9 @@ func (r *Router) modelStale(id string) bool {
 	return m.IsStale(time.Now())
 }
 
-// protected is true only while a request is mid-generation, or Unload is
-// already stopping the process. A loading (Starting) model is not generating
-// and is evicted so a new request does not 503.
+// protected is true while a request is mid-generation, the process is still
+// spinning up, or Unload is already stopping it. Evicting a start races two
+// loads into "stopped during start" 503s; wait instead.
 func (r *Router) protected(id string) bool {
 	r.mu.Lock()
 	busy := r.occupancy[id] > 0
@@ -242,7 +276,14 @@ func (r *Router) protected(id string) bool {
 	if busy {
 		return true
 	}
-	return m != nil && m.State() == StateStopping
+	if m == nil {
+		return false
+	}
+	switch m.State() {
+	case StateStarting, StateStopping:
+		return true
+	}
+	return false
 }
 
 // Target is a concrete serving destination after pool/spillover resolution.
@@ -289,8 +330,8 @@ func (r *Router) resolveMesh(modelID string) (Target, error) {
 // pickPeerForModel ranks router peers that advertise modelID.
 // slotSpill skips loaded-but-full peers so the caller can queue locally.
 func (r *Router) pickPeerForModel(modelID string, slotSpill bool) (Target, error) {
-	var admit, full Target
-	haveAdmit, haveFull := false, false
+	var admit, wait, full Target
+	haveAdmit, haveWait, haveFull := false, false, false
 	for i := range r.cfg.Peers {
 		p := &r.cfg.Peers[i]
 		if !r.peerHasModel(p, modelID) {
@@ -313,16 +354,26 @@ func (r *Router) pickPeerForModel(modelID string, slotSpill bool) (Target, error
 			}
 			continue
 		}
-		if !r.peerEligible(p.Name, modelID) {
+		if r.peerEligible(p.Name, modelID) {
+			if !haveAdmit {
+				admit = Target{Peer: p.Name, PeerID: modelID}
+				haveAdmit = true
+			}
 			continue
 		}
-		if !haveAdmit {
-			admit = Target{Peer: p.Name, PeerID: modelID}
-			haveAdmit = true
+		// Card is occupied (in-flight, or our local vram_mb is larger than
+		// their free bytes). They listed this model_id — POST /_router/load
+		// and let that node wait/evict instead of 503 here.
+		if !haveWait {
+			wait = Target{Peer: p.Name, PeerID: modelID}
+			haveWait = true
 		}
 	}
 	if haveAdmit {
 		return admit, nil
+	}
+	if haveWait {
+		return wait, nil
 	}
 	if haveFull {
 		return full, nil
@@ -479,10 +530,16 @@ func (r *Router) modelVram(modelID string) int64 {
 	return 0
 }
 
+// peerEmptyHeadroomMB is how close idle-evicted free must be to the card
+// total before we treat the GPU as empty enough to run that node's own
+// stanza. nvidia-smi never reports 100% free (driver crumbs).
+const peerEmptyHeadroomMB int64 = 2048
+
 // peerFits reports whether cached peer telemetry shows a GPU that can take
-// vramMB now, or after that peer evicts its own stale models. Used only to
-// pick a candidate; the peer admits for real. Unknown or zero vram (no local
-// stanza/alias) fails closed.
+// this model now, or after that peer evicts idle (not in-flight) occupants.
+// Used only to pick a candidate; the peer admits for real. Local vram_mb is
+// a hint, not a clamp-to-total: a 24GB node that lists the model still
+// fits when its card is empty even if our stanza is 27GB.
 func (r *Router) peerFits(name string, vramMB int64) bool {
 	if vramMB <= 0 {
 		return false
@@ -495,14 +552,17 @@ func (r *Router) peerFits(name string, vramMB int64) bool {
 		return false
 	}
 	for _, g := range t.GPUs {
-		// Peer stanzas can be smaller than ours (digger 24GB vs buster 32GB
-		// for the same model_id). Cap the need at that card's total so we
-		// still pick a peer that advertises the model.
-		need := vramMB
-		if g.TotalMB > 0 && need > g.TotalMB {
-			need = g.TotalMB
+		evictable := g.FreeIfIdleEvictedMB
+		if evictable < g.FreeIfStaleEvictedMB {
+			evictable = g.FreeIfStaleEvictedMB
 		}
-		if g.FreeMB >= need || g.FreeIfStaleEvictedMB >= need || g.FreeIfIdleEvictedMB >= need {
+		if evictable < g.FreeMB {
+			evictable = g.FreeMB
+		}
+		if evictable >= vramMB {
+			return true
+		}
+		if g.TotalMB > 0 && evictable+peerEmptyHeadroomMB >= g.TotalMB {
 			return true
 		}
 	}
@@ -1067,7 +1127,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			ID: item.id, Freshness: freshness, VramMB: vram, GPU: gpu,
 			Slots: slots, InFlight: item.inFlight,
 		})
-		if gpu >= 0 {
+		if gpu >= 0 && item.inFlight == 0 {
 			idleByGPU[gpu] += vram
 		}
 	}
@@ -1134,7 +1194,15 @@ func (r *Router) BackendMetrics() []BackendMetric {
 // HandleLoad is the control endpoint handler for peer load() calls. Accepts
 // stanza ids and aliases (so a peer can load "coding-model" on a node whose
 // stanza is "qwopus-27b-coder").
-func (r *Router) HandleLoad(ctx context.Context, modelID string) error {
+func loadWaitTimeout(s *config.Stanza) time.Duration {
+	spin := time.Duration(s.SpinUpSeconds) * time.Second
+	if spin < 90*time.Second {
+		spin = 90 * time.Second
+	}
+	return spin + 8*time.Minute
+}
+
+func (r *Router) HandleLoad(_ context.Context, modelID string) error {
 	s := r.cfg.Stanza(modelID)
 	if s == nil {
 		s = r.cfg.Alias(modelID)
@@ -1142,6 +1210,10 @@ func (r *Router) HandleLoad(ctx context.Context, modelID string) error {
 	if s == nil {
 		return fmt.Errorf("unknown local model %q", modelID)
 	}
-	_, err := r.load(ctx, s.ModelID, true)
+	// Detach from the inbound request so a client abort does not cancel a
+	// useful wait/evict/spin. The model stays up for the next request.
+	loadCtx, cancel := context.WithTimeout(context.Background(), loadWaitTimeout(s))
+	defer cancel()
+	_, err := r.load(loadCtx, s.ModelID, true)
 	return err
 }

@@ -124,6 +124,13 @@ func (m *Managed) Start() (int, error) {
 			healthOK = true
 			break
 		}
+		m.mu.Lock()
+		alive := m.proc != nil && m.proc.Alive()
+		m.mu.Unlock()
+		if !alive {
+			m.fail("exited during start")
+			return -1, fmt.Errorf("exited during start for %s", m.stanza.ModelID)
+		}
 		timer := time.NewTimer(500 * time.Millisecond)
 		select {
 		case <-stopCh:

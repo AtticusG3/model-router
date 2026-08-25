@@ -17,10 +17,11 @@ Type=simple
 # backends need access to /home/kevyn models and nvidia devices, which root
 # guarantees. Adjust if you prefer a dedicated user.
 User=root
+LimitMEMLOCK=infinity
 ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml
 Restart=always
 RestartSec=3
-TimeoutStopSec=30
+TimeoutStopSec=60
 # control-group so leftover llama-server children die with the unit.
 KillMode=control-group
 

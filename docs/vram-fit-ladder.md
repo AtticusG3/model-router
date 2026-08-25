@@ -190,7 +190,7 @@ a second 256k cache, so it stays one slot.
 | Node | GPU | `model_id` | Winning ladder | used | `vram_mb` |
 |---|---|---|---|---:|---:|
 | buster | V100 32GB | `agents-a1` | 1×256k turbo4, MTP+mmproj | 26949 | 27500 |
-| buster | V100 32GB | `qwen3.8-27b` | 1×256k turbo4 | 26451 | 27000 |
+| buster | V100 32GB | `qwen3.8-27b` | 1×256k turbo4, mmproj+MTP draft (`-md`) | 30645 | 31200 |
 | buster | V100 32GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Quality) | 26027 | 26600 |
 | buster | V100 32GB | `qwen3.6-35b-a3b` | 2×256k turbo4, MTP+mmproj (Quality), `--ctx-size 524288 --parallel 2` | 29713 | 30300 |
 | buster | V100 32GB | `ornith-1.5-35b-a3b-bigbang` | 2×256k turbo4, grafted MTP Q5_K_M, `--ctx-size 524288 --parallel 2` | 32099 | 32600 |
@@ -198,14 +198,14 @@ a second 256k cache, so it stays one slot.
 | buster | 4060 8GB | `qwen3-embedding-4b` | specialist | 3419 | 3600 |
 | buster | 4060 8GB | `jina-reranker-v3.5` | specialist | 1269 | 1500 |
 | nugget | V100 32GB | `agents-a1` | 1×256k turbo4, MTP+mmproj | 26395 | 27000 |
-| nugget | V100 32GB | `qwen3.8-27b` | 1×256k turbo4 | 26819 | 27400 |
+| nugget | V100 32GB | `qwen3.8-27b` | 1×256k turbo4, mmproj+MTP draft (`-md`) | 30827 | 31400 |
 | nugget | V100 32GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Quality) | 26331 | 26900 |
 | nugget | V100 32GB | `qwen3.6-35b-a3b` | 2×256k turbo4, MTP+mmproj (Quality), `--ctx-size 524288 --parallel 2` | 30081 | 30600 |
 | nugget | V100 32GB | `ornith-1.5-35b-a3b-bigbang` | 2×256k turbo4, grafted MTP Q5_K_M, `--ctx-size 524288 --parallel 2` | 32161 | 32700 |
 | nugget | V100 32GB | `qwen3-embedding-4b` | specialist | 4029 | 4200 |
 | nugget | V100 32GB | `jina-reranker-v3.5` | specialist | 1881 | 2000 |
 | digger | RTX PRO 4000 24GB | `ornith-1.0-35b-heretic` | 1×256k turbo4, MTP+mmproj (Compact) | 20689 | 21200 |
-| digger | RTX PRO 4000 24GB | `qwen3.8-27b` | 1×128k turbo4 (256k lost) | 22753 | 23300 |
+| digger | RTX PRO 4000 24GB | `qwen3.8-27b` | 1×128k turbo4, no MTP (256k + MTP lost) | 23777 | 22500 |
 | digger | RTX PRO 4000 24GB | `ornith-1.5-35b-a3b-bigbang` | 1×256k turbo4, no MTP (Q4_K_M). 2×256k `--ctx-size 524288` died | 23788 | 23200 |
 | digger | CPU | `qwen3-0.6b-instruct` | ngl 0 | 0 | 0 |
 | gareth | 5060 Ti 16GB | `qwen3.6-35b-a3b` | 1×256k turbo4, no MTP, no mmproj (Compact) | 14732 | 15200 |

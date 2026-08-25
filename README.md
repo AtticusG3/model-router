@@ -21,7 +21,8 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
   free VRAM, and free VRAM if stale or idle models were evicted.
 - Spills requests to peers when the local node can't serve them (model not
   local, or GPU full): `POST /_router/load` on the candidate, then a streamed
-  transparent reverse proxy.
+  transparent reverse proxy. If no peer is empty right now, the origin still
+  picks a node that lists the model and that node waits/evicts instead of 503.
 - Works fully offline: a node serves everything in its own stanza catalog even
   if the LAN is gone; unreachable peers are excluded via telemetry staleness.
 - Includes an embedded operator WebUI at `/ui/` (see below).

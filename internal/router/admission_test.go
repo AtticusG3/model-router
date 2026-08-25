@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -335,7 +336,7 @@ func TestLoadDoesNotEvictInFlight(t *testing.T) {
 	}
 }
 
-func TestLoadEvictsStartingNeighbor(t *testing.T) {
+func TestLoadDoesNotEvictStartingNeighbor(t *testing.T) {
 	r := loadTestRouter(t)
 	healthPort := r.cfg.Stanza("a").Port
 	r.cfg.Stanza("a").Device = "0"
@@ -358,16 +359,39 @@ func TestLoadEvictsStartingNeighbor(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := r.Load("b"); err != nil {
-		t.Fatalf("Load b should evict starting (non-generating) a: %v", err)
+	if _, err := r.Load("b"); err == nil {
+		t.Fatal("Load b must not evict starting a")
 	}
-	if _, ok := r.managed["a"]; ok {
-		t.Fatal("starting a should have been evicted")
+	if r.managed["a"] == nil || r.managed["a"].State() != StateStarting {
+		t.Fatal("a must still be starting")
 	}
+	_ = r.Unload("a")
 	select {
 	case <-errCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Load a goroutine did not return after evict")
+		t.Fatal("Load a goroutine did not return after unload")
+	}
+}
+
+func TestLoadRetriesAfterExitDuringStart(t *testing.T) {
+	r := loadTestRouter(t)
+	var n atomic.Int32
+	r.spawn = func(string, []string) (Proc, error) {
+		fp := newFakeProc()
+		if n.Add(1) == 1 {
+			fp.mu.Lock()
+			fp.alive = false
+			fp.mu.Unlock()
+		}
+		return fp, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if _, err := r.load(ctx, "a", true); err != nil {
+		t.Fatalf("should retry after exit during start: %v", err)
+	}
+	if n.Load() < 2 {
+		t.Fatalf("spawn count %d, want >= 2", n.Load())
 	}
 }
 
