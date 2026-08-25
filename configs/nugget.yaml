@@ -149,9 +149,11 @@ stanzas:
     command: >
       /opt/ai/bin/llama-server
       --model /opt/ai/models/llm/Qwen3.8-27B-UD-Q5_K_XL.gguf
+      --mmproj /opt/ai/models/llm/mmproj-Qwen3.8-27B-UD-F16.gguf
+      -md /opt/ai/models/llm/mtp-Qwen3.8-27B-Q4_0.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 262144 --threads 2 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --ctx-size 262144 --threads 2 --parallel 1 --cont-batching --flash-attn on --load-mode mmap+mlock
       --cache-type-k turbo4 --cache-type-v turbo4
       --cache-reuse 256 --batch-size 512 --ubatch-size 256 --metrics
       --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
@@ -160,7 +162,7 @@ stanzas:
       --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
       --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none
-    vram_mb: 27400
+    vram_mb: 31400
     device: 0
     spin_up_seconds: 90
     api_type: chat

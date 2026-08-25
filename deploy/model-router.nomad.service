@@ -1,0 +1,23 @@
+# Install on nomad as /etc/systemd/system/model-router.service
+
+[Unit]
+Description=model-router v0.1 (nomad, Qwen3.5 9B vision)
+After=network-online.target
+Wants=network-online.target
+Conflicts=llama-swap.service
+
+[Service]
+Type=simple
+User=kevyn
+Group=kevyn
+LimitMEMLOCK=infinity
+Environment=HOME=/home/kevyn
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml --node nomad
+Restart=always
+RestartSec=3
+TimeoutStopSec=60
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,24 @@
+# Install on digger as /etc/systemd/system/model-router.service
+#
+# Root (same as the old llama-swap unit). LimitMEMLOCK for --mlock chat
+# stanzas. KillMode so llama-server children die with the router.
+
+[Unit]
+Description=model-router v0.1 sd.cpp image + LLM models (kevyns-homelab)
+After=network-online.target
+Wants=network-online.target
+Conflicts=llama-swap.service
+
+[Service]
+Type=simple
+User=root
+LimitMEMLOCK=infinity
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml --node digger
+Restart=always
+RestartSec=3
+TimeoutStopSec=60
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

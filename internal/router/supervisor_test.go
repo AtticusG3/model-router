@@ -107,6 +107,26 @@ func testManaged(t *testing.T, port int, fp *fakeProc) *Managed {
 	return m
 }
 
+func TestStartAbortsWhenProcessDies(t *testing.T) {
+	fp := newFakeProc()
+	fp.mu.Lock()
+	fp.alive = false
+	fp.mu.Unlock()
+	m := testManaged(t, 1, fp)
+	m.stanza.SpinUpSeconds = 8
+	start := time.Now()
+	_, err := m.Start()
+	if err == nil {
+		t.Fatal("expected start failure")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("must abort on dead process, not wait spin_up")
+	}
+	if !strings.Contains(err.Error(), "exited during start") {
+		t.Fatalf("err = %v, want exited during start", err)
+	}
+}
+
 func TestStartSuccess(t *testing.T) {
 	port, _ := healthServer(t)
 	fp := newFakeProc()
