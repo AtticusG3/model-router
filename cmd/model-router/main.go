@@ -84,6 +84,10 @@ func main() {
 	syncEvery := time.Duration(cfg.Telemetry.PeerSyncSeconds) * time.Second
 	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery, logger).Run(ctx)
 
+	// Idle-TTL reaper: actively evict backends whose idle_ttl_seconds has
+	// expired (lazy eviction alone only frees VRAM under admission pressure).
+	go router.IdleTTLReaper(ctx, r, 30*time.Second)
+
 	handler := router.NewHandler(r, logger)
 	srv, _, errCh, err := startHTTPServer(cfg.Listen, handler, logger)
 	if err != nil {
