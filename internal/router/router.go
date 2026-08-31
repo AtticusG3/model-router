@@ -221,6 +221,41 @@ func (r *Router) Unload(modelID string) error {
 	return nil
 }
 
+// SweepStale actively evicts running models whose idle TTL has expired.
+// Lazy eviction (evictToFit) only reclaims VRAM when a new load needs it;
+// this sweep makes ttl a real eviction deadline so VRAM returns to the
+// system (e.g. for hashcat's governor to see) even with no incoming load.
+// Models with ttl <= 0 are resident and never swept. In-flight requests,
+// starting/stopping processes are protected.
+func (r *Router) SweepStale() {
+	for _, id := range r.cfg.StanzaIDs() {
+		if !r.modelStale(id) {
+			continue
+		}
+		if r.protected(id) {
+			continue
+		}
+		r.logger.Infof("[router] idle TTL expired: evicting %s", id)
+		if err := r.Unload(id); err != nil {
+			r.logger.Errorf("[router] ttl evict %s: %v", id, err)
+		}
+	}
+}
+
+// IdleTTLReaper runs SweepStale on a ticker until ctx is cancelled.
+func IdleTTLReaper(ctx context.Context, r *Router, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			r.SweepStale()
+		}
+	}
+}
+
 // evictToFit unloads occupants until the ledger can admit s.
 // Pass 1: stale models. Pass 2 (last resort): any idle model that is not
 // mid-generation or starting, including ttl=0 residents.
