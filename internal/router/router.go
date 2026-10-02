@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,8 +30,11 @@ type Router struct {
 	mu        sync.Mutex
 	managed   map[string]*Managed // local stanza id -> supervisor
 	occupancy map[string]int      // target key -> in-flight selected requests
+	draining  map[string]bool     // claimed for unload; new requests wait
 	spawn     spawner             // tests inject a fake; nil uses the GOOS default
 	admitWait chan struct{}       // 1-buffer poke when occupancy/unload may free VRAM
+	shutdown  chan struct{}
+	shutOnce  sync.Once
 
 	httpc    *http.Client
 	activity *ActivityLog
@@ -46,10 +51,18 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		node:      node,
 		managed:   map[string]*Managed{},
 		occupancy: map[string]int{},
+		draining:  map[string]bool{},
 		admitWait: make(chan struct{}, 1),
+		shutdown:  make(chan struct{}),
 		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
 		activity:  NewActivityLog(),
 	}
+}
+
+// Shutdown tells supervisors not to restart backends and cancels in-flight
+// peer loads. Call it before unloading on process exit.
+func (r *Router) Shutdown() {
+	r.shutOnce.Do(func() { close(r.shutdown) })
 }
 
 // Activity returns the in-memory generation request log for the operator UI.
@@ -61,30 +74,37 @@ func (r *Router) Ledger() *Ledger { return r.ledger }
 // Peers returns the peer cache (used by the peer syncer and status).
 func (r *Router) Peers() *PeerCache { return r.peers }
 
-// Load ensures the given local stanza is running. Fail-fast: preload and
-// tests use this. Request paths use load(..., true) so a busy GPU queues
-// instead of 503.
+// Load ensures the given local stanza (or "model#n" instance) is running.
+// Fail-fast: preload and tests use this. Request paths use load(..., true)
+// so a busy GPU queues instead of 503.
 func (r *Router) Load(modelID string) (int, error) {
 	return r.load(context.Background(), modelID, false)
 }
 
-func (r *Router) load(ctx context.Context, modelID string, wait bool) (int, error) {
-	s := r.cfg.Stanza(modelID)
-	if s == nil {
-		return -1, fmt.Errorf("unknown local model %q", modelID)
+func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
+	s := r.cfg.Stanza(instanceModel(key))
+	if n := instanceIndex(key); s == nil || n < 0 || n >= s.InstanceCount() {
+		return -1, fmt.Errorf("unknown local model %q", key)
+	}
+	// An extra copy is opportunistic: if its GPU is gone, the caller queues
+	// on a sibling instead of evicting or waiting here.
+	evictOK := !r.hasLiveSibling(key)
+	if !evictOK {
+		wait = false
 	}
 
 	loggedWait := false
+	hardRetries := 0
+	var lastErr error
 	for {
-		r.mu.Lock()
-		m, ok := r.managed[modelID]
-		if !ok {
-			m = newManaged(s, s.Port, r.logger)
-			if r.spawn != nil {
-				m.spawn = r.spawn
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return -1, lastErr
 			}
-			r.managed[modelID] = m
+			return -1, err
 		}
+		r.mu.Lock()
+		m := r.managedLocked(key, s)
 		r.mu.Unlock()
 
 		if m.State() == StateRunning {
@@ -93,36 +113,65 @@ func (r *Router) load(ctx context.Context, modelID string, wait bool) (int, erro
 
 		// Admission control: reserve VRAM before spawning. Keep it until Unload
 		// or failed Start so crash-restart does not need to re-reserve.
-		gpu, ok := r.ledger.Reserve(s)
-		if !ok {
-			r.evictToFit(s)
-			gpu, ok = r.ledger.Reserve(s)
+		// A hard start failure (the child died) gets one quiet retry so a
+		// stale nvidia-smi reading can catch up. That retry must not evict
+		// neighbors: the failure was this model, not a busy card.
+		gpu, reserved := r.ledger.Reserve(key, s)
+		if !reserved && hardRetries == 0 && evictOK {
+			r.evictToFit(key, s)
+			gpu, reserved = r.ledger.Reserve(key, s)
 		}
-		if ok {
-			if _, err := m.Start(); err != nil {
-				r.ledger.Release(modelID)
-				r.forgetManaged(modelID, m)
-				if !wait || !r.canEventuallyAdmit(s) || !startRetryable(err) {
+		if reserved {
+			m.place(gpu)
+			if gpu >= 0 {
+				r.logger.Infof("%s placed on GPU %d", key, gpu)
+			}
+			_, err := m.Start()
+			if err != nil {
+				var joined joinedStart
+				if errors.As(err, &joined) {
+					return -1, joined.err
+				}
+				lastErr = err
+				r.ledger.Release(key)
+				r.forgetManaged(key, m)
+				if !wait || !r.canEventuallyAdmit(s) {
 					return -1, err
 				}
-				r.logger.Infof("retrying load of %s after %v", modelID, err)
-				if !loggedWait {
-					r.logger.Infof("waiting for %d MB for %s (GPU busy)", s.VramMB, modelID)
-					loggedWait = true
+				if hardStartFailure(err) {
+					if hardRetries >= 1 {
+						return -1, err
+					}
+					hardRetries++
+					r.logger.Infof("retrying load of %s after %v", key, err)
+					if err := r.waitAdmit(ctx); err != nil {
+						return -1, lastErr
+					}
+					continue
 				}
+				if !stoppedDuringStart(err) {
+					return -1, err
+				}
+				r.logger.Infof("retrying load of %s after %v", key, err)
 				if err := r.waitAdmit(ctx); err != nil {
-					return -1, err
+					return -1, lastErr
 				}
 				continue
 			}
 			m.SetGPU(gpu)
 			return gpu, nil
 		}
-		if !wait || !r.canEventuallyAdmit(s) {
-			return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, modelID)
+		if hardRetries > 0 || !wait || !r.canEventuallyAdmit(s) {
+			if !evictOK {
+				r.forgetManaged(key, m)
+			}
+			if lastErr != nil {
+				return -1, lastErr
+			}
+			return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, key)
 		}
 		if !loggedWait {
-			r.logger.Infof("waiting for %d MB for %s (GPU busy)", s.VramMB, modelID)
+			r.logger.Infof("waiting for %d MB for %s (GPU busy)", s.VramMB, key)
 			loggedWait = true
 		}
 		if err := r.waitAdmit(ctx); err != nil {
@@ -131,35 +180,83 @@ func (r *Router) load(ctx context.Context, modelID string, wait bool) (int, erro
 	}
 }
 
+func stanzaGPUs(s *config.Stanza) []int {
+	idxs := deviceIndexes(s.Device)
+	if len(idxs) == 0 {
+		return []int{deviceIndex(s.Device)}
+	}
+	return idxs
+}
+
 // canEventuallyAdmit is true unless we know the pinned (or every) card is
 // smaller than s. Missing telemetry and a missing pinned GPU wait rather
 // than 503: occupied VRAM can free after idle eviction.
 func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
-	want := deviceIndex(s.Device)
+	idxs := deviceIndexes(s.Device)
 	gpus := r.ledger.GPUs()
 	if len(gpus) == 0 {
 		return true
 	}
-	saw := false
+	totals := map[int]int64{}
 	for _, g := range gpus {
-		if want >= 0 && g.Index != want {
+		totals[g.Index] = g.TotalMB
+	}
+	if splitPlacement(s) {
+		var capSum int64
+		for _, idx := range idxs {
+			t := totals[idx]
+			if t <= 0 {
+				return true // GPU not in telemetry yet
+			}
+			capSum += t
+		}
+		var assigned int64
+		for i, idx := range idxs {
+			var need int64
+			if i == len(idxs)-1 {
+				need = s.VramMB - assigned
+			} else {
+				need = s.VramMB * totals[idx] / capSum
+				assigned += need
+			}
+			if totals[idx] < need {
+				return false
+			}
+		}
+		return true
+	}
+	pinned := len(idxs) > 0
+	if !pinned {
+		for _, g := range gpus {
+			idxs = append(idxs, g.Index)
+		}
+	}
+	saw := false
+	for _, idx := range idxs {
+		total, ok := totals[idx]
+		if !ok {
 			continue
 		}
 		saw = true
-		if g.TotalMB <= 0 || g.TotalMB >= s.VramMB {
+		if total <= 0 || total >= s.VramMB {
 			return true
 		}
 	}
-	return want >= 0 && !saw
+	return pinned && !saw
 }
 
-func startRetryable(err error) bool {
+func stoppedDuringStart(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "stopped during start")
+}
+
+// hardStartFailure means the child died or never became healthy. Retrying it
+// by evicting other models does not make a too-large KV cache fit.
+func hardStartFailure(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := err.Error()
-	return strings.Contains(s, "stopped during start") ||
-		strings.Contains(s, "exited during start") ||
+	return strings.Contains(s, "exited during start") ||
 		strings.Contains(s, "health check timed out") ||
 		strings.Contains(s, "process not alive")
 }
@@ -195,28 +292,59 @@ func (r *Router) waitAdmit(ctx context.Context) error {
 	}
 }
 
-// Unload stops a local model and releases its VRAM reservation. A ledger
-// reservation without a process still gets released so eviction cannot 503
-// on a ghost occupant.
-func (r *Router) Unload(modelID string) error {
+// Unload stops a local model: every instance for a model id, or a single one
+// for "model#n".
+func (r *Router) Unload(id string) error {
+	s := r.cfg.Stanza(id)
+	if s == nil || s.InstanceCount() == 1 {
+		return r.unloadInstance(id)
+	}
+	unloaded := false
+	for n := 0; n < s.InstanceCount(); n++ {
+		if r.unloadInstance(instanceKey(id, n)) == nil {
+			unloaded = true
+		}
+	}
+	if !unloaded {
+		return fmt.Errorf("not loaded: %s", id)
+	}
+	return nil
+}
+
+// unloadInstance stops one backend and releases its VRAM reservation. A
+// ledger reservation without a process still gets released so eviction
+// cannot 503 on a ghost occupant.
+func (r *Router) unloadInstance(key string) error {
+	defer func() {
+		r.mu.Lock()
+		delete(r.draining, key)
+		r.mu.Unlock()
+	}()
 	r.mu.Lock()
-	m, ok := r.managed[modelID]
-	delete(r.managed, modelID)
+	m, ok := r.managed[key]
+	delete(r.managed, key)
 	r.mu.Unlock()
-	gpu := r.ledger.reservedGPU(modelID)
+	gpu := r.ledger.reservedGPU(key)
+	used := r.ledger.reservationUsed(key)
 	if m != nil {
 		if g := m.gpuIndex(); g >= 0 {
 			gpu = g
 		}
 		m.Stop()
 	}
-	vram := r.modelVram(modelID)
-	had := gpu >= 0 || ok
-	r.ledger.Release(modelID)
-	r.ledger.Credit(gpu, vram)
+	vram := r.modelVram(key)
+	had := gpu >= 0 || ok || len(used) > 0
+	r.ledger.Release(key)
+	if len(used) > 0 {
+		for g, mb := range used {
+			r.ledger.Credit(g, mb)
+		}
+	} else {
+		r.ledger.Credit(gpu, vram)
+	}
 	r.pokeAdmit()
 	if !had {
-		return fmt.Errorf("not loaded: %s", modelID)
+		return fmt.Errorf("not loaded: %s", key)
 	}
 	return nil
 }
@@ -226,20 +354,41 @@ func (r *Router) Unload(modelID string) error {
 // this sweep makes ttl a real eviction deadline so VRAM returns to the
 // system (e.g. for hashcat's governor to see) even with no incoming load.
 // Models with ttl <= 0 are resident and never swept. In-flight requests,
-// starting/stopping processes are protected.
+// starting/stopping processes are protected. Each instance ages on its own,
+// so an idle extra copy is reclaimed while a busy sibling stays.
 func (r *Router) SweepStale() {
-	for _, id := range r.cfg.StanzaIDs() {
-		if !r.modelStale(id) {
+	r.mu.Lock()
+	keys := make([]string, 0, len(r.managed))
+	for key := range r.managed {
+		keys = append(keys, key)
+	}
+	r.mu.Unlock()
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !r.claimForSweep(key) {
 			continue
 		}
-		if r.protected(id) {
-			continue
-		}
-		r.logger.Infof("[router] idle TTL expired: evicting %s", id)
-		if err := r.Unload(id); err != nil {
-			r.logger.Errorf("[router] ttl evict %s: %v", id, err)
+		r.logger.Infof("idle TTL expired: evicting %s", key)
+		if err := r.unloadInstance(key); err != nil {
+			r.logger.Errorf("ttl evict %s: %v", key, err)
 		}
 	}
+}
+
+// claimForSweep marks a stale idle model so a request cannot take a slot
+// between the check and Unload. Unload clears the mark.
+func (r *Router) claimForSweep(id string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.draining[id] || r.occupancy[id] > 0 {
+		return false
+	}
+	m := r.managed[id]
+	if m == nil || !m.IsStale(time.Now()) {
+		return false
+	}
+	r.draining[id] = true
+	return true
 }
 
 // IdleTTLReaper runs SweepStale on a ticker until ctx is cancelled.
@@ -256,48 +405,181 @@ func IdleTTLReaper(ctx context.Context, r *Router, every time.Duration) {
 	}
 }
 
-// evictToFit unloads occupants until the ledger can admit s.
-// Pass 1: stale models. Pass 2 (last resort): any idle model that is not
-// mid-generation or starting, including ttl=0 residents.
-func (r *Router) evictToFit(s *config.Stanza) {
-	want := deviceIndex(s.Device)
-	r.evictPass(s, want, true)
-	if r.ledger.CanAdmit(s) {
+// evictKind selects which occupants one eviction pass may unload.
+type evictKind int
+
+const (
+	evictStale evictKind = iota
+	evictIdle
+	evictResident
+)
+
+var evictKinds = []evictKind{evictStale, evictIdle, evictResident}
+
+func (k evictKind) String() string {
+	switch k {
+	case evictStale:
+		return "stale"
+	case evictIdle:
+		return "idle"
+	case evictResident:
+		return "resident"
+	default:
+		return fmt.Sprintf("evictKind(%d)", int(k))
+	}
+}
+
+// evictToFit unloads occupants until the ledger can admit instance key of s.
+// Stale non-residents go first, then any other idle non-resident, then ttl=0
+// residents (the 3090 intent/embed/rerank trio) only as a last resort.
+func (r *Router) evictToFit(key string, s *config.Stanza) {
+	if splitPlacement(s) {
+		r.evictSplit(key, s)
 		return
 	}
-	r.evictPass(s, want, false)
+	r.evictOneGPU(key, s)
 }
 
-func (r *Router) evictPass(s *config.Stanza, gpu int, staleOnly bool) {
-	for _, id := range r.ledger.occupantsOnGPU(gpu, s.ModelID) {
-		if r.protected(id) {
-			continue
-		}
-		if staleOnly && !r.modelStale(id) {
-			continue
-		}
-		why := "idle"
-		if staleOnly {
-			why = "stale"
-		}
-		r.logger.Infof("evicting %s %s to admit %s", why, id, s.ModelID)
-		if err := r.Unload(id); err != nil {
-			r.logger.Errorf("evict %s: %v", id, err)
-		}
-		if r.ledger.CanAdmit(s) {
-			return
+// evictSplit frees room for a model that spans several GPUs: it needs a share
+// on every listed card, so each pass walks all of them.
+func (r *Router) evictSplit(key string, s *config.Stanza) {
+	for _, kind := range evictKinds {
+		for _, gpu := range stanzaGPUs(s) {
+			for _, id := range r.ledger.occupantsOnGPU(gpu, key) {
+				if !r.claimForEvict(id, kind) {
+					continue
+				}
+				r.evict(id, kind, key, gpu)
+				if r.ledger.CanAdmit(key, s) {
+					return
+				}
+			}
 		}
 	}
 }
 
-func (r *Router) modelStale(id string) bool {
+// evictOneGPU frees a single card for a single-GPU model. Every candidate GPU
+// is planned first and only the gentlest plan runs: the lowest eviction kind
+// that works (stale before idle before resident), then the fewest MB
+// unloaded, then device order. So a stale model on one V100 is evicted
+// before an idle one on the other, and a card is never half-emptied for
+// nothing while the model lands somewhere else.
+func (r *Router) evictOneGPU(key string, s *config.Stanza) {
+	if r.ledger.CanAdmit(key, s) {
+		return
+	}
+	type victim struct {
+		id   string
+		kind evictKind
+	}
+	for level, upTo := range evictKinds {
+		var best []victim
+		bestGPU, bestMB := -1, int64(-1)
+		for _, gpu := range r.ledger.CandidateGPUs(s) {
+			var plan []victim
+			var ids []string
+			var mb int64
+			picked := map[string]bool{}
+			fits := false
+		fill:
+			for _, kind := range evictKinds[:level+1] {
+				for _, id := range r.ledger.occupantsOnGPU(gpu, key) {
+					if picked[id] || !r.evictable(id, kind) {
+						continue
+					}
+					picked[id] = true
+					plan = append(plan, victim{id, kind})
+					ids = append(ids, id)
+					mb += r.ledger.reservationUsed(id)[gpu]
+					if fits = r.ledger.CanAdmitOn(key, s, gpu, ids); fits {
+						break fill
+					}
+				}
+			}
+			if fits && (bestMB < 0 || mb < bestMB) {
+				best, bestGPU, bestMB = plan, gpu, mb
+			}
+		}
+		if bestGPU < 0 {
+			continue
+		}
+		r.logger.Infof("freeing GPU %d for %s (%s eviction, %d MB)", bestGPU, key, upTo, bestMB)
+		for _, v := range best {
+			if !r.claimForEvict(v.id, v.kind) {
+				return // raced with a request; the load loop re-plans
+			}
+			r.evict(v.id, v.kind, key, bestGPU)
+		}
+		return
+	}
+}
+
+func (r *Router) evict(id string, kind evictKind, forKey string, gpu int) {
+	r.logger.Infof("evicting %s %s from GPU %d to admit %s", kind, id, gpu, forKey)
+	if err := r.unloadInstance(id); err != nil {
+		r.logger.Errorf("evict %s: %v", id, err)
+	}
+}
+
+// claimForEvict marks an occupant for unload if kind allows it. Unload
+// clears the mark.
+func (r *Router) claimForEvict(id string, kind evictKind) bool {
 	r.mu.Lock()
-	m := r.managed[id]
-	r.mu.Unlock()
-	if m == nil {
+	defer r.mu.Unlock()
+	if !r.evictableLocked(id, kind) {
 		return false
 	}
-	return m.IsStale(time.Now())
+	r.draining[id] = true
+	return true
+}
+
+func (r *Router) evictable(id string, kind evictKind) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.evictableLocked(id, kind)
+}
+
+// evictableLocked reports whether kind allows unloading id now. vram_mb <= 0
+// does not free a GPU, so those stanzas are left alone. Caller holds r.mu.
+func (r *Router) evictableLocked(id string, kind evictKind) bool {
+	if r.draining[id] || r.occupancy[id] > 0 {
+		return false
+	}
+	if r.modelVram(id) <= 0 {
+		return false
+	}
+	m := r.managed[id]
+	sticky := r.residentModel(id)
+	switch kind {
+	case evictStale:
+		if sticky || m == nil || !m.IsStale(time.Now()) {
+			return false
+		}
+	case evictIdle:
+		if sticky {
+			return false
+		}
+	case evictResident:
+		if !sticky {
+			return false
+		}
+	default:
+		return false
+	}
+	if m != nil {
+		switch m.State() {
+		case StateStarting, StateStopping:
+			return false
+		}
+	}
+	return true
+}
+
+// residentModel is a ttl=0 stanza. Those stay loaded across sweeps and are
+// the last models evictToFit will touch.
+func (r *Router) residentModel(id string) bool {
+	s := r.stanzaOf(id)
+	return s != nil && s.IdleTTLSeconds <= 0
 }
 
 // protected is true while a request is mid-generation, the process is still
@@ -455,9 +737,23 @@ func (r *Router) busy(id string) bool {
 }
 
 func (r *Router) holdOccupancy(id string) {
-	r.mu.Lock()
-	r.occupancy[id]++
-	r.mu.Unlock()
+	for {
+		r.mu.Lock()
+		if !r.draining[id] {
+			r.occupancy[id]++
+			r.mu.Unlock()
+			return
+		}
+		r.mu.Unlock()
+		select {
+		case <-r.shutdown:
+			r.mu.Lock()
+			r.occupancy[id]++
+			r.mu.Unlock()
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 func (r *Router) occupancyOf(id string) int {
@@ -466,44 +762,36 @@ func (r *Router) occupancyOf(id string) int {
 	return r.occupancy[id]
 }
 
-// tryHoldLocalSlot increments occupancy when it is below the stanza's slot
-// cap. False means the local backend is full; the caller should spill or
-// queue.
-func (r *Router) tryHoldLocalSlot(id string) bool {
-	slots := 1
-	if s := r.cfg.Stanza(id); s != nil {
-		slots = s.SlotCount()
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.occupancy[id] >= slots {
-		return false
-	}
-	r.occupancy[id]++
-	return true
-}
-
+// localCanServe reports whether s is up (or starting) here, or could be
+// admitted by evicting occupants that are not mid-request.
 func (r *Router) localCanServe(s *config.Stanza) bool {
 	if s == nil {
 		return false
 	}
 	r.mu.Lock()
-	m := r.managed[s.ModelID]
-	running := m != nil && m.State() == StateRunning
+	live := len(r.liveInstancesLocked(s)) > 0
 	r.mu.Unlock()
-	if running {
+	if live {
 		return true
 	}
+	key := instanceKey(s.ModelID, 0)
 	var evict []string
 	blocked := false
-	for _, id := range r.ledger.occupantsOnGPU(deviceIndex(s.Device), s.ModelID) {
-		if r.protected(id) {
-			blocked = true
-			continue
+	seen := map[string]bool{}
+	for _, gpu := range stanzaGPUs(s) {
+		for _, id := range r.ledger.occupantsOnGPU(gpu, key) {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if r.protected(id) {
+				blocked = true
+				continue
+			}
+			evict = append(evict, id)
 		}
-		evict = append(evict, id)
 	}
-	if r.ledger.CanAdmitEvicting(s, evict) {
+	if r.ledger.CanAdmitEvicting(key, s, evict) {
 		return true
 	}
 	// nvidia-smi free can stay below vram_mb after idle eviction until the
@@ -542,24 +830,25 @@ func (r *Router) peerSlotInfo(name, modelID string) (loaded, free, known bool) {
 	if t == nil {
 		return false, false, false
 	}
+	// A peer lists each instance of a model separately; any free one counts.
 	for _, m := range t.LoadedModels {
 		if m.ID != modelID {
 			continue
 		}
+		loaded = true
 		slots := m.Slots
 		if slots <= 0 {
 			slots = 1
 		}
-		return true, m.InFlight < slots, true
+		if m.InFlight < slots {
+			free = true
+		}
 	}
-	return false, false, true
+	return loaded, free, true
 }
 
-func (r *Router) modelVram(modelID string) int64 {
-	if s := r.cfg.Stanza(modelID); s != nil {
-		return s.VramMB
-	}
-	if s := r.cfg.Alias(modelID); s != nil {
+func (r *Router) modelVram(id string) int64 {
+	if s := r.stanzaOf(id); s != nil {
 		return s.VramMB
 	}
 	return 0
@@ -738,17 +1027,24 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 			}
 		}
 	}
-	if !incomingPeer && r.tryHoldLocalSlot(modelID) {
-		err := r.proxyLocalHeld(w, req, modelID)
-		r.releaseOccupancy(Target{Local: modelID})
-		if err == nil {
+	// A free slot on a running instance, or a new instance on a free GPU,
+	// beats sending the request off-node.
+	if s := r.cfg.Stanza(modelID); !incomingPeer && s != nil {
+		if key, ok := r.acquireInstance(s, false); ok {
+			err := r.proxyLocalHeld(w, req, key)
+			r.releaseOccupancy(Target{Local: key})
+			if err == nil {
+				return
+			}
+			if r.hasLiveSibling(key) && r.proxyLocal(w, req, modelID) == nil {
+				return
+			}
+			if r.serveSpill(w, req, modelID) {
+				return
+			}
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		if r.serveSpill(w, req, modelID) {
-			return
-		}
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
 	}
 	if !incomingPeer && r.serveSlotSpill(w, req, modelID) {
 		return
@@ -874,25 +1170,36 @@ func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID st
 	}
 }
 
+// proxyLocal serves req on the best instance of modelID, queueing on the
+// least-loaded one when every instance is busy.
 func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID string) error {
-	r.holdOccupancy(modelID)
-	defer r.releaseOccupancy(Target{Local: modelID})
-	return r.proxyLocalHeld(w, req, modelID)
+	s := r.cfg.Stanza(modelID)
+	if s == nil {
+		return fmt.Errorf("unknown local model %q", modelID)
+	}
+	key, ok := r.acquireInstance(s, true)
+	if !ok {
+		return fmt.Errorf("router shutting down")
+	}
+	defer r.releaseOccupancy(Target{Local: key})
+	return r.proxyLocalHeld(w, req, key)
 }
 
-func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, modelID string) error {
-	if _, err := r.load(req.Context(), modelID, true); err != nil {
+// proxyLocalHeld loads instance key if needed and proxies to it. The caller
+// already holds an occupancy slot on key.
+func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key string) error {
+	if _, err := r.load(req.Context(), key, true); err != nil {
 		return err
 	}
 	r.mu.Lock()
-	m := r.managed[modelID]
+	m := r.managed[key]
 	r.mu.Unlock()
 	if m == nil || m.State() != StateRunning {
 		return fmt.Errorf("model failed to start")
 	}
 	m.markUsed()
 	defer m.markUsed()
-	r.proxyTo(w, req, m.stanza.Proxy, modelID, r.node)
+	r.proxyTo(w, req, m.proxyURL, key, r.node)
 	return nil
 }
 
@@ -1064,6 +1371,8 @@ type ModelStatus struct {
 	Freshness string `json:"freshness,omitempty"` // fresh | stale when running locally
 	VramMB    int64  `json:"vram_mb,omitempty"`
 	APIType   string `json:"api_type,omitempty"`
+	// GPUs lists where running local instances sit, one entry per instance.
+	GPUs []int `json:"gpus,omitempty"`
 }
 
 // LocalModelStatuses lists unique mesh models (local + reachable remotes).
@@ -1079,26 +1388,42 @@ func (r *Router) AllModelStatuses() []ModelStatus {
 func (r *Router) catalogStatuses() []ModelStatus {
 	var out []ModelStatus
 	seen := map[string]bool{}
+	now := time.Now()
 	for _, id := range r.cfg.StanzaIDs() {
 		s := r.cfg.Stanza(id)
+		var insts []*Managed
 		r.mu.Lock()
-		m, ok := r.managed[id]
-		st := ProcessState(StateStopped)
-		if ok {
-			st = m.State()
+		for n := 0; n < s.InstanceCount(); n++ {
+			if m := r.managed[instanceKey(id, n)]; m != nil {
+				insts = append(insts, m)
+			}
 		}
 		r.mu.Unlock()
+		// The model reads as running if any instance is, and fresh if any
+		// running instance is.
+		st := ProcessState(StateStopped)
 		freshness := ""
-		if ok && st == StateRunning {
-			if m.IsStale(time.Now()) {
-				freshness = "stale"
-			} else {
+		var gpus []int
+		for _, m := range insts {
+			ms := m.State()
+			if ms != StateRunning {
+				if st != StateRunning {
+					st = ms
+				}
+				continue
+			}
+			st = StateRunning
+			gpus = append(gpus, m.gpuIndex())
+			if !m.IsStale(now) {
 				freshness = "fresh"
+			} else if freshness == "" {
+				freshness = "stale"
 			}
 		}
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
+			GPUs: gpus,
 		})
 		seen[id] = true
 		for _, a := range s.Aliases {
@@ -1155,13 +1480,17 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			}
 		}
 		slots := 1
-		if s := r.cfg.Stanza(item.id); s != nil {
+		if s := r.stanzaOf(item.id); s != nil {
 			slots = s.SlotCount()
 		}
-		loaded = append(loaded, LoadedModel{
-			ID: item.id, Freshness: freshness, VramMB: vram, GPU: gpu,
+		lm := LoadedModel{
+			ID: instanceModel(item.id), Freshness: freshness, VramMB: vram, GPU: gpu,
 			Slots: slots, InFlight: item.inFlight,
-		})
+		}
+		if lm.ID != item.id {
+			lm.Instance = item.id
+		}
+		loaded = append(loaded, lm)
 		if gpu >= 0 && item.inFlight == 0 {
 			idleByGPU[gpu] += vram
 		}
@@ -1201,11 +1530,12 @@ func (r *Router) BackendMetrics() []BackendMetric {
 	}
 	var live []run
 	for id, m := range r.managed {
-		if m.State() == StateRunning && m.stanza != nil && m.stanza.Port > 0 {
-			live = append(live, run{id: id, port: m.stanza.Port})
+		if m.State() == StateRunning && m.port > 0 {
+			live = append(live, run{id: id, port: m.port})
 		}
 	}
 	r.mu.Unlock()
+	sort.Slice(live, func(i, j int) bool { return live[i].id < live[j].id })
 	client := &http.Client{Timeout: 800 * time.Millisecond}
 	out := make([]BackendMetric, 0, len(live))
 	for _, item := range live {
@@ -1246,9 +1576,27 @@ func (r *Router) HandleLoad(_ context.Context, modelID string) error {
 		return fmt.Errorf("unknown local model %q", modelID)
 	}
 	// Detach from the inbound request so a client abort does not cancel a
-	// useful wait/evict/spin. The model stays up for the next request.
-	loadCtx, cancel := context.WithTimeout(context.Background(), loadWaitTimeout(s))
+	// useful wait/evict/spin. Process shutdown still cancels the wait.
+	loadCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	_, err := r.load(loadCtx, s.ModelID, true)
+	go func() {
+		timer := time.NewTimer(loadWaitTimeout(s))
+		defer timer.Stop()
+		select {
+		case <-r.shutdown:
+			cancel()
+		case <-timer.C:
+			cancel()
+		case <-loadCtx.Done():
+		}
+	}()
+	// Any live instance satisfies a peer; join it rather than start a copy.
+	key := instanceKey(s.ModelID, 0)
+	r.mu.Lock()
+	if live := r.liveInstancesLocked(s); len(live) > 0 {
+		key = live[0]
+	}
+	r.mu.Unlock()
+	_, err := r.load(loadCtx, key, true)
 	return err
 }

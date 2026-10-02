@@ -24,7 +24,9 @@ type Telemetry struct {
 
 // LoadedModel is one locally running backend as advertised to peers.
 type LoadedModel struct {
-	ID        string `json:"id"`
+	ID string `json:"id"`
+	// Instance is the "model#n" key of an extra copy; empty for instance 0.
+	Instance  string `json:"instance,omitempty"`
 	Freshness string `json:"freshness"` // fresh | stale
 	VramMB    int64  `json:"vram_mb,omitempty"`
 	GPU       int    `json:"gpu"`
@@ -175,11 +177,20 @@ func (c *PeerCache) Set(name string, t *Telemetry) {
 	c.peers[name] = &peerEntry{Telemetry: t, Seen: time.Now()}
 }
 
-// SetErr records a failed fetch.
+// SetErr records a failed fetch. A previous good snapshot is kept and its
+// Seen time is not refreshed, so Fresh stays true only until the stale window.
 func (c *PeerCache) SetErr(name string, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.peers[name] = &peerEntry{Err: err.Error(), Seen: time.Now()}
+	e := c.peers[name]
+	if e == nil {
+		e = &peerEntry{}
+		c.peers[name] = e
+	}
+	e.Err = err.Error()
+	if e.Telemetry == nil {
+		e.Seen = time.Now()
+	}
 }
 
 // Snapshot returns a copy of all cached telemetry (for /_router/status).

@@ -49,6 +49,9 @@ func main() {
 			if s.Match.PathPrefix != "" {
 				flags = fmt.Sprintf(" path=%s default=%v", s.Match.PathPrefix, s.Match.PathDefault)
 			}
+			if s.InstanceCount() > 1 {
+				flags += fmt.Sprintf(" instances=%d ports=%v", s.InstanceCount(), s.InstancePorts)
+			}
 			fmt.Printf("  %-28s port=%-5d vram=%-6d slots=%-2d dev=%-4s api=%-9s ttl=%-4d unlisted=%v%s\n",
 				s.ModelID, s.Port, s.VramMB, s.SlotCount(), s.Device, s.APIType, s.IdleTTLSeconds, s.Unlisted, flags)
 		}
@@ -111,11 +114,14 @@ func main() {
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
 			logger.Errorf("server: %v", err)
-			os.Exit(1)
 		}
 	case sig := <-sigCh:
 		logger.Infof("received %s, shutting down", sig)
 	}
+
+	// Close the shutdown gate before unloading so a child that dies here is
+	// not restarted, and peer loads stop waiting.
+	r.Shutdown()
 
 	// Graceful: stop all managed backends.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 15*time.Second)

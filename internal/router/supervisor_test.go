@@ -127,6 +127,85 @@ func TestStartAbortsWhenProcessDies(t *testing.T) {
 	}
 }
 
+func TestStartWaitsForInflight(t *testing.T) {
+	ready := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case <-ready:
+			w.WriteHeader(http.StatusOK)
+		case <-time.After(2 * time.Second):
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	port := srv.Listener.Addr().(*net.TCPAddr).Port
+	fp := newFakeProc()
+	m := testManaged(t, port, fp)
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := m.Start()
+		first <- err
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for m.State() != StateStarting {
+		if time.Now().After(deadline) {
+			t.Fatal("never entered starting")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	second := make(chan error, 1)
+	go func() {
+		_, err := m.Start()
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("second Start returned before the first finished: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(ready)
+	if err := <-first; err != nil {
+		t.Fatalf("first Start: %v", err)
+	}
+	if err := <-second; err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if got := m.State(); got != StateRunning {
+		t.Fatalf("state = %s, want running", got)
+	}
+}
+
+func TestWatchDoesNotRestartDuringShutdown(t *testing.T) {
+	port, _ := healthServer(t)
+	var n atomic.Int32
+	shut := make(chan struct{})
+	m := newManaged(&config.Stanza{
+		ModelID:       "test-model",
+		Command:       "fake-backend",
+		HealthCheck:   "/",
+		SpinUpSeconds: 5,
+	}, port, NewLogger(io.Discard, false))
+	m.shutdown = shut
+	m.spawn = func(string, []string) (Proc, error) {
+		n.Add(1)
+		return newFakeProc(), nil
+	}
+	t.Cleanup(m.Stop)
+	if _, err := m.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	close(shut)
+	m.mu.Lock()
+	proc, _ := m.proc.(*fakeProc)
+	m.mu.Unlock()
+	proc.exit(nil)
+	time.Sleep(200 * time.Millisecond)
+	if n.Load() != 1 {
+		t.Fatalf("spawned %d procs, want 1 (no restart during shutdown)", n.Load())
+	}
+}
+
 func TestStartSuccess(t *testing.T) {
 	port, _ := healthServer(t)
 	fp := newFakeProc()

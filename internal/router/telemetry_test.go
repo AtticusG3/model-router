@@ -20,12 +20,20 @@ func TestPeerCacheFreshSetErrAndStale(t *testing.T) {
 	if !c.Fresh("ok") {
 		t.Fatal("just-set peer should be fresh")
 	}
+	c.SetErr("ok", errSentinel("later"))
+	if !c.Fresh("ok") {
+		t.Fatal("a later error must keep the last good snapshot")
+	}
+	if c.Snapshot()["ok"] == nil {
+		t.Fatal("snapshot must survive SetErr")
+	}
 
 	stale := NewPeerCache(time.Millisecond)
 	stale.Set("old", &Telemetry{})
 	time.Sleep(5 * time.Millisecond)
+	stale.SetErr("old", errSentinel("later"))
 	if stale.Fresh("old") {
-		t.Fatal("telemetry older than the stale window must be ignored")
+		t.Fatal("an error must not refresh the stale window")
 	}
 }
 
