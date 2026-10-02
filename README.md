@@ -85,6 +85,21 @@ Staged fleet configs are in `configs/` (plus
 `qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
 stanzas). The swap procedure is in `deploy/swap-over.md`.
 
+`device` picks GPUs:
+
+- `"1"` pins the stanza to one card.
+- `"1|2"` lets the router place each load on one listed card (empty means
+  any card): a card without a copy of the model first, then the tightest
+  fit, then list order. Eviction only touches the chosen card (stale models,
+  then idle, then resident; fewest MB). A `"1|2"` stanza must use `{gpu}`,
+  usually `CUDA_VISIBLE_DEVICES={gpu}` with `--device CUDA0`.
+- `"0,1,2"` splits one model across all listed cards.
+
+`max_instances: N` lets a model run up to N copies on separate cards. An extra
+copy starts only when every copy has all its slots busy and a card has room
+without evicting. Extra copies get ports above the highest stanza port
+(`-check` lists them), and each one idles out on its own.
+
 ## Test
 
 ```bash

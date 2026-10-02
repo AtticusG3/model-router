@@ -9,7 +9,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"model-router/internal/config"
 )
@@ -246,7 +249,7 @@ peers:
 `)
 	r.cfg.Peer("digger").BaseURL = peer.URL
 	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+	if _, ok := r.ledger.Reserve("krea2turbo", r.cfg.Stanza("krea2turbo")); !ok {
 		t.Fatal("krea should reserve")
 	}
 	r.holdOccupancy("krea2turbo")
@@ -378,6 +381,75 @@ stanzas:
 	}
 	if gotPath != "/props" {
 		t.Fatalf("backend path = %q, want /props", gotPath)
+	}
+}
+
+func TestUpstreamWaitsWhileModelStarts(t *testing.T) {
+	var ready atomic.Bool
+	var returned atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !ready.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>llama.cpp ui</html>"))
+	}))
+	defer backend.Close()
+	port := backend.Listener.Addr().(*net.TCPAddr).Port
+
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+start_port: 5900
+stanzas:
+  - model_id: agents-a1
+    command: "fake --port {port}"
+    vram_mb: 0
+    health_check: /
+    spin_up_seconds: 5
+    port: %d
+`, port)))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	r := New(cfg, NewLogger(io.Discard, false), "test")
+	r.spawn = func(string, []string) (Proc, error) { return newFakeProc(), nil }
+	r.ledger.SetGPUs([]*GPUState{gpu(0, 10000)})
+	t.Cleanup(func() { _ = r.Unload("agents-a1") })
+	h := NewHandler(r, NewLogger(io.Discard, false))
+
+	var wg sync.WaitGroup
+	codes := make([]int, 2)
+	start := make(chan struct{})
+	for i := range codes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", "/upstream/agents-a1/", nil)
+			h.ServeHTTP(rec, req)
+			codes[i] = rec.Code
+			returned.Add(1)
+		}(i)
+	}
+	close(start)
+	deadline := time.Now().Add(2 * time.Second)
+	for r.managed["agents-a1"] == nil || r.managed["agents-a1"].State() != StateStarting {
+		if time.Now().After(deadline) {
+			t.Fatal("model never started loading")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := returned.Load(); got != 0 {
+		t.Fatalf("%d upstream requests returned before the model was healthy", got)
+	}
+	ready.Store(true)
+	wg.Wait()
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Fatalf("request %d status = %d, want 200", i, code)
+		}
 	}
 }
 

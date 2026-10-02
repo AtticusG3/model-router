@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -384,5 +385,137 @@ stanzas:
 	}
 	if cfg.Stanza("image").Slots != 1 {
 		t.Errorf("image slots = %d, want 1", cfg.Stanza("image").Slots)
+	}
+}
+
+func TestParseDevice(t *testing.T) {
+	cases := []struct {
+		in    string
+		idxs  string
+		split bool
+		bad   bool
+	}{
+		{in: "", idxs: "[]"},
+		{in: "1", idxs: "[1]"},
+		{in: "CUDA2", idxs: "[2]"},
+		{in: "1|2", idxs: "[1 2]"},
+		{in: "0,1,2", idxs: "[0 1 2]", split: true},
+		{in: "1|1", idxs: "[1]"},
+		{in: "1,2|3", bad: true},
+		{in: "auto", bad: true},
+		{in: "1x", bad: true},
+	}
+	for _, c := range cases {
+		idxs, split, err := ParseDevice(c.in)
+		if c.bad {
+			if err == nil {
+				t.Errorf("ParseDevice(%q) = %v, want an error", c.in, idxs)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseDevice(%q): %v", c.in, err)
+			continue
+		}
+		if got := fmt.Sprint(idxs); got != c.idxs && !(c.idxs == "[]" && idxs == nil) {
+			t.Errorf("ParseDevice(%q) = %s, want %s", c.in, got, c.idxs)
+		}
+		if split != c.split {
+			t.Errorf("ParseDevice(%q) split = %v, want %v", c.in, split, c.split)
+		}
+	}
+}
+
+func TestGPUChoiceRequiresGPUMacro(t *testing.T) {
+	_, err := Parse([]byte(`
+stanzas:
+  - model_id: chat
+    command: "llama-server --port {port}"
+    env: ["CUDA_VISIBLE_DEVICES=1"]
+    device: "1|2"
+`))
+	if err == nil || !strings.Contains(err.Error(), "{gpu}") {
+		t.Fatalf("err = %v, want a {gpu} error: the backend would ignore the chosen card", err)
+	}
+}
+
+func TestSplitDeviceRejectsReplicas(t *testing.T) {
+	_, err := Parse([]byte(`
+stanzas:
+  - model_id: flash
+    command: "llama-server --port {port}"
+    device: "0,1,2"
+    max_instances: 2
+`))
+	if err == nil {
+		t.Fatal("a model split across GPUs cannot also run extra copies")
+	}
+}
+
+func TestReplicasNeedPortMacro(t *testing.T) {
+	_, err := Parse([]byte(`
+stanzas:
+  - model_id: edit
+    command: "python server.py"
+    env: ["PORT=18100", "CUDA_VISIBLE_DEVICES={gpu}"]
+    device: "1|2"
+    max_instances: 2
+    port: 18100
+`))
+	if err == nil || !strings.Contains(err.Error(), "{port}") {
+		t.Fatalf("err = %v, want a {port} error: both copies would bind 18100", err)
+	}
+}
+
+func TestInstancePortsAvoidStanzaAndReservedPorts(t *testing.T) {
+	cfg, err := Parse([]byte(`
+start_port: 5901
+reserved_ports: [5906]
+stanzas:
+  - model_id: chat
+    command: "llama-server --port {port}"
+    env: ["CUDA_VISIBLE_DEVICES={gpu}"]
+    device: "1|2"
+    max_instances: 3
+    port: 5901
+  - model_id: image
+    command: "sd-server --port {port}"
+    port: 5905
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := fmt.Sprint(cfg.Stanza("chat").InstancePorts); got != "[5901 5907 5908]" {
+		t.Errorf("chat instance ports = %s, want [5901 5907 5908] (above 5905, skipping reserved 5906)", got)
+	}
+	if got := fmt.Sprint(cfg.Stanza("image").InstancePorts); got != "[5905]" {
+		t.Errorf("image instance ports = %s, want [5905]", got)
+	}
+}
+
+func TestRenderFillsGPUAndInstancePort(t *testing.T) {
+	cfg, err := Parse([]byte(`
+start_port: 5901
+stanzas:
+  - model_id: chat
+    command: "llama-server --port {port} --device CUDA0"
+    env: ["CUDA_VISIBLE_DEVICES={gpu}", "TAG=chat-{port}"]
+    device: "1|2"
+    max_instances: 2
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	s := cfg.Stanza("chat")
+	cmd, env := s.Render(1, 2)
+	if cmd != "llama-server --port 5902 --device CUDA0" {
+		t.Errorf("instance 1 command = %q", cmd)
+	}
+	if got := strings.Join(env, " "); got != "CUDA_VISIBLE_DEVICES=2 TAG=chat-5902" {
+		t.Errorf("instance 1 env = %q", got)
+	}
+	cmd, env = s.Render(0, -1)
+	if cmd != "llama-server --port 5901 --device CUDA0" || env[0] != "CUDA_VISIBLE_DEVICES=1" {
+		t.Errorf("instance 0 without telemetry = %q %v, want port 5901 on the first listed GPU", cmd, env)
 	}
 }

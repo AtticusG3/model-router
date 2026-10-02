@@ -192,7 +192,7 @@ peers:
     models: [daily-model]
 `)
 	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+	if _, ok := r.ledger.Reserve("krea2turbo", r.cfg.Stanza("krea2turbo")); !ok {
 		t.Fatal("krea should reserve")
 	}
 	r.holdOccupancy("krea2turbo")
@@ -232,7 +232,7 @@ peers:
     models: [daily-model]
 `)
 	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+	if _, ok := r.ledger.Reserve("krea2turbo", r.cfg.Stanza("krea2turbo")); !ok {
 		t.Fatal("krea should reserve")
 	}
 	r.peers.Set("digger", &Telemetry{
@@ -271,7 +271,7 @@ peers:
     models: [daily-model]
 `)
 	r.ledger.SetGPUs([]*GPUState{{Index: 1, TotalMB: 32768, FreeMB: 32768}})
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("krea2turbo")); !ok {
+	if _, ok := r.ledger.Reserve("krea2turbo", r.cfg.Stanza("krea2turbo")); !ok {
 		t.Fatal("krea should reserve")
 	}
 	r.ledger.SetGPUs([]*GPUState{{Index: 1, TotalMB: 32768, FreeMB: 6068}})

@@ -22,8 +22,9 @@ ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml
 Restart=always
 RestartSec=3
 TimeoutStopSec=60
-# control-group so leftover llama-server children die with the unit.
-KillMode=control-group
+# mixed: SIGTERM hits only the router, which unloads backends itself.
+# After TimeoutStopSec, systemd SIGKILLs anything still in the cgroup.
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target

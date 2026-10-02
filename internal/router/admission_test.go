@@ -19,7 +19,7 @@ func TestReservePinnedDevice(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 8000), gpu(1, 30000)})
 	s := &config.Stanza{ModelID: "big", VramMB: 22000, Device: "CUDA1"}
-	idx, ok := l.Reserve(s)
+	idx, ok := l.Reserve(s.ModelID, s)
 	if !ok {
 		t.Fatal("expected admission")
 	}
@@ -29,11 +29,122 @@ func TestReservePinnedDevice(t *testing.T) {
 	l.Release("big")
 }
 
+func TestDeviceIndexes(t *testing.T) {
+	got := deviceIndexes("0,1")
+	if len(got) != 2 || got[0] != 0 || got[1] != 1 {
+		t.Fatalf("deviceIndexes(0,1) = %v", got)
+	}
+	if deviceIndex("0,1") != 0 {
+		t.Fatalf("deviceIndex(0,1) = %d, want 0", deviceIndex("0,1"))
+	}
+	if deviceIndex("CUDA1") != 1 {
+		t.Fatalf("deviceIndex(CUDA1) = %d, want 1", deviceIndex("CUDA1"))
+	}
+}
+
+func TestReserveDualDevice(t *testing.T) {
+	l := NewLedger()
+	l.SetGPUs([]*GPUState{gpu(0, 24576), gpu(1, 32768)})
+	small := &config.Stanza{ModelID: "intent", VramMB: 1500, Device: "0"}
+	if _, ok := l.Reserve(small.ModelID, small); !ok {
+		t.Fatal("expected small admission")
+	}
+	big := &config.Stanza{ModelID: "flash", VramMB: 54000, Device: "0,1"}
+	idx, ok := l.Reserve(big.ModelID, big)
+	if !ok {
+		t.Fatal("dual-GPU model should fit beside a small reservation when free VRAM covers the share")
+	}
+	if idx != 0 {
+		t.Errorf("primary gpu = %d, want 0", idx)
+	}
+	used := l.reservationUsed("flash")
+	if used[0] <= 0 || used[1] <= 0 {
+		t.Fatalf("expected both GPUs reserved, got %v", used)
+	}
+	if used[0]+used[1] != 54000 {
+		t.Fatalf("shares = %v, want sum 54000", used)
+	}
+	if used[0] > 24576-1500 {
+		t.Fatalf("gpu0 share %d exceeds free %d", used[0], 24576-1500)
+	}
+	l.Release("flash")
+	hog := &config.Stanza{ModelID: "hog", VramMB: 20000, Device: "0"}
+	if _, ok := l.Reserve(hog.ModelID, hog); !ok {
+		t.Fatal("hog")
+	}
+	if _, ok := l.Reserve(big.ModelID, big); ok {
+		t.Fatal("54000 must not fit when gpu0 only has a few GB left")
+	}
+}
+
+func TestCanAdmitEvictingDualDevice(t *testing.T) {
+	l := NewLedger()
+	l.SetGPUs([]*GPUState{gpu(0, 24576), gpu(1, 32768)})
+	intent := &config.Stanza{ModelID: "intent", VramMB: 1500, Device: "0"}
+	v100 := &config.Stanza{ModelID: "agents", VramMB: 27000, Device: "1"}
+	if _, ok := l.Reserve(intent.ModelID, intent); !ok {
+		t.Fatal("intent")
+	}
+	if _, ok := l.Reserve(v100.ModelID, v100); !ok {
+		t.Fatal("agents")
+	}
+	flash := &config.Stanza{ModelID: "flash", VramMB: 54000, Device: "0,1"}
+	if l.CanAdmit(flash.ModelID, flash) {
+		t.Fatal("should not admit with both GPUs occupied")
+	}
+	if !l.CanAdmitEvicting(flash.ModelID, flash, []string{"agents"}) {
+		t.Fatal("should admit after evicting the V100 occupant while the 3090 small stays")
+	}
+	if !l.CanAdmitEvicting(flash.ModelID, flash, []string{"intent", "agents"}) {
+		t.Fatal("should admit after evicting occupants on both GPUs")
+	}
+}
+
+func TestReserveTripleGPUKeeps3090Small(t *testing.T) {
+	l := NewLedger()
+	l.SetGPUs([]*GPUState{gpu(0, 24576), gpu(1, 32768), gpu(2, 32768)})
+	for _, s := range []*config.Stanza{
+		{ModelID: "intent", VramMB: 1500, Device: "0"},
+		{ModelID: "embed", VramMB: 3600, Device: "0"},
+		{ModelID: "rerank", VramMB: 1500, Device: "0"},
+	} {
+		if _, ok := l.Reserve(s.ModelID, s); !ok {
+			t.Fatalf("reserve %s", s.ModelID)
+		}
+	}
+	daily := &config.Stanza{ModelID: "daily", VramMB: 27000, Device: "1"}
+	if _, ok := l.Reserve(daily.ModelID, daily); !ok {
+		t.Fatal("daily")
+	}
+	flash := &config.Stanza{ModelID: "flash", VramMB: 80000, Device: "0,1,2"}
+	if l.CanAdmit(flash.ModelID, flash) {
+		t.Fatal("80000 should not fit while a V100 is holding 27000")
+	}
+	if !l.CanAdmitEvicting(flash.ModelID, flash, []string{"daily"}) {
+		t.Fatal("80000 should fit on leftover 3090 plus both empty V100s")
+	}
+	l.Release("daily")
+	if _, ok := l.Reserve(flash.ModelID, flash); !ok {
+		t.Fatal("expected flash admission beside the 3090 trio")
+	}
+	used := l.reservationUsed("flash")
+	if used[0] <= 0 || used[1] <= 0 || used[2] <= 0 {
+		t.Fatalf("expected all three GPUs reserved, got %v", used)
+	}
+	if used[0]+used[1]+used[2] != 80000 {
+		t.Fatalf("shares = %v, want sum 80000", used)
+	}
+	free0 := int64(24576 - 1500 - 3600 - 1500)
+	if used[0] > free0 {
+		t.Fatalf("gpu0 share %d exceeds free %d", used[0], free0)
+	}
+}
+
 func TestReservePinnedInsufficient(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 8000), gpu(1, 30000)})
 	s := &config.Stanza{ModelID: "big", VramMB: 22000, Device: "CUDA0"}
-	if _, ok := l.Reserve(s); ok {
+	if _, ok := l.Reserve(s.ModelID, s); ok {
 		t.Fatal("expected rejection on pinned GPU with insufficient VRAM")
 	}
 }
@@ -42,7 +153,7 @@ func TestReserveAutoPicksLargest(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 8000), gpu(1, 30000)})
 	s := &config.Stanza{ModelID: "auto", VramMB: 9000}
-	idx, ok := l.Reserve(s)
+	idx, ok := l.Reserve(s.ModelID, s)
 	if !ok {
 		t.Fatal("expected admission")
 	}
@@ -56,15 +167,15 @@ func TestNoDoubleBooking(t *testing.T) {
 	l.SetGPUs([]*GPUState{gpu(0, 10000)})
 	a := &config.Stanza{ModelID: "a", VramMB: 6000, Device: "CUDA0"}
 	b := &config.Stanza{ModelID: "b", VramMB: 6000, Device: "CUDA0"}
-	if _, ok := l.Reserve(a); !ok {
+	if _, ok := l.Reserve(a.ModelID, a); !ok {
 		t.Fatal("a should admit")
 	}
 	// Second reservation on the same GPU must fail: free(10000) - 6000 < 6000.
-	if _, ok := l.Reserve(b); ok {
+	if _, ok := l.Reserve(b.ModelID, b); ok {
 		t.Fatal("b should be rejected while a holds 6000")
 	}
 	l.Release("a")
-	if _, ok := l.Reserve(b); !ok {
+	if _, ok := l.Reserve(b.ModelID, b); !ok {
 		t.Fatal("b should admit after a released")
 	}
 }
@@ -74,16 +185,16 @@ func TestCanAdmitEvictingCreditsIdleReservation(t *testing.T) {
 	l.SetGPUs([]*GPUState{gpu(1, 32768)})
 	krea := &config.Stanza{ModelID: "krea2turbo", VramMB: 16000, Device: "1"}
 	agents := &config.Stanza{ModelID: "agents-a1", VramMB: 22000, Device: "1"}
-	if _, ok := l.Reserve(krea); !ok {
+	if _, ok := l.Reserve(krea.ModelID, krea); !ok {
 		t.Fatal("krea should admit")
 	}
-	if l.CanAdmit(agents) {
+	if l.CanAdmit(agents.ModelID, agents) {
 		t.Fatal("agents must not fit beside krea")
 	}
-	if !l.CanAdmitEvicting(agents, []string{"krea2turbo"}) {
+	if !l.CanAdmitEvicting(agents.ModelID, agents, []string{"krea2turbo"}) {
 		t.Fatal("agents should fit after idle-evicting krea")
 	}
-	if l.CanAdmitEvicting(agents, nil) {
+	if l.CanAdmitEvicting(agents.ModelID, agents, nil) {
 		t.Fatal("agents must not fit while keeping krea")
 	}
 }
@@ -92,10 +203,10 @@ func TestReserveSameModelIdempotent(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 10000)})
 	s := &config.Stanza{ModelID: "a", VramMB: 6000, Device: "CUDA0"}
-	if _, ok := l.Reserve(s); !ok {
+	if _, ok := l.Reserve(s.ModelID, s); !ok {
 		t.Fatal("first reserve failed")
 	}
-	if _, ok := l.Reserve(s); !ok {
+	if _, ok := l.Reserve(s.ModelID, s); !ok {
 		t.Fatal("second reserve of same model should be idempotent")
 	}
 }
@@ -104,13 +215,13 @@ func TestCanAdmitDoesNotReserve(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 10000)})
 	s := &config.Stanza{ModelID: "b", VramMB: 6000, Device: "CUDA0"}
-	if !l.CanAdmit(s) {
+	if !l.CanAdmit(s.ModelID, s) {
 		t.Fatal("b should be admissible")
 	}
 	// CanAdmit is a pure probe: it must not consume capacity. A separate 5000MB
 	// model on the same GPU still fits only if b's 6000MB was NOT recorded.
 	c := &config.Stanza{ModelID: "c", VramMB: 5000, Device: "CUDA0"}
-	if _, ok := l.Reserve(c); !ok {
+	if _, ok := l.Reserve(c.ModelID, c); !ok {
 		t.Fatal("CanAdmit must not reserve: c should still fit after the probe")
 	}
 }
@@ -119,16 +230,16 @@ func TestCanAdmitKeepsExistingReservation(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 10000)})
 	a := &config.Stanza{ModelID: "a", VramMB: 6000, Device: "CUDA0"}
-	if _, ok := l.Reserve(a); !ok {
+	if _, ok := l.Reserve(a.ModelID, a); !ok {
 		t.Fatal("a should admit")
 	}
-	if !l.CanAdmit(a) {
+	if !l.CanAdmit(a.ModelID, a) {
 		t.Fatal("already-reserved model should report admissible")
 	}
 	// The probe must not have dropped a's reservation: a second 6000MB model
 	// on the same GPU still can't fit (10000 - 6000 < 6000).
 	b := &config.Stanza{ModelID: "b", VramMB: 6000, Device: "CUDA0"}
-	if _, ok := l.Reserve(b); ok {
+	if _, ok := l.Reserve(b.ModelID, b); ok {
 		t.Fatal("b should still be rejected while a holds 6000 (probe dropped the reservation)")
 	}
 }
@@ -137,7 +248,7 @@ func TestCanAdmitInsufficient(t *testing.T) {
 	l := NewLedger()
 	l.SetGPUs([]*GPUState{gpu(0, 10000)})
 	s := &config.Stanza{ModelID: "big", VramMB: 22000, Device: "CUDA0"}
-	if l.CanAdmit(s) {
+	if l.CanAdmit(s.ModelID, s) {
 		t.Fatal("big should not be admissible on a 10000MB GPU")
 	}
 }
@@ -147,21 +258,21 @@ func TestAdmitUsesLiveFreeAndLedger(t *testing.T) {
 	// Other process occupying the card: live probe must block admission.
 	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 500}})
 	a := &config.Stanza{ModelID: "a", VramMB: 6000, Device: "CUDA0"}
-	if _, ok := l.Reserve(a); ok {
+	if _, ok := l.Reserve(a.ModelID, a); ok {
 		t.Fatal("must not admit 6000 when nvidia-smi free is 500")
 	}
 
 	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 8000}})
-	if _, ok := l.Reserve(a); !ok {
+	if _, ok := l.Reserve(a.ModelID, a); !ok {
 		t.Fatal("should admit when live free is 8000")
 	}
 	// Spin-up lag: smi still shows 8000 free; ledger must stop a second 6000.
 	b := &config.Stanza{ModelID: "b", VramMB: 6000, Device: "CUDA0"}
-	if _, ok := l.Reserve(b); ok {
+	if _, ok := l.Reserve(b.ModelID, b); ok {
 		t.Fatal("ledger must block double-book while smi has not dropped yet")
 	}
 	c := &config.Stanza{ModelID: "c", VramMB: 3000, Device: "CUDA0"}
-	if _, ok := l.Reserve(c); !ok {
+	if _, ok := l.Reserve(c.ModelID, c); !ok {
 		t.Fatal("3000 should fit in remaining 4000 ledger / 8000 live")
 	}
 }
@@ -171,16 +282,16 @@ func TestUnloadCreditLetsNextReserveBeforeSmiCatchesUp(t *testing.T) {
 	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 32768}})
 	a := &config.Stanza{ModelID: "a", VramMB: 22000, Device: "0"}
 	b := &config.Stanza{ModelID: "b", VramMB: 16000, Device: "0"}
-	if _, ok := l.Reserve(a); !ok {
+	if _, ok := l.Reserve(a.ModelID, a); !ok {
 		t.Fatal("a should admit")
 	}
 	l.SetGPUs([]*GPUState{{Index: 0, TotalMB: 32768, FreeMB: 2000}})
-	if _, ok := l.Reserve(b); ok {
+	if _, ok := l.Reserve(b.ModelID, b); ok {
 		t.Fatal("b must not fit beside a")
 	}
 	l.Release("a")
 	l.Credit(0, 22000)
-	if _, ok := l.Reserve(b); !ok {
+	if _, ok := l.Reserve(b.ModelID, b); !ok {
 		t.Fatal("b should admit from unload credit while smi still shows 2000 free")
 	}
 }
@@ -229,7 +340,7 @@ func TestLoadKeepsReservationUntilUnload(t *testing.T) {
 		t.Fatalf("Load a: %v", err)
 	}
 	b := r.cfg.Stanza("b")
-	if _, ok := r.ledger.Reserve(b); ok {
+	if _, ok := r.ledger.Reserve(b.ModelID, b); ok {
 		t.Fatal("healthy Load must keep the reservation; b should not fit")
 	}
 }
@@ -254,7 +365,7 @@ func TestUnloadDeletesManagedAndReleases(t *testing.T) {
 		t.Fatal("second Load must create a new Managed")
 	}
 	r.Unload("a")
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("b")); !ok {
+	if _, ok := r.ledger.Reserve("b", r.cfg.Stanza("b")); !ok {
 		t.Fatal("b should admit after Unload released a")
 	}
 }
@@ -267,7 +378,7 @@ func TestFailedStartReleasesReservation(t *testing.T) {
 	if _, err := r.Load("a"); err == nil {
 		t.Fatal("expected Load to fail")
 	}
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("a")); !ok {
+	if _, ok := r.ledger.Reserve("a", r.cfg.Stanza("a")); !ok {
 		t.Fatal("failed Start must release so the model can be reserved again")
 	}
 }
@@ -291,6 +402,63 @@ func TestLoadEvictsIdleResidentLastResort(t *testing.T) {
 	}
 	if r.managed["b"] == nil || r.managed["b"].State() != StateRunning {
 		t.Fatal("b should be running")
+	}
+}
+
+func TestLoadKeeps3090ResidentWhenOtherGPUCanMove(t *testing.T) {
+	port, closeFn := healthServer(t)
+	defer closeFn()
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+start_port: 5900
+stanzas:
+  - model_id: resident
+    command: "fake --port {port}"
+    vram_mb: 6600
+    device: "0"
+    idle_ttl_seconds: 0
+    health_check: /
+    spin_up_seconds: 5
+    port: %d
+  - model_id: daily
+    command: "fake --port {port}"
+    vram_mb: 27000
+    device: "1"
+    idle_ttl_seconds: 300
+    health_check: /
+    spin_up_seconds: 5
+    port: %d
+  - model_id: flash
+    command: "fake --port {port}"
+    vram_mb: 80000
+    device: "0,1,2"
+    idle_ttl_seconds: 300
+    health_check: /
+    spin_up_seconds: 5
+    port: %d
+`, port, port, port)))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	r := New(cfg, NewLogger(io.Discard, false), "test")
+	r.spawn = func(string, []string) (Proc, error) { return newFakeProc(), nil }
+	r.ledger.SetGPUs([]*GPUState{gpu(0, 24576), gpu(1, 32768), gpu(2, 32768)})
+	if _, err := r.Load("resident"); err != nil {
+		t.Fatalf("Load resident: %v", err)
+	}
+	if _, err := r.Load("daily"); err != nil {
+		t.Fatalf("Load daily: %v", err)
+	}
+	if _, err := r.Load("flash"); err != nil {
+		t.Fatalf("Load flash: %v", err)
+	}
+	if r.managed["resident"] == nil || r.managed["resident"].State() != StateRunning {
+		t.Fatal("3090 resident should stay loaded")
+	}
+	if _, ok := r.managed["daily"]; ok {
+		t.Fatal("daily model on the V100 should have been evicted")
+	}
+	if r.managed["flash"] == nil || r.managed["flash"].State() != StateRunning {
+		t.Fatal("flash should be running")
 	}
 }
 
@@ -373,6 +541,50 @@ func TestLoadDoesNotEvictStartingNeighbor(t *testing.T) {
 	}
 }
 
+func TestLoadDoesNotRetryHardStartForever(t *testing.T) {
+	r := loadTestRouter(t)
+	var n atomic.Int32
+	r.spawn = func(string, []string) (Proc, error) {
+		n.Add(1)
+		fp := newFakeProc()
+		fp.mu.Lock()
+		fp.alive = false
+		fp.mu.Unlock()
+		return fp, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err := r.load(ctx, "a", true)
+	if err == nil || !hardStartFailure(err) {
+		t.Fatalf("err = %v, want a hard start failure", err)
+	}
+	if got := n.Load(); got != 2 {
+		t.Fatalf("spawn count %d, want 2 (one retry, then stop)", got)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatal("hard start failure must not wait out the load context")
+	}
+}
+
+func TestEvictSkipsZeroVRAM(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg.Stanza("a").Device = "0"
+	r.cfg.Stanza("b").Device = "0"
+	r.cfg.Stanza("a").VramMB = 0
+	r.cfg.Stanza("b").VramMB = 8000
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 1000}})
+	if _, err := r.Load("b"); err == nil {
+		t.Fatal("b must not fit in 1000 MB free")
+	}
+	if _, ok := r.managed["a"]; !ok {
+		t.Fatal("zero-vram model must not be evicted to free a GPU")
+	}
+}
+
 func TestLoadRetriesAfterExitDuringStart(t *testing.T) {
 	r := loadTestRouter(t)
 	var n atomic.Int32
@@ -402,7 +614,7 @@ func TestEvictReleasesOrphanReservation(t *testing.T) {
 	r.cfg.Stanza("a").VramMB = 8000
 	r.cfg.Stanza("b").VramMB = 8000
 	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
-	if _, ok := r.ledger.Reserve(r.cfg.Stanza("a")); !ok {
+	if _, ok := r.ledger.Reserve("a", r.cfg.Stanza("a")); !ok {
 		t.Fatal("reserve a")
 	}
 	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 1500}})

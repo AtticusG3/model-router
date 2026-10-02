@@ -17,7 +17,7 @@ ExecStart=/opt/ai/bin/model-router --config /opt/ai/config/model-router.yaml --n
 Restart=always
 RestartSec=3
 TimeoutStopSec=60
-KillMode=control-group
+KillMode=mixed
 
 [Install]
 WantedBy=multi-user.target

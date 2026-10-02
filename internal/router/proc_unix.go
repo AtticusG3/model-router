@@ -34,12 +34,12 @@ func (p *osProc) signalGroup(sig syscall.Signal) error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return nil
 	}
+	// The child is the leader of its own group (Setpgid). Signaling the group
+	// and then the process delivers the signal twice, and llama-server aborts
+	// on the second interrupt instead of shutting down cleanly.
 	pgid, err := syscall.Getpgid(p.cmd.Process.Pid)
 	if err == nil {
-		_ = syscall.Kill(-pgid, sig)
-	}
-	if sig == syscall.SIGKILL {
-		return p.cmd.Process.Kill()
+		return syscall.Kill(-pgid, sig)
 	}
 	return p.cmd.Process.Signal(sig)
 }

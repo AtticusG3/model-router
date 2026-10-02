@@ -1,15 +1,23 @@
 # buster -- model-router on 0.0.0.0:18080
 #
-# GPU map: nvidia-smi 0 = RTX 4060 8GB, nvidia-smi 1 = Tesla V100 32GB.
-# llama.cpp: CUDA0 = 4060, CUDA1 = V100 (same order as nvidia-smi).
-# Rag-proxy / Open WebUI / Hermes talk to :18080.
-#
-# vram_mb is nvidia-smi used rounded up after a successful ladder load
-# (docs/vram-fit-ladder.md). Chat + image on V100; specialists on 4060.
-# 2026-08-21 per-slot walk: MoE qwen3.6 is 2x256k (--ctx-size 524288
-# --parallel 2, used=29713). ornith-1.5 Q5 grafted MTP is 2x256k
-# (used=32099). Dense chat is one 256k slot. Specialists on 4060
-# unchanged. Qwen 3.6/3.8 use qwen-fixed-chat-template.jinja.
+# nvidia-smi / llama.cpp:
+#   GPU0 = RTX 3090 24GB (sm_86, NUMA 0) -- ttl=0 residents only
+#   GPU1 = Tesla V100 32GB (sm_70, NUMA 1) -- chat / coding / image
+#   GPU2 = Tesla V100 32GB (sm_70, NUMA 1) -- chat / coding / image
+# V100 stanzas use device: "1|2". The router places each load on whichever
+# V100 fits (a free card first, then the tightest fit; eviction only touches
+# the chosen card) and fills CUDA_VISIBLE_DEVICES={gpu} at spawn, so
+# --device CUDA0 inside the process is that card. CUDA_DEVICE_ORDER=PCI_BUS_ID
+# keeps CUDA numbering equal to nvidia-smi. Do not drop CVD on those stanzas.
+# max_instances: 2 starts a second copy on the other V100 when every copy is
+# busy and that card has room without evicting; each copy idles out alone.
+# 3090 trio (intent/embed/rerank) ~6.6GB resident; ~18GB free on the 3090.
+# Flash-Next pins device: "0,1,2". Admission splits vram_mb by free VRAM, so
+# the trio stays and the two V100s take the larger share. vram_mb 80000 fits
+# in that leftover pool; a V100 occupant is evicted first, the trio is not.
+# llama.cpp --fit on owns placement; do not also set ngl / tensor-split /
+# override-tensor (fit aborts, then CUDA0 OOMs). Do not set
+# CUDA_VISIBLE_DEVICES on Flash-Next.
 
 listen: 0.0.0.0:18080
 start_port: 5901
@@ -20,34 +28,107 @@ telemetry:
   peer_sync_seconds: 5
   peer_stale_seconds: 15
 
-preload: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5]
+preload: [dsv4-flash-vision]
 
 stanzas:
-  - model_id: agents-a1
-    name: "Agents-A1-Uncensored-MTP-APEX-I-Quality (agentic coding)"
-    aliases: [daily-driver]
+  # DeepSeek V4 Flash Vision REAP abliterated. All three GPUs.
+  # Residents are not preloaded so this 78GB GGUF can take the cards.
+  - model_id: dsv4-flash-vision
+    name: "DeepSeek V4 Flash Vision (REAP, abliterated)"
+    aliases: [deepseek-v4-flash-vision]
     command: >
-      /opt/ai/bin/llama-server
-      --model /home/kevyn/models/Agents-A1-Uncensored-MTP-APEX-I-Quality.gguf
-      --mmproj /home/kevyn/models/mmproj-Agents-A1-Uncensored-MTP-BF16.gguf
+      /home/kevyn/infra/llama.cpp-dsv4/build/bin/llama-server
+      --model /home/kevyn/models/dsv4-vision-reap-abliterated.gguf
+      --mmproj /home/kevyn/models/mmproj-dsv4-vision-reap-abliterated.gguf
       --port {port} --host 127.0.0.1
-      --n-gpu-layers 999
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on
-      --cache-type-k turbo4 --cache-type-v turbo4
-      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
-      --spec-type draft-mtp --spec-draft-n-max 4
-      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-      --temperature 0.85 --top-p 0.95 --top-k 20 --min-p 0.0 --presence-penalty 1.1 --repeat-penalty 1.0
-      --split-mode none --device CUDA1
-    vram_mb: 27500
-    device: 1
-    spin_up_seconds: 90
+      --alias dsv4-flash-vision,deepseek-v4-flash-vision
+      --fit on
+      --ctx-size 65536
+      --split-mode layer
+      --parallel 1 --cont-batching --flash-attn on
+      --threads 28 --threads-batch 28
+      --cpu-range 0-27 --cpu-range-batch 0-55 --cpu-strict 1
+      --batch-size 2048 --ubatch-size 512
+      --cache-type-k q8_0 --cache-type-v q8_0
+      --jinja --metrics
+      --n-predict 16384
+      --temperature 0.6 --top-p 0.95 --top-k 40 --min-p 0.0
+    env: ["GGML_CUDA_PDL=0"]
+    vram_mb: 86000
+    device: "0,1,2"
+    spin_up_seconds: 600
     api_type: chat
     match: {body_field: model}
     health_check: /health
     idle_ttl_seconds: 0
-    unlisted: true
-    port: 5901
+    unlisted: false
+    port: 5925
+
+  # Qwen3.8 Flash-Next UD-IQ4_XS. --fit on, 256k ctx, all three GPUs.
+  # Quality load (not GSQ Q2). device "0,1,2" + vram_mb 80000 uses leftover
+  # 3090 VRAM plus both V100s and leaves the ttl=0 trio resident.
+  - model_id: qwen38-flash-next
+    name: "Qwen3.8 Flash-Next 125B A6B UD-IQ4_XS"
+    aliases: [qwen3.8-flash-next]
+    command: >
+      /home/kevyn/infra/llama.cpp-qwen4exp/build-sm7086/bin/llama-server
+      --model /opt/ai/models/qwen3.8-flash-next-uncensored/Qwen3.8-Flash-Next-Uncensored-IQ4_XS-00001-of-00003.gguf
+      --mmproj /opt/ai/models/qwen3.8-flash-next-uncensored/mmproj-Qwen3.8-Flash-Next-Uncensored-F16.gguf
+      --port {port} --host 127.0.0.1
+      --alias qwen3.8-flash-next,qwen38-flash-next
+      --fit on --ctx-size 262144
+      --split-mode layer
+      --load-mode none --parallel 1 --cont-batching --flash-attn on
+      --threads 28 --threads-batch 28
+      --cpu-range 0-27 --cpu-range-batch 0-55 --cpu-strict 1
+      --batch-size 2048 --ubatch-size 512
+      --cache-type-k q4_0 --cache-type-v q4_0
+      --tools all
+      --jinja --metrics --reasoning-format deepseek --reasoning-preserve
+      --n-predict 8192
+      --temperature 0.7 --top-p 0.8 --top-k 20 --min-p 0.0
+    env: ["GGML_CUDA_PDL=0", "LLAMA_ATTN_ROT_DISABLE=1"]
+    vram_mb: 80000
+    device: "0,1,2"
+    spin_up_seconds: 300
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5920
+  # Signal 3.8 Flash Next AP-IQ4_XS. --fit on, 256k ctx, MTP Q4.
+  # Thinking on (default). Same three-GPU placement as Qwen IQ4.
+  - model_id: signal-38-flash-next
+    name: "Signal 3.8 Flash Next AP-IQ4_XS"
+    aliases: [signal-flash-next, signal-3.8]
+    command: >
+      /home/kevyn/infra/llama.cpp-qwen4exp/build-sm7086/bin/llama-server
+      --model /opt/ai/models/signal-38-flash-next/AP-IQ4_XS/Signal-3.8-Flash-Next-AP-IQ4_XS.gguf
+      --model-draft /opt/ai/models/qwen38-flash-next/mtp/Qwen3.8-Flash-Next-MTP-Q4_K_M.gguf
+      --port {port} --host 127.0.0.1
+      --alias signal-38-flash-next,signal-flash-next
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --fit on --ctx-size 262144
+      --split-mode layer
+      --load-mode none --parallel 1 --cont-batching --flash-attn on
+      --threads 28 --threads-batch 28
+      --cpu-range 0-27 --cpu-range-batch 0-55 --cpu-strict 1
+      --batch-size 2048 --ubatch-size 512
+      --cache-type-k q4_0 --cache-type-v q4_0
+      --jinja --metrics --reasoning-format deepseek --reasoning-preserve
+      --n-predict 8192
+      --temperature 0.7 --top-p 0.8 --top-k 20 --min-p 0.0
+    env: ["GGML_CUDA_PDL=0", "LLAMA_ATTN_ROT_DISABLE=1"]
+    vram_mb: 80000
+    device: "0,1,2"
+    spin_up_seconds: 300
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5923
 
   - model_id: qwen3-0.6b-instruct
     name: "Qwen3 0.6B Instruct (intent)"
@@ -59,8 +140,7 @@ stanzas:
       --n-gpu-layers 999
       --ctx-size 8192 --threads 2 --parallel 2 --cont-batching --flash-attn on
       --cache-type-k q8_0 --cache-type-v q8_0
-      --n-predict 64
-      --metrics
+      --n-predict 64 --metrics
       --temperature 0.1 --top-p 0.9 --top-k 20 --min-p 0.0
       --reasoning off
       --split-mode none --device CUDA0
@@ -83,13 +163,12 @@ stanzas:
       --model /home/kevyn/models/Qwen3-Embedding-4B-Q4_K_M.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
-      --ctx-size 8192 --threads 4 --parallel 8 --cont-batching --flash-attn on
-      --batch-size 4096 --ubatch-size 4096
+      --ctx-size 8192 --threads 2 --parallel 2 --cont-batching --flash-attn on
       --cache-type-k q8_0 --cache-type-v q8_0
       --metrics --embedding
       --split-mode none --device CUDA0
     env: ["CUDA_VISIBLE_DEVICES=0"]
-    vram_mb: 5800
+    vram_mb: 3600
     device: 0
     spin_up_seconds: 30
     api_type: embedding
@@ -122,28 +201,58 @@ stanzas:
     unlisted: true
     port: 5904
 
+  - model_id: agents-a1
+    name: "Agents-A1-Uncensored-MTP-APEX-I-Quality (agentic coding)"
+    aliases: [daily-driver, daily-pool, daily-model]
+    command: >
+      /home/kevyn/infra/llama-cpp-turboquant-fresh/build-fresh/bin/llama-server
+      --model /home/kevyn/models/Agents-A1-Uncensored-MTP-APEX-I-Quality.gguf
+      --mmproj /home/kevyn/models/mmproj-Agents-A1-Uncensored-MTP-BF16.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 999
+      --ctx-size 524288 --threads 6 --parallel 1 --cont-batching --flash-attn on --load-mode mlock
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --batch-size 512 --ubatch-size 512 --metrics
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 65536
+      --temperature 0.85 --top-p 0.95 --top-k 20 --min-p 0.0
+      --split-mode none --device CUDA0
+      --rope-scaling yarn
+      --rope-scale 2
+      --yarn-orig-ctx 262144
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 27000
+    device: "1|2"
+    max_instances: 2
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5910
+
   - model_id: qwen3.8-27b
     name: "Qwen3.8 27B (UD-Q5_K_XL)"
-    aliases: [coding-pool]
     command: >
-      /opt/ai/bin/llama-server
+      /home/kevyn/infra/llama-cpp-turboquant-fresh/build-fresh/bin/llama-server
       --model /home/kevyn/models/Qwen3.8-27B-UD-Q5_K_XL.gguf
       --mmproj /home/kevyn/models/mmproj-Qwen3.8-27B-UD-F16.gguf
       -md /home/kevyn/models/mtp-Qwen3.8-27B-Q4_0.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 262144 --threads 3 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --ctx-size 262144 --threads 6 --parallel 1 --cont-batching --flash-attn on --load-mode mlock
       --cache-type-k turbo4 --cache-type-v turbo4
-      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --batch-size 512 --ubatch-size 512 --metrics
       --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
       --reasoning-format deepseek --reasoning-preserve
       --spec-type draft-mtp --spec-draft-n-max 4
-      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --n-predict 65536 --reasoning-budget 53248
       --temperature 1.0 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
-    env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 31200
-    device: 1
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 30000
+    device: "1|2"
     spin_up_seconds: 90
     api_type: chat
     match: {body_field: model}
@@ -152,26 +261,54 @@ stanzas:
     unlisted: true
     port: 5912
 
+  - model_id: qwopus3.8-27b-flash
+    name: "Qwopus3.8-27B-Flash-V2 MTP (Q5_K_M, xhigh/temp 0.3)"
+    aliases: [coding-pool, coding-model]
+    command: >
+      /home/kevyn/infra/llama-cpp-turboquant-fresh/build-fresh/bin/llama-server
+      --model /home/kevyn/models/qwopus38-flash-v2/Qwopus3.8-27B-Flash-V2-MTP-Q5_K_M.gguf
+      --mmproj /home/kevyn/models/qwopus38-flash-v2/mmproj-F32.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 99
+      --ctx-size 262144 --threads 6 --parallel 1 --cont-batching --flash-attn on --load-mode mlock
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --metrics
+      --reasoning-format deepseek --reasoning-preserve
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --n-predict 65536 --reasoning-budget 53248
+      --temperature 0.3 --top-p 0.95 --top-k 20 --min-p 0.0
+      --split-mode none --device CUDA0
+    env: ['CUDA_DEVICE_ORDER=PCI_BUS_ID', 'CUDA_VISIBLE_DEVICES={gpu}', 'LLAMA_ARG_CHAT_TEMPLATE_KWARGS={"enable_thinking":true,"reasoning_effort":"xhigh"}']
+    vram_mb: 30000
+    device: "1|2"
+    max_instances: 2
+    spin_up_seconds: 90
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5921
+
   - model_id: ornith-1.0-35b-heretic
     name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Quality"
     aliases: [ornith-1.0-35b-heretic-quality, ornith-1.0-35b-heretic-compact, tasks]
     command: >
-      /opt/ai/bin/llama-server
+      /home/kevyn/infra/llama-cpp-turboquant-fresh/build-fresh/bin/llama-server
       --model /home/kevyn/models/Ornith-1.0-35B-Heretic-MTP-APEX-I-Quality.gguf
       --mmproj /home/kevyn/models/mmproj-Ornith-1.0-35B-Heretic-MTP-BF16.gguf
-      --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 999
-      --ctx-size 262144 --threads 6 --parallel 1 --cont-batching --flash-attn on --mlock --no-mmap
+      --ctx-size 262144 --threads 6 --parallel 1 --cont-batching --flash-attn on --load-mode mlock
       --cache-type-k turbo4 --cache-type-v turbo4
-      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --batch-size 512 --ubatch-size 512 --metrics
       --spec-type draft-mtp --spec-draft-n-max 4
-      --n-predict 65536 --reasoning-budget 53248 --reasoning-budget-message "[[SYSTEM] You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
+      --n-predict 65536 --reasoning-budget 53248
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
-    env: ["CUDA_VISIBLE_DEVICES=1"]
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
     vram_mb: 26600
-    device: 1
+    device: "1|2"
     spin_up_seconds: 120
     api_type: chat
     match: {body_field: model}
@@ -184,24 +321,22 @@ stanzas:
     name: "Qwen3.6 35B A3B heretic Native-MTP APEX I Quality"
     aliases: [qwen3.6-35b, qwen3.6-35b-a3b-heretic-quality]
     command: >
-      /opt/ai/bin/llama-server
+      /home/kevyn/infra/llama-cpp-turboquant-fresh/build-fresh/bin/llama-server
       --model /home/kevyn/models/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Quality.gguf
-      --mmproj /home/kevyn/models/mmproj-Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-F16.gguf
-      --no-mmproj-offload
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 524288 --threads 3 --parallel 2 --cont-batching --flash-attn on --mlock --no-mmap
+      --ctx-size 262144 --threads 6 --parallel 1 --cont-batching --flash-attn on --load-mode mlock
       --cache-type-k turbo4 --cache-type-v turbo4
-      --cache-reuse 256 --batch-size 512 --ubatch-size 512 --metrics
+      --batch-size 512 --ubatch-size 512 --metrics
       --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
       --reasoning-format deepseek --reasoning-preserve
-      --spec-type draft-mtp --spec-draft-n-max 2
+      --spec-type draft-mtp --spec-draft-n-max 4
       --n-predict 65536
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
-    env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 30300
-    device: 1
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 28000
+    device: "1|2"
     spin_up_seconds: 120
     api_type: chat
     match: {body_field: model}
@@ -210,24 +345,51 @@ stanzas:
     unlisted: true
     port: 5917
 
-  - model_id: ornith-1.5-35b-a3b-bigbang
-    name: "Ornith-1.5-35B-A3B-BigBang Q5_K_M grafted MTP"
+  - model_id: k2-horizon-mova-36b-a4b
+    name: "K2-Horizon-MoVA-36B-A4B-Q4_K_S"
+    aliases: [k2-horizon]
     command: >
-      /opt/ai/bin/llama-server
-      --model /home/kevyn/models/Ornith-1.5-35B-A3B-BigBang-MTP-Q5_K_M-grafted.gguf
+      /home/kevyn/infra/llama.cpp-k2horizon/build/bin/llama-server
+      --model /home/kevyn/models/K2-Horizon-MoVA-36B-A4B/K2-Horizon-MoVA-36B-A4B-Q4_K_S.gguf
+      --port {port} --host 127.0.0.1
+      --ctx-size 524288 --threads 14 --threads-batch 20 --parallel 1 --cont-batching --flash-attn on
+      --cache-type-k q4_0 --cache-type-v q4_0
+      --metrics
+      --jinja
+      --split-mode none --device CUDA0
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 24000
+    device: "1|2"
+    spin_up_seconds: 180
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: true
+    port: 5924
+
+  - model_id: tiel-coder-35b
+    name: "Tiel-Coder 35B-A3B MTP UD-Q4_K_XL"
+    aliases: [ornith-1.5-35b-a3b-bigbang, tiel-coder]
+    command: >
+      /home/kevyn/infra/llama-cpp-turboquant-fresh/build-fresh/bin/llama-server
+      --model /home/kevyn/models/Tiel-Coder-35B-A3B-MTP-UD-Q4_K_XL.gguf
+      --mmproj /home/kevyn/models/mmproj-Tiel-Coder-35B-A3B-BF16.gguf
       --port {port} --host 127.0.0.1
       --n-gpu-layers 99
-      --ctx-size 524288 --threads 4 --parallel 2 --cont-batching --flash-attn on
-      --cache-type-k turbo4 --cache-type-v turbo4 --cache-reuse 256
-      --batch-size 512 --ubatch-size 512
-      --jinja --metrics --no-mmap --mlock
-      --spec-type draft-mtp --spec-draft-n-max 4 --spec-draft-n-min 1
+      --ctx-size 524288 --threads 6 --parallel 1 --cont-batching --flash-attn on --load-mode mlock
+      --cache-type-k turbo4 --cache-type-v turbo4
+      --batch-size 512 --ubatch-size 512 --metrics --jinja
+      --spec-type draft-mtp --spec-draft-n-max 4
       --n-predict 65536
       --temperature 0.6 --top-p 0.95 --top-k 20 --min-p 0.0
       --split-mode none --device CUDA0
-    env: ["CUDA_VISIBLE_DEVICES=1"]
-    vram_mb: 32600
-    device: 1
+      --rope-scaling yarn
+      --rope-scale 2
+      --yarn-orig-ctx 262144
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 28000
+    device: "1|2"
     spin_up_seconds: 120
     api_type: chat
     match: {body_field: model}
@@ -239,7 +401,7 @@ stanzas:
   - model_id: krea-2-turbo
     name: "Krea 2.0 Turbo (text-to-image, Q8_0)"
     command: >
-      /opt/ai/bin/sd-health-proxy {port} --
+      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
       --diffusion-model /home/kevyn/models/krea2/Krea-2-Turbo-Q8_0.gguf
       --llm /home/kevyn/models/krea2/Qwen3VL-4B-Instruct-Q4_K_M.gguf
@@ -248,9 +410,9 @@ stanzas:
       --threads 14
       --steps 8
       --cfg-scale 2.0
-    env: ["CUDA_VISIBLE_DEVICES=1", "GGML_CUDA_PDL=0"]
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
     vram_mb: 16000
-    device: 1
+    device: "1|2"
     spin_up_seconds: 60
     api_type: image
     match: {path_prefix: /sdapi/v1, path_default: true}
@@ -259,11 +421,64 @@ stanzas:
     unlisted: false
     port: 5915
 
+  - model_id: krea-character-creator
+    name: "Krea 2 character creator (QuadView + Identity Edit LoRAs)"
+    aliases: [krea-character]
+    command: >
+      /opt/ai/bin/sd-router-shim {port} --
+      /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --diffusion-model /home/kevyn/models/krea2/Krea-2-Turbo-Q8_0.gguf
+      --llm /home/kevyn/models/krea2/Qwen3VL-4B-Instruct-Q4_K_M.gguf
+      --vae /home/kevyn/models/krea2/wan_2.1_vae.safetensors
+      --lora-model-dir /home/kevyn/models/krea2/loras-character
+      --lora-apply-mode at_runtime
+      --diffusion-fa
+      --threads 14
+      --steps 10
+      --cfg-scale 1.0
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
+    vram_mb: 16000
+    device: "1|2"
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5916
+
+  - model_id: krea2-ostris-edit
+    name: "Krea 2 Ostris Edit (dual-ref + Identity Edit LoRA)"
+    aliases: [krea2-ostris-edit]
+    command: >
+      /opt/ai/venv-krea2-edit/bin/python
+      /opt/ai/slop-forge/scripts/krea2_ostris_edit_server.py
+    env:
+      - CUDA_DEVICE_ORDER=PCI_BUS_ID
+      - CUDA_VISIBLE_DEVICES={gpu}
+      - HF_HOME=/home/kevyn/.cache/huggingface
+      - KREA2_LOCAL_ONLY=1
+      - KREA2_DEVICE=cpu_offload
+      - KREA2_DTYPE=float16
+      - KREA2_IDENTITY_LORA=/home/kevyn/models/krea2/loras-character/krea2_identity_edit_v1_2.safetensors
+      - HOST=127.0.0.1
+      - PORT=18100
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    vram_mb: 28000
+    device: "1|2"
+    spin_up_seconds: 180
+    api_type: image
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 18100
+
   - model_id: z-anime-turbo
     name: "Z-Anime Turbo (8-step distill)"
     aliases: [z-anime]
     command: >
-      /opt/ai/bin/sd-health-proxy {port} --
+      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
       --diffusion-model /home/kevyn/models/z-anime-turbo/z-anime-distill-8step-bf16.safetensors
       --vae /home/kevyn/models/z-anime-turbo/ae.safetensors
@@ -272,9 +487,9 @@ stanzas:
       --offload-to-cpu
       --steps 8 --cfg-scale 1.0 --seed -1
       -W 1024 -H 1024
-    env: ["CUDA_VISIBLE_DEVICES=1", "GGML_CUDA_PDL=0"]
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
     vram_mb: 20000
-    device: 1
+    device: "1|2"
     spin_up_seconds: 60
     api_type: image
     match: {path_prefix: /sdapi/v1}
@@ -286,7 +501,7 @@ stanzas:
   - model_id: ideogram4
     name: "Ideogram 4"
     command: >
-      /opt/ai/bin/sd-health-proxy {port} --
+      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
       --diffusion-model /home/kevyn/models/ideogram4/ideogram4-Q8_0.gguf
       --uncond-diffusion-model /home/kevyn/models/ideogram4/ideogram4_uncond-Q8_0.gguf
@@ -297,9 +512,9 @@ stanzas:
       --vae-tiling
       --seed -1
       -W 1024 -H 1024
-    env: ["CUDA_VISIBLE_DEVICES=1", "GGML_CUDA_PDL=0"]
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
     vram_mb: 22000
-    device: 1
+    device: "1|2"
     spin_up_seconds: 60
     api_type: image
     match: {path_prefix: /sdapi/v1}
@@ -308,24 +523,49 @@ stanzas:
     unlisted: false
     port: 5919
 
+  - model_id: qwen-image-2.1
+    name: "Qwen Image 2.1 Uncensored (Q8_0 GGUF, t2i + edit)"
+    aliases: [qwen-image-2.1-uncensored, qwen21-uncensored]
+    command: >
+      /opt/ai/bin/sd-router-shim {port} --
+      /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --diffusion-model /home/kevyn/models/qwen-image-2.1/qwen-image-2.1-Q8_0.gguf
+      --vae /home/kevyn/models/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
+      --llm /home/kevyn/models/qwen-image-2.1/Qwen3VL-8B-Instruct-Q4_K_M.gguf
+      --llm_vision /home/kevyn/models/qwen-image-2.1/mmproj-Qwen3VL-8B-Instruct-F16.gguf
+      --diffusion-fa
+      --vae-tiling
+      --mmap
+      --max-vram -1
+      --rng cuda
+      --sampling-method euler
+      --cfg-scale 6.0
+      --seed -1
+      --threads 14
+      -W 1024 -H 1024
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
+    vram_mb: 20000
+    device: "1|2"
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5922
+
 peers:
   - name: digger
     kind: router
     base_url: http://192.168.1.36:8082
-    models: [qwen3-0.6b-instruct, qwen3.8-27b, ornith-1.0-35b-heretic,
-             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
+    models: [agents-a1, qwen3-0.6b-instruct, qwen3.8-27b, ornith-1.0-35b-heretic,
+             tiel-coder-35b, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: gareths-homelab
     kind: router
     base_url: http://100.89.49.44:8081
-    models: [qwen2.5-1.5b-instruct, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
-             krea-2-turbo, z-anime-turbo, ideogram4]
+    models: [qwen2.5-1.5b-instruct, qwen3.6-35b-a3b,
+             agents-a1-mini, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nomad
     kind: router
     base_url: http://192.168.1.202:8081
     models: [qwen3.5-9b]
-  - name: nugget
-    kind: router
-    base_url: http://192.168.1.62:8081
-    models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
-             ornith-1.0-35b-heretic, qwen3.8-27b, qwen3.6-35b-a3b,
-             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]

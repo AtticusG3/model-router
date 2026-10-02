@@ -3,8 +3,10 @@
 #
 # vram_mb is nvidia-smi used rounded up after a successful ladder load.
 # 2026-08-21: qwen3.6-35b-a3b one 256k turbo4 slot (used=14732).
-# Two 256k slots did not pay real KV on 16GB. ornith one 256k turbo4 slot
-# (used=13808). intent used=1278.
+# Two 256k slots did not pay real KV on 16GB. intent used=1278.
+# 2026-08-30: 256k left ~300MB free with intent+qwen and CUDA-graph OOM
+# aborted the host. Stepped 35B models to 128k for KV headroom.
+# 2026-09-01: removed ornith entirely (MTP+mlock on 16GB locked the host).
 
 listen: 127.0.0.1:18080
 start_port: 5801
@@ -15,7 +17,7 @@ telemetry:
   peer_sync_seconds: 5
   peer_stale_seconds: 15
 
-preload: [qwen2.5-1.5b-instruct]
+preload: []
 
 stanzas:
   - model_id: qwen2.5-1.5b-instruct
@@ -41,7 +43,7 @@ stanzas:
     api_type: chat
     match: {body_field: model}
     health_check: /health
-    idle_ttl_seconds: 0
+    idle_ttl_seconds: 300
     unlisted: false
     port: 5807
 
@@ -53,19 +55,19 @@ stanzas:
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-APEX-I-Compact.gguf
       --port {port}
       --host 127.0.0.1
-      --ctx-size 262144
+      --ctx-size 131072
       --threads 8
       --parallel 1
       --cont-batching
-      --mlock
-      --no-mmap
+      --load-mode mlock
       --flash-attn on
       --cache-type-k turbo4
       --cache-type-v turbo4
+      --fit on --fit-target 1024
       --jinja --chat-template-file /opt/ai/config/qwen-fixed-chat-template.jinja
       --reasoning-format deepseek
       --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-    vram_mb: 15200
+    vram_mb: 14000
     device: 0
     spin_up_seconds: 120
     api_type: chat
@@ -75,27 +77,15 @@ stanzas:
     unlisted: false
     port: 5803
 
-  - model_id: ornith-1.0-35b-heretic
-    name: "Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact"
-    aliases: [llm-ornith-waldron, ornith-1.0-35b, ornith-1.0-35b-compact, ornith-1.0-35b-heretic-compact, ornith-1.0-35b-heretic-quality]
+  - model_id: qwen3.6-35b-a3b-nvfp4
+    name: "Qwen 3.6 35B A3B NVFP4 (FreeToken)"
+    aliases: [llm-qwen-freetoken, qwen3.6-nvfp4, freetoken-qwen, qwen3.6-35b-nvfp4]
     command: >
-      /opt/ai/bin/llama-server
-      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact.gguf
-      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/ornith-model/mmproj-Ornith-1.0-35B-Heretic-MTP-APEX-I-Compact-F16.gguf
-      --port {port}
+      /root/freetoken/.venv/bin/ft serve
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36-nvfp4
       --host 127.0.0.1
-      --ctx-size 262144
-      --threads 8
-      --parallel 1
-      --cont-batching
-      --mlock
-      --no-mmap
-      --flash-attn on
-      --cache-type-k turbo4
-      --cache-type-v turbo4
-      --spec-type draft-mtp
-      --reasoning-budget 24000 --reasoning-budget-message "[SYSTEM You have run out of thinking time. Stop reasoning immediately and provide your final code solution now, based on your best understanding so far.]"
-    vram_mb: 14300
+      --port {port}
+    vram_mb: 15000
     device: 0
     spin_up_seconds: 120
     api_type: chat
@@ -103,7 +93,55 @@ stanzas:
     health_check: /health
     idle_ttl_seconds: 300
     unlisted: false
-    port: 5808
+    port: 5804
+
+  - model_id: agents-a1-mini
+    name: "Agents-A1-Uncensored-MTP-APEX-I-Mini"
+    aliases: [agents-a1-mini-waldron, llm-agents-a1-mini-waldron]
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/agents-a1/Agents-A1-Uncensored-MTP-APEX-I-Mini.gguf
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 131072
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --load-mode mlock
+      --flash-attn on
+      --cache-type-k turbo4
+      --cache-type-v turbo4
+      --fit on --fit-target 1024
+      --spec-type draft-mtp --spec-draft-n-max 4
+      --metrics
+    vram_mb: 14500
+    device: 0
+    spin_up_seconds: 120
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5809
+
+  # CaptionSmith ASR + Demucs live in the captionsmith-engine container, not
+  # llama-server. This stanza is a VRAM reservation: requesting the model
+  # evicts the resident 35B so Qwen3-ASR + ForcedAligner (or Whisper) can load.
+  # vram_mb covers 1.7B ASR + 0.6B aligner + htdemucs.
+  - model_id: anime-whisper-faster
+    name: "CaptionSmith ASR (VRAM slot)"
+    aliases: [captionsmith-whisper, captionsmith-asr, flyfront/anime-whisper-faster, Systran/faster-whisper-large-v3]
+    command: >
+      /usr/bin/python3 /opt/ai/bin/vram-slot-http {port}
+    vram_mb: 7500
+    device: 0
+    spin_up_seconds: 10
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 120
+    unlisted: false
+    port: 5810
 
   - model_id: krea-2-turbo
     name: "Krea 2.0 Turbo"

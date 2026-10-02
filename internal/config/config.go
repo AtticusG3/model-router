@@ -34,15 +34,26 @@ type Stanza struct {
 	Name    string `yaml:"name"`
 	// Command is the backend command. {port} / ${PORT} are replaced with the
 	// stanza's port; {model} / {model_path} with the stanza's ModelPath.
+	// {gpu} is left in place and filled with the GPU index chosen at spawn
+	// time (see Render).
 	Command string `yaml:"command"`
 	// ModelPath is substituted into {model} / {model_path} in Command (optional;
 	// fleet commands usually embed absolute paths already).
 	ModelPath string `yaml:"model_path"`
 	// VramMB is the VRAM reservation (worst case) used for admission control.
 	VramMB int64 `yaml:"vram_mb"`
-	// Device pins the stanza to a GPU (e.g. "CUDA0", "CUDA1", "0"). Empty means
-	// "auto": pick the GPU with the most free VRAM at load time.
+	// Device pins the stanza to a GPU (e.g. "CUDA0", "CUDA1", "0"). A comma
+	// list ("0,1,2") reserves every listed GPU and splits vram_mb by free
+	// VRAM, so a resident on one card keeps its bytes and emptier cards take
+	// a larger share. A pipe list ("1|2") places the model on any one of the
+	// listed GPUs, chosen at load time; Command or Env must then use {gpu}.
+	// Empty means "auto": any one GPU on the node.
 	Device string `yaml:"device"`
+	// MaxInstances lets the router run up to this many copies of the model,
+	// each on its own port and placed like a fresh load. Extra copies only
+	// start when every running copy has its slots busy and a GPU fits the
+	// copy without evicting anything. 0 or 1 = a single instance.
+	MaxInstances int `yaml:"max_instances"`
 	// SpinUpSeconds is how long to wait for health before declaring failure.
 	SpinUpSeconds int `yaml:"spin_up_seconds"`
 	// APIType is one of chat | embedding | image | rerank.
@@ -71,6 +82,13 @@ type Stanza struct {
 	// Slots is the local concurrency cap (llama.cpp --parallel). 0 in YAML
 	// means derive from --parallel / -np in Command; missing flag → 1.
 	Slots int `yaml:"slots"`
+
+	// InstancePorts holds the backend port of each instance; [0] is Port.
+	// Derived by Parse from MaxInstances.
+	InstancePorts []int `yaml:"-"`
+	// rawCommand is Command before {port} substitution, so extra instances
+	// can be rendered on their own ports.
+	rawCommand string
 }
 
 // SlotCount is the in-flight request cap for this stanza. Always >= 1.
@@ -79,6 +97,80 @@ func (s *Stanza) SlotCount() int {
 		return 1
 	}
 	return s.Slots
+}
+
+// InstanceCount is the maximum number of concurrent copies. Always >= 1.
+func (s *Stanza) InstanceCount() int {
+	if s == nil || s.MaxInstances <= 1 {
+		return 1
+	}
+	return s.MaxInstances
+}
+
+// InstancePort is the backend port of instance n.
+func (s *Stanza) InstancePort(n int) int {
+	if n > 0 && n < len(s.InstancePorts) {
+		return s.InstancePorts[n]
+	}
+	return s.Port
+}
+
+// Render returns the command and env for instance n placed on gpu. gpu < 0
+// (no telemetry yet) falls back to the first GPU the device field lists.
+func (s *Stanza) Render(n, gpu int) (string, []string) {
+	if gpu < 0 {
+		gpu = 0
+		if idxs, _, _ := ParseDevice(s.Device); len(idxs) > 0 {
+			gpu = idxs[0]
+		}
+	}
+	port := fmt.Sprintf("%d", s.InstancePort(n))
+	g := fmt.Sprintf("%d", gpu)
+	cmd := s.Command
+	if s.rawCommand != "" {
+		cmd = portMacroRe.ReplaceAllString(s.rawCommand, port)
+	}
+	cmd = strings.ReplaceAll(cmd, "{gpu}", g)
+	var env []string
+	for _, e := range s.Env {
+		e = strings.ReplaceAll(e, "{gpu}", g)
+		env = append(env, portMacroRe.ReplaceAllString(e, port))
+	}
+	return cmd, env
+}
+
+// ParseDevice reads a stanza device field. split is true for a comma list
+// (one model across every listed GPU); a pipe list or a single index is a
+// set of candidates for single-GPU placement. Empty returns no indexes.
+func ParseDevice(device string) (idxs []int, split bool, err error) {
+	device = strings.TrimSpace(device)
+	if device == "" {
+		return nil, false, nil
+	}
+	sep := "|"
+	if strings.Contains(device, ",") {
+		if strings.Contains(device, "|") {
+			return nil, false, fmt.Errorf("device %q mixes ',' and '|'", device)
+		}
+		sep = ","
+		split = true
+	}
+	seen := map[int]bool{}
+	for _, part := range strings.Split(device, sep) {
+		d := strings.ToLower(strings.TrimSpace(part))
+		d = strings.TrimPrefix(d, "cuda")
+		d = strings.TrimPrefix(d, "gpu:")
+		var idx int
+		if _, err := fmt.Sscanf(d, "%d", &idx); err != nil || fmt.Sprintf("%d", idx) != d {
+			return nil, false, fmt.Errorf("device %q: bad GPU %q", device, part)
+		}
+		if seen[idx] {
+			continue
+		}
+		seen[idx] = true
+		idxs = append(idxs, idx)
+	}
+	return idxs, split && len(idxs) > 1, nil
 }
 
 // Pool is a virtual model id resolved to concrete targets per request
@@ -196,6 +288,9 @@ func Parse(raw []byte) (*Config, error) {
 		if s.ModelID == "" {
 			return nil, fmt.Errorf("stanza %d: model_id is required", i)
 		}
+		if strings.Contains(s.ModelID, "#") {
+			return nil, fmt.Errorf("stanza %q: model_id must not contain '#' (reserved for instance ids)", s.ModelID)
+		}
 		if s.Match.BodyField != "" && s.Match.PathPrefix != "" {
 			return nil, fmt.Errorf("stanza %q: match.body_field and match.path_prefix are mutually exclusive", s.ModelID)
 		}
@@ -203,6 +298,9 @@ func Parse(raw []byte) (*Config, error) {
 			return nil, fmt.Errorf("duplicate model_id %q", s.ModelID)
 		}
 		for _, a := range s.Aliases {
+			if strings.Contains(a, "#") {
+				return nil, fmt.Errorf("stanza %q: alias %q must not contain '#'", s.ModelID, a)
+			}
 			if _, dup := cfg.stanzaByID[a]; dup {
 				return nil, fmt.Errorf("alias %q collides with a stanza id", a)
 			}
@@ -223,6 +321,10 @@ func Parse(raw []byte) (*Config, error) {
 		if s.SpinUpSeconds == 0 {
 			s.SpinUpSeconds = DefaultSpinUp
 		}
+		if err := s.validatePlacement(); err != nil {
+			return nil, err
+		}
+		customProxy := s.Proxy != ""
 		// Allocate a port.
 		if s.Port == 0 {
 			for reserved[nextPort] {
@@ -234,16 +336,26 @@ func Parse(raw []byte) (*Config, error) {
 		if s.Proxy == "" {
 			s.Proxy = fmt.Sprintf("http://127.0.0.1:%d", s.Port)
 		}
-		s.Command = portMacroRe.ReplaceAllString(s.Command, fmt.Sprintf("%d", s.Port))
 		if s.ModelPath != "" {
 			s.Command = strings.ReplaceAll(s.Command, "{model_path}", s.ModelPath)
 			s.Command = strings.ReplaceAll(s.Command, "{model}", s.ModelPath)
 		}
+		s.rawCommand = s.Command
+		s.Command = portMacroRe.ReplaceAllString(s.Command, fmt.Sprintf("%d", s.Port))
 		if s.Slots <= 0 {
 			s.Slots = parallelFromCommand(s.Command)
 		}
+		if s.InstanceCount() > 1 {
+			if customProxy {
+				return nil, fmt.Errorf("stanza %q: max_instances > 1 cannot use a custom proxy", s.ModelID)
+			}
+			if !s.usesMacro(portMacroRe.MatchString) {
+				return nil, fmt.Errorf("stanza %q: max_instances > 1 needs {port} in command or env", s.ModelID)
+			}
+		}
 		cfg.stanzaByID[s.ModelID] = s
 	}
+	cfg.allocateInstancePorts(reserved)
 
 	cfg.poolByName = map[string]*Pool{}
 	for name, p := range cfg.Pools {
@@ -283,6 +395,72 @@ func Parse(raw []byte) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// validatePlacement checks the device field against {gpu} use and replicas.
+func (s *Stanza) validatePlacement() error {
+	idxs, split, err := ParseDevice(s.Device)
+	if err != nil {
+		return fmt.Errorf("stanza %q: %w", s.ModelID, err)
+	}
+	hasGPU := s.usesMacro(func(v string) bool { return strings.Contains(v, "{gpu}") })
+	if split && hasGPU {
+		return fmt.Errorf("stanza %q: {gpu} names one GPU but device %q splits across several", s.ModelID, s.Device)
+	}
+	if split && s.InstanceCount() > 1 {
+		return fmt.Errorf("stanza %q: max_instances > 1 needs single-GPU placement, not device %q", s.ModelID, s.Device)
+	}
+	// A choice of GPUs is meaningless unless the backend is told which one won.
+	choice := !split && (len(idxs) > 1 || (len(idxs) == 0 && s.InstanceCount() > 1))
+	if choice && !hasGPU {
+		return fmt.Errorf("stanza %q: device %q picks a GPU at load time; use {gpu} in command or env (e.g. CUDA_VISIBLE_DEVICES={gpu})", s.ModelID, s.Device)
+	}
+	return nil
+}
+
+// usesMacro reports whether match is true for the command or any env entry.
+func (s *Stanza) usesMacro(match func(string) bool) bool {
+	cmd := s.rawCommand
+	if cmd == "" {
+		cmd = s.Command
+	}
+	if match(cmd) {
+		return true
+	}
+	for _, e := range s.Env {
+		if match(e) {
+			return true
+		}
+	}
+	return false
+}
+
+// allocateInstancePorts gives every extra instance a port above all stanza
+// and reserved ports, in config order, so instance ports never collide.
+func (c *Config) allocateInstancePorts(reserved map[int]bool) {
+	used := map[int]bool{}
+	next := c.StartPort
+	for p := range reserved {
+		used[p] = true
+	}
+	for i := range c.Stanzas {
+		p := c.Stanzas[i].Port
+		used[p] = true
+		if p >= next {
+			next = p + 1
+		}
+	}
+	for i := range c.Stanzas {
+		s := &c.Stanzas[i]
+		s.InstancePorts = []int{s.Port}
+		for n := 1; n < s.InstanceCount(); n++ {
+			for used[next] {
+				next++
+			}
+			s.InstancePorts = append(s.InstancePorts, next)
+			used[next] = true
+		}
+	}
 }
 
 func (c *Config) validateCatalog() error {

@@ -22,10 +22,16 @@ const (
 	StateFailed   ProcessState = "failed"
 )
 
-// Managed is a supervised backend process for one stanza.
+// Managed is a supervised backend process for one instance of a stanza.
 type Managed struct {
 	stanza *config.Stanza
 	logger *Logger
+	// id is the instance key: the model id, or "model#n" for extra copies.
+	id string
+	// command and env are rendered for this instance's port and GPU.
+	command  string
+	env      []string
+	proxyURL string
 
 	mu     sync.Mutex
 	state  ProcessState
@@ -40,6 +46,12 @@ type Managed struct {
 	stopOnce sync.Once
 	// waitDone is closed by the single Wait owner (watch) when the process exits.
 	waitDone chan struct{}
+	// startWait is closed when the in-flight Start attempt finishes. Joiners block on it.
+	startWait chan struct{}
+	startErr  error
+	// shutdown is closed by the router on process shutdown. Nil in tests that
+	// never shut down. A nil channel never fires in select.
+	shutdown <-chan struct{}
 }
 
 // State returns the current process state.
@@ -59,16 +71,32 @@ func (m *Managed) markUsed() {
 // newManaged constructs a supervisor for a stanza. The port is the backend port.
 func newManaged(s *config.Stanza, port int, logger *Logger) *Managed {
 	return &Managed{
-		stanza: s,
-		logger: logger,
-		port:   port,
-		state:  StateStopped,
-		stopCh: make(chan struct{}),
+		stanza:   s,
+		logger:   logger,
+		id:       s.ModelID,
+		command:  s.Command,
+		env:      s.Env,
+		proxyURL: s.Proxy,
+		port:     port,
+		state:    StateStopped,
+		stopCh:   make(chan struct{}),
 	}
 }
 
+// joinedStart is a Start error observed by a caller that waited on someone
+// else's attempt. That caller must not release the reservation or stop the
+// process; the owner does.
+type joinedStart struct{ err error }
+
+func (e joinedStart) Error() string { return e.err.Error() }
+func (e joinedStart) Unwrap() error { return e.err }
+
 // Start spawns the backend and waits for its health endpoint to return 200,
 // or until the spin-up timeout. It returns the chosen GPU index on success.
+//
+// A second Start while this one is still spinning up waits for it instead of
+// reporting success early. Callers (the upstream UI included) then proxy only
+// once the backend is actually healthy.
 //
 // The process is deliberately NOT bound to the caller's context: a backend
 // spawned for a peer load() must outlive the request that triggered it, or the
@@ -77,10 +105,22 @@ func newManaged(s *config.Stanza, port int, logger *Logger) *Managed {
 // ready for the next request).
 func (m *Managed) Start() (int, error) {
 	m.mu.Lock()
-	if m.state == StateRunning || m.state == StateStarting {
+	if m.state == StateRunning {
+		idx := m.gpuIdx
 		m.mu.Unlock()
-		return m.gpuIndex(), nil
+		return idx, nil
 	}
+	if m.state == StateStarting {
+		ch := m.startWait
+		m.mu.Unlock()
+		if ch != nil {
+			<-ch
+		}
+		return m.joinedResult()
+	}
+	ch := make(chan struct{})
+	m.startWait = ch
+	m.startErr = nil
 	m.state = StateStarting
 	m.gpuIdx = -1
 	m.stopCh = make(chan struct{})
@@ -88,15 +128,24 @@ func (m *Managed) Start() (int, error) {
 	m.proc = nil
 	m.waitDone = nil
 	spawn := m.spawn
+	cmd, env := m.command, m.env
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		if m.state != StateRunning && m.startErr == nil {
+			m.startErr = fmt.Errorf("start failed for %s", m.id)
+			m.state = StateFailed
+		}
+		m.mu.Unlock()
+		close(ch)
+	}()
 
 	if spawn == nil {
 		spawn = spawnProc
 	}
-	proc, err := spawn(m.stanza.Command, m.stanza.Env)
+	proc, err := spawn(cmd, env)
 	if err != nil {
-		m.fail("%v", err)
-		return -1, err
+		return -1, m.fail(err)
 	}
 
 	m.mu.Lock()
@@ -108,7 +157,7 @@ func (m *Managed) Start() (int, error) {
 	go m.copyLogs(proc.Stderr())
 	go m.watch()
 
-	m.logger.Infof("started %s (pid %d, port %d)", m.stanza.ModelID, proc.PID(), m.port)
+	m.logger.Infof("started %s (pid %d, port %d)", m.id, proc.PID(), m.port)
 
 	m.mu.Lock()
 	stopCh := m.stopCh
@@ -128,24 +177,20 @@ func (m *Managed) Start() (int, error) {
 		alive := m.proc != nil && m.proc.Alive()
 		m.mu.Unlock()
 		if !alive {
-			m.fail("exited during start")
-			return -1, fmt.Errorf("exited during start for %s", m.stanza.ModelID)
+			return -1, m.fail(fmt.Errorf("exited during start for %s", m.id))
 		}
 		timer := time.NewTimer(500 * time.Millisecond)
 		select {
 		case <-stopCh:
 			timer.Stop()
-			m.fail("stopped during start")
-			return -1, fmt.Errorf("stopped during start for %s", m.stanza.ModelID)
+			return -1, m.fail(fmt.Errorf("stopped during start for %s", m.id))
 		case <-timer.C:
 		}
 	}
 	if !healthOK {
-		// Give a couple extra seconds in case the endpoint is slow, then fail.
-		m.logger.Errorf("health check for %s never returned 200 within %ds", m.stanza.ModelID, m.stanza.SpinUpSeconds)
+		m.logger.Errorf("health check for %s never returned 200 within %ds", m.id, m.stanza.SpinUpSeconds)
 		m.stop()
-		m.fail("health check timed out")
-		return -1, fmt.Errorf("health check timed out for %s", m.stanza.ModelID)
+		return -1, m.fail(fmt.Errorf("health check timed out for %s", m.id))
 	}
 
 	// Confirm the *spawned* process is actually alive. The health endpoint can
@@ -156,10 +201,9 @@ func (m *Managed) Start() (int, error) {
 	aliveProc := m.proc
 	m.mu.Unlock()
 	if aliveProc == nil || !aliveProc.Alive() {
-		m.logger.Errorf("%s: health passed but spawned process is not alive (port %d held by another process?)", m.stanza.ModelID, m.port)
+		m.logger.Errorf("%s: health passed but spawned process is not alive (port %d held by another process?)", m.id, m.port)
 		m.stop()
-		m.fail("process not alive after health check")
-		return -1, fmt.Errorf("process not alive after health check for %s", m.stanza.ModelID)
+		return -1, m.fail(fmt.Errorf("process not alive after health check for %s", m.id))
 	}
 
 	m.mu.Lock()
@@ -168,15 +212,51 @@ func (m *Managed) Start() (int, error) {
 	m.mu.Unlock()
 
 	// Record the GPU this model landed on (set by the router after Start).
-	m.logger.Infof("%s healthy on port %d", m.stanza.ModelID, m.port)
+	m.logger.Infof("%s healthy on port %d", m.id, m.port)
 
 	return m.gpuIndex(), nil
+}
+
+func (m *Managed) joinedResult() (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == StateRunning {
+		return m.gpuIdx, nil
+	}
+	if m.startErr != nil {
+		return -1, joinedStart{err: m.startErr}
+	}
+	return -1, joinedStart{err: fmt.Errorf("model failed to start")}
+}
+
+func (m *Managed) shuttingDown() bool {
+	if m.shutdown == nil {
+		return false
+	}
+	select {
+	case <-m.shutdown:
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *Managed) gpuIndex() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.gpuIdx
+}
+
+// place renders the backend command for the GPU admission chose. A start
+// already in flight keeps the command it spawned with.
+func (m *Managed) place(gpu int) {
+	cmd, env := m.stanza.Render(instanceIndex(m.id), gpu)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == StateStarting || m.state == StateRunning {
+		return
+	}
+	m.command, m.env = cmd, env
 }
 
 // SetGPU records which GPU this backend was admitted to.
@@ -204,7 +284,7 @@ func (m *Managed) copyLogs(r io.Reader) {
 				if len(line) > 2000 {
 					line = line[:2000] + "..."
 				}
-				m.logger.Upstreamf("[%s] %s", m.stanza.ModelID, line)
+				m.logger.Upstreamf("[%s] %s", m.id, line)
 			}
 		}
 		if err != nil {
@@ -249,10 +329,10 @@ func (m *Managed) watch() {
 	m.state = StateStopped
 	m.mu.Unlock()
 
-	if !wasRunning {
-		return // intentional stop
+	if !wasRunning || m.shuttingDown() {
+		return // intentional stop, or the process is shutting down
 	}
-	m.logger.Errorf("%s exited unexpectedly: %v", m.stanza.ModelID, err)
+	m.logger.Errorf("%s exited unexpectedly: %v", m.id, err)
 
 	// Backoff restart, up to a cap. Keep trying while the router still wants
 	// this model (i.e. it hasn't been explicitly unloaded).
@@ -261,7 +341,12 @@ func (m *Managed) watch() {
 		select {
 		case <-m.stopCh:
 			return
+		case <-m.shutdown:
+			return
 		case <-time.After(backoff):
+		}
+		if m.shuttingDown() {
+			return
 		}
 		m.mu.Lock()
 		if m.state == StateStopping {
@@ -269,7 +354,7 @@ func (m *Managed) watch() {
 			return
 		}
 		m.mu.Unlock()
-		m.logger.Infof("restarting %s", m.stanza.ModelID)
+		m.logger.Infof("restarting %s", m.id)
 		if _, err := m.Start(); err == nil {
 			return
 		}
@@ -317,11 +402,13 @@ func (m *Managed) stop() {
 	m.mu.Unlock()
 }
 
-func (m *Managed) fail(format string, args ...any) {
+func (m *Managed) fail(err error) error {
 	m.mu.Lock()
 	m.state = StateFailed
+	m.startErr = err
 	m.mu.Unlock()
-	m.logger.Errorf("[%s] %s", m.stanza.ModelID, fmt.Sprintf(format, args...))
+	m.logger.Errorf("[%s] %s", m.id, err.Error())
+	return err
 }
 
 // IsStale reports whether a running backend has been idle longer than its TTL.
