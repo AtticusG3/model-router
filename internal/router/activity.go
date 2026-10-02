@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,21 +35,26 @@ type TokenStats struct {
 	CompletionTokens int     `json:"completion_tokens,omitempty"`
 	PromptPerSecond  float64 `json:"prompt_per_second,omitempty"`
 	TokensPerSecond  float64 `json:"tokens_per_second,omitempty"`
+	PromptMs         float64 `json:"prompt_ms,omitempty"`
 }
 
 // ActivityEntry is one proxied generation (or other model) request.
 type ActivityEntry struct {
-	ID          int        `json:"id"`
-	Timestamp   time.Time  `json:"timestamp"`
-	Model       string     `json:"model"`
-	Target      string     `json:"target,omitempty"`
-	Method      string     `json:"method"`
-	Path        string     `json:"path"`
-	Status      int        `json:"status"`
-	ContentType string     `json:"content_type,omitempty"`
-	DurationMs  int        `json:"duration_ms"`
-	Tokens      TokenStats `json:"tokens"`
-	HasCapture  bool       `json:"has_capture"`
+	ID          int       `json:"id"`
+	Timestamp   time.Time `json:"timestamp"`
+	Model       string    `json:"model"`
+	Target      string    `json:"target,omitempty"`
+	Method      string    `json:"method"`
+	Path        string    `json:"path"`
+	Status      int       `json:"status"`
+	ContentType string    `json:"content_type,omitempty"`
+	DurationMs  int       `json:"duration_ms"`
+	// TTFTMs is milliseconds from request start until the first generated
+	// token is written downstream. A finished non-streaming body has no
+	// earlier byte to stamp, so it falls back to timings.prompt_ms.
+	TTFTMs     int        `json:"ttft_ms,omitempty"`
+	Tokens     TokenStats `json:"tokens"`
+	HasCapture bool       `json:"has_capture"`
 }
 
 // ActivityCapture is the request/response pair for one activity id.
@@ -154,6 +160,10 @@ type activityWriter struct {
 	body      bytes.Buffer
 	max       int
 	truncated bool
+	started   time.Time
+	ttftMs    int
+	ttftSet   bool
+	scan      bytes.Buffer
 }
 
 func (w *activityWriter) WriteHeader(code int) {
@@ -169,6 +179,7 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 	if !w.wroteHead {
 		w.WriteHeader(http.StatusOK)
 	}
+	w.noteFirstToken(p)
 	remain := w.max - w.body.Len()
 	switch {
 	case remain <= 0:
@@ -190,6 +201,109 @@ func (w *activityWriter) Flush() {
 
 func (w *activityWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
+}
+
+func (w *activityWriter) noteFirstToken(p []byte) {
+	if w.ttftSet || len(p) == 0 || w.started.IsZero() {
+		return
+	}
+	w.scan.Write(p)
+	buf := w.scan.Bytes()
+	if !streamingBody(w.Header().Get("Content-Type"), buf) || !hasGeneratedToken(buf) {
+		trimScan(&w.scan)
+		return
+	}
+	w.ttftMs = roundMs(float64(time.Since(w.started).Milliseconds()))
+	if w.ttftMs < 1 {
+		w.ttftMs = 1
+	}
+	w.ttftSet = true
+	w.scan.Reset()
+}
+
+func trimScan(buf *bytes.Buffer) {
+	const maxScan = 8192
+	const keep = 512
+	if buf.Len() <= maxScan {
+		return
+	}
+	tail := append([]byte(nil), buf.Bytes()[buf.Len()-keep:]...)
+	buf.Reset()
+	buf.Write(tail)
+}
+
+func streamingBody(contentType string, buf []byte) bool {
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		return true
+	}
+	return bytes.HasPrefix(bytes.TrimSpace(buf), []byte("data:"))
+}
+
+func hasGeneratedToken(buf []byte) bool {
+	for _, key := range []string{"content", "text", "reasoning_content", "reasoning"} {
+		if jsonStringFieldNonEmpty(buf, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func jsonStringFieldNonEmpty(buf []byte, key string) bool {
+	pat := []byte(`"` + key + `"`)
+	from := 0
+	for from < len(buf) {
+		rel := bytes.Index(buf[from:], pat)
+		if rel < 0 {
+			return false
+		}
+		i := from + rel + len(pat)
+		i = skipSpace(buf, i)
+		if i >= len(buf) || buf[i] != ':' {
+			from = i
+			continue
+		}
+		i = skipSpace(buf, i+1)
+		if i >= len(buf) || buf[i] != '"' {
+			if i < len(buf) {
+				from = i + 1
+			} else {
+				from = i
+			}
+			continue
+		}
+		i++
+		if i >= len(buf) {
+			return false
+		}
+		if buf[i] != '"' {
+			return true
+		}
+		from = i + 1
+	}
+	return false
+}
+
+func skipSpace(buf []byte, i int) int {
+	for i < len(buf) {
+		switch buf[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+func roundMs(v float64) int {
+	if v <= 0 {
+		return 0
+	}
+	ms := int(math.Round(v))
+	if ms < 1 {
+		return 1
+	}
+	return ms
 }
 
 func copyHeaderMap(h http.Header) map[string][]string {
@@ -264,6 +378,9 @@ func mergeTokenStats(dst, src TokenStats) TokenStats {
 	if src.TokensPerSecond != 0 {
 		dst.TokensPerSecond = src.TokensPerSecond
 	}
+	if src.PromptMs != 0 {
+		dst.PromptMs = src.PromptMs
+	}
 	return dst
 }
 
@@ -285,6 +402,7 @@ func statsFromMap(obj map[string]any) TokenStats {
 		}
 		s.PromptPerSecond = asFloat(t["prompt_per_second"])
 		s.TokensPerSecond = asFloat(t["predicted_per_second"])
+		s.PromptMs = asFloat(t["prompt_ms"])
 		if cached := asInt(t["cache_n"]); cached != 0 {
 			s.CachedTokens = cached
 		}
@@ -339,6 +457,11 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		status = http.StatusOK
 	}
 	ct := rec.Header().Get("Content-Type")
+	tokens := parseTokenStats(rec.body.Bytes(), ct)
+	ttft := rec.ttftMs
+	if !rec.ttftSet {
+		ttft = roundMs(tokens.PromptMs)
+	}
 	entry := ActivityEntry{
 		Timestamp:   started,
 		Model:       model,
@@ -348,7 +471,8 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		Status:      status,
 		ContentType: ct,
 		DurationMs:  int(time.Since(started).Milliseconds()),
-		Tokens:      parseTokenStats(rec.body.Bytes(), ct),
+		TTFTMs:      ttft,
+		Tokens:      tokens,
 	}
 	reqStr, clipped := clipBody(reqBody)
 	respStr := rec.body.String()
@@ -376,8 +500,8 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 		captureReq = captureReq[:maxCaptureBody]
 		reqTrunc = true
 	}
-	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody}
 	started := time.Now()
+	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody, started: started}
 	return rec, func() {
 		r.recordProxy(req, rec, started, captureReq, reqTrunc, model, target)
 	}

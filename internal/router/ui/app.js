@@ -255,14 +255,15 @@
       spark($('chart-gen'), chrono.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0), '#63dda1');
       spark($('chart-prompt'), chrono.map(e=>Number(e.tokens&&e.tokens.prompt_per_second)||0).filter(v=>v>0), '#58d6e6');
       spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
+      spark($('chart-ttft'), chrono.map(e=>Number(e.ttft_ms)||0).filter(v=>v>0), '#f1bb62');
       $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
       $('activity-rows').innerHTML=rows.map(e=>{
         const tok=e.tokens||{};
         const bad=e.status>=400;
-        return '<tr tabindex="0" data-id="'+e.id+'"'+(e.has_capture?'':' data-empty="1"')+'><td class="mono">'+esc(fmtTime(e.timestamp))+'</td><td><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></td><td class="mono">'+esc(e.method||'')+' '+esc(e.path||'')+'</td><td class="'+(bad?'status-bad':'status-ok')+'">'+esc(e.status)+'</td><td class="mono">'+fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')+'</td><td class="mono">'+fmtTok(tok.completion_tokens)+'</td><td class="mono">'+esc(fmtSpeed(tok.prompt_per_second))+'</td><td class="mono">'+esc(fmtSpeed(tok.tokens_per_second))+'</td><td class="mono">'+esc(fmtDur(e.duration_ms))+'</td></tr>';
-      }).join('')||'<tr><td colspan="9" class="empty">No generation requests yet. Send one from Chat lab or any client.</td></tr>';
+        return '<tr tabindex="0" data-id="'+e.id+'"'+(e.has_capture?'':' data-empty="1"')+'><td class="mono">'+esc(fmtTime(e.timestamp))+'</td><td><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></td><td class="mono">'+esc(e.method||'')+' '+esc(e.path||'')+'</td><td class="'+(bad?'status-bad':'status-ok')+'">'+esc(e.status)+'</td><td class="mono">'+fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')+'</td><td class="mono">'+fmtTok(tok.completion_tokens)+'</td><td class="mono">'+esc(fmtSpeed(tok.prompt_per_second))+'</td><td class="mono">'+esc(fmtSpeed(tok.tokens_per_second))+'</td><td class="mono">'+esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')+'</td><td class="mono">'+esc(fmtDur(e.duration_ms))+'</td></tr>';
+      }).join('')||'<tr><td colspan="10" class="empty">No generation requests yet. Send one from Chat lab or any client.</td></tr>';
     }catch(e){
-      $('activity-rows').innerHTML='<tr><td colspan="9" class="empty">'+esc(e.message)+'</td></tr>';
+      $('activity-rows').innerHTML='<tr><td colspan="10" class="empty">'+esc(e.message)+'</td></tr>';
     }
   }
   async function openCapture(id, row){

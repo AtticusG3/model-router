@@ -56,9 +56,10 @@ __EMBED_CSS__
         <article class="panel chart-card"><div class="chart-head"><h2>Generation speed</h2><span class="subtle" id="chart-gen-label">tok/s</span></div><svg class="spark" id="chart-gen" viewBox="0 0 320 96" role="img" aria-label="Generation tokens per second"></svg></article>
         <article class="panel chart-card"><div class="chart-head"><h2>Prompt speed</h2><span class="subtle" id="chart-prompt-label">tok/s</span></div><svg class="spark" id="chart-prompt" viewBox="0 0 320 96" role="img" aria-label="Prompt tokens per second"></svg></article>
         <article class="panel chart-card"><div class="chart-head"><h2>Duration</h2><span class="subtle" id="chart-dur-label">ms</span></div><svg class="spark" id="chart-dur" viewBox="0 0 320 96" role="img" aria-label="Request duration"></svg></article>
+        <article class="panel chart-card"><div class="chart-head"><h2>Time to first token</h2><span class="subtle" id="chart-ttft-label">ms</span></div><svg class="spark" id="chart-ttft" viewBox="0 0 320 96" role="img" aria-label="Time to first token"></svg></article>
       </section>
       <section class="section"><div class="section-heading"><div><h2>Generation requests</h2><p>Click a row to open the captured request and response.</p></div><span class="subtle" id="activity-hint">In-memory on this node</span></div>
-        <div class="panel"><div class="table-wrap"><table class="table activity-table"><thead><tr><th>Time</th><th>Model</th><th>Path</th><th>Status</th><th>Prompt</th><th>Generated</th><th>Prompt tok/s</th><th>Gen tok/s</th><th>Duration</th></tr></thead><tbody id="activity-rows"></tbody></table></div></div>
+        <div class="panel"><div class="table-wrap"><table class="table activity-table"><thead><tr><th>Time</th><th>Model</th><th>Path</th><th>Status</th><th>Prompt</th><th>Generated</th><th>Prompt tok/s</th><th>Gen tok/s</th><th>TTFT</th><th>Duration</th></tr></thead><tbody id="activity-rows"></tbody></table></div></div>
       </section>
     </main>
     <dialog id="activity-dialog" class="capture-dialog" aria-labelledby="capture-title">
