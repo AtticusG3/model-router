@@ -8,17 +8,18 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"model-router/internal/config"
 )
 
 func TestParseTokenStatsJSON(t *testing.T) {
-	body := []byte(`{"usage":{"prompt_tokens":26,"completion_tokens":128,"prompt_tokens_details":{"cached_tokens":10}},"timings":{"prompt_n":26,"predicted_n":128,"prompt_per_second":410.5,"predicted_per_second":123.4}}`)
+	body := []byte(`{"usage":{"prompt_tokens":26,"completion_tokens":128,"prompt_tokens_details":{"cached_tokens":10}},"timings":{"prompt_n":26,"predicted_n":128,"prompt_per_second":410.5,"predicted_per_second":123.4,"prompt_ms":18.2}}`)
 	s := parseTokenStats(body, "application/json")
 	if s.PromptTokens != 26 || s.CompletionTokens != 128 || s.CachedTokens != 10 {
 		t.Fatalf("tokens = %+v", s)
 	}
-	if s.PromptPerSecond != 410.5 || s.TokensPerSecond != 123.4 {
+	if s.PromptPerSecond != 410.5 || s.TokensPerSecond != 123.4 || s.PromptMs != 18.2 {
 		t.Fatalf("rates = %+v", s)
 	}
 }
@@ -58,7 +59,7 @@ func TestActivityRecordsProxiedRequest(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","usage":{"prompt_tokens":4,"completion_tokens":7},"timings":{"predicted_per_second":42.0}}`))
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":4,"completion_tokens":7},"timings":{"predicted_per_second":42.0,"prompt_ms":33.6}}`))
 	}))
 	defer peer.Close()
 
@@ -108,6 +109,9 @@ func TestActivityRecordsProxiedRequest(t *testing.T) {
 	if e.Tokens.PromptTokens != 4 || e.Tokens.CompletionTokens != 7 || e.Tokens.TokensPerSecond != 42 {
 		t.Fatalf("tokens = %+v", e.Tokens)
 	}
+	if e.TTFTMs != 34 {
+		t.Fatalf("ttft = %d, want prompt_ms 34", e.TTFTMs)
+	}
 	if !e.HasCapture {
 		t.Fatal("expected capture")
 	}
@@ -145,7 +149,7 @@ func TestActivityRecordsSSETimings(t *testing.T) {
 		if fl != nil {
 			fl.Flush()
 		}
-		_, _ = w.Write([]byte("data: {\"timings\":{\"prompt_n\":9,\"predicted_n\":3,\"predicted_per_second\":55.5,\"prompt_per_second\":400}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"timings\":{\"prompt_n\":9,\"predicted_n\":3,\"predicted_per_second\":55.5,\"prompt_per_second\":400,\"prompt_ms\":9000}}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer peer.Close()
@@ -179,7 +183,37 @@ func TestActivityRecordsSSETimings(t *testing.T) {
 	if tok.PromptTokens != 9 || tok.CompletionTokens != 3 || tok.TokensPerSecond != 55.5 {
 		t.Fatalf("sse tokens = %+v", tok)
 	}
+	if entries[0].TTFTMs <= 0 || entries[0].TTFTMs >= 9000 {
+		t.Fatalf("ttft = %d, want wall-clock first token, not prompt_ms", entries[0].TTFTMs)
+	}
 	if !strings.Contains(rec.Header().Get("Content-Type"), "text/event-stream") {
 		t.Fatalf("content-type = %q", rec.Header().Get("Content-Type"))
+	}
+}
+
+func TestActivityWriterStampsStreamingTTFT(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "text/event-stream")
+	w := &activityWriter{
+		ResponseWriter: rec,
+		max:            maxCaptureBody,
+		started:        time.Now().Add(-120 * time.Millisecond),
+	}
+	_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n"))
+	if w.ttftSet {
+		t.Fatal("role chunk set ttft")
+	}
+	_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"))
+	if w.ttftSet {
+		t.Fatal("empty content set ttft")
+	}
+	_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n"))
+	if !w.ttftSet || w.ttftMs < 100 {
+		t.Fatalf("ttft=%d set=%v", w.ttftMs, w.ttftSet)
+	}
+	stamped := w.ttftMs
+	_, _ = w.Write([]byte("data: {\"timings\":{\"prompt_ms\":3,\"predicted_per_second\":10}}\n\n"))
+	if w.ttftMs != stamped {
+		t.Fatalf("ttft overwritten: %d -> %d", stamped, w.ttftMs)
 	}
 }
