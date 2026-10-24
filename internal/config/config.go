@@ -64,6 +64,11 @@ type Stanza struct {
 	// (see Router.SweepStale). 0 = resident: the sweep never touches it, but
 	// a load that needs the VRAM still can, if it is not mid-request.
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
+	// HoldSeconds keeps a model resident for this long after it becomes healthy,
+	// even if another request needs its VRAM. A cold model with a long warm-up
+	// (e.g. a one-off calibration) would otherwise be evicted the instant it
+	// reports healthy but before a client can reach it. 0 = no hold.
+	HoldSeconds int `yaml:"hold_seconds"`
 	// Unlisted is accepted for llama-swap configs. Listing ignores it: the
 	// mesh catalog shows every available model id once.
 	Unlisted bool `yaml:"unlisted"`

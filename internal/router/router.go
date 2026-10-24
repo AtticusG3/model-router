@@ -567,6 +567,13 @@ func (r *Router) evictableLocked(id string, kind evictKind) bool {
 		return false
 	}
 	if m != nil {
+		// A backend inside its hold window just became healthy; evicting it
+		// would discard a long warm-up before any client could reach it.
+		// Checked here rather than via protected() because the caller already
+		// holds r.mu and protected() re-locks it. m.InHold takes m.mu only.
+		if m.InHold(time.Now()) {
+			return false
+		}
 		switch m.State() {
 		case StateStarting, StateStopping:
 			return false
@@ -583,8 +590,10 @@ func (r *Router) residentModel(id string) bool {
 }
 
 // protected is true while a request is mid-generation, the process is still
-// spinning up, or Unload is already stopping it. Evicting a start races two
-// loads into "stopped during start" 503s; wait instead.
+// spinning up or down, or the stanza's hold window is open. Evicting a start
+// races two loads into "stopped during start" 503s; wait instead. A held model
+// just became healthy, so evicting it here would discard a long warm-up (cold
+// load, one-off calibration) before any client could use it.
 func (r *Router) protected(id string) bool {
 	r.mu.Lock()
 	busy := r.occupancy[id] > 0
@@ -595,6 +604,9 @@ func (r *Router) protected(id string) bool {
 	}
 	if m == nil {
 		return false
+	}
+	if m.InHold(time.Now()) {
+		return true
 	}
 	switch m.State() {
 	case StateStarting, StateStopping:

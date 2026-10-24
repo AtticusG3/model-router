@@ -118,6 +118,7 @@ stanzas:
       body_field: model    # XOR path_prefix
     health_check: /health
     idle_ttl_seconds: 600  # 0 = resident, never swept
+    hold_seconds: 0        # seconds after healthy during which eviction skips it
     port: 5901             # 0 = next free port from start_port
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
 
@@ -278,7 +279,10 @@ cached, possibly stale copy and never treat it as ground truth.
 
 Something that is mid-request, still starting, or already stopping is never
 unloaded. A stanza with `vram_mb <= 0` is never unloaded to make room; it
-does not free a GPU.
+does not free a GPU. `hold_seconds` (default 0) also skips eviction for that
+many seconds after the instance first reports healthy, so a long cold start
+is not reclaimed before a client can reach it. The idle sweep skips a hold
+the same way.
 
 Two mechanisms:
 
