@@ -1,10 +1,13 @@
 # Model Router — v0.1 Implementation Plan
 
 This plan is the result of probing the fleet (buster, digger, gareths-homelab, nomad;
-nugget offline) and comparing reality against `SPEC.md`. It records what was found,
-the gaps/pitfalls in the SPEC, the design decisions that fit this network, and the
-deployment path. The SPEC remains the source of truth for goals; this document
-records the deltas and the concrete build.
+nugget offline) and comparing reality against the original v0.1 sketch. It records
+what was found, the gaps in that sketch, the design decisions that fit this
+network, and the deployment path.
+
+The fitted design is now the behaviour in `SPEC.md` and the code. This file
+stays the fleet survey and the record of why those choices were made. Where
+they disagree, `SPEC.md` and the code win.
 
 ---
 

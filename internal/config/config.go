@@ -1,8 +1,7 @@
 // Package config loads and validates the model-router per-node configuration.
 //
-// The stanza schema is defined in SPEC.md. This file extends it with the fields
-// the fleet actually needs (device pinning for buster's two GPUs, optional
-// pools for legacy client ids, peers, preload).
+// The file shape is the schema in SPEC.md: stanzas, pools, peers, preload,
+// and telemetry.
 package config
 
 import (
@@ -61,9 +60,9 @@ type Stanza struct {
 	Match   Match  `yaml:"match"`
 	// HealthCheck is the URL path polled for readiness. Default "/health".
 	HealthCheck string `yaml:"health_check"`
-	// IdleTTLSeconds marks a running model stale after this many idle seconds.
-	// Stale models stay loaded (reload is expensive); they are evicted only when
-	// another load needs the VRAM. 0 = never stale (resident).
+	// IdleTTLSeconds unloads a running instance after this many idle seconds
+	// (see Router.SweepStale). 0 = resident: the sweep never touches it, but
+	// a load that needs the VRAM still can, if it is not mid-request.
 	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
 	// Unlisted is accepted for llama-swap configs. Listing ignores it: the
 	// mesh catalog shows every available model id once.

@@ -11,14 +11,16 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
   `/v1/rerank`, `/v1/images/generations`, `/v1/models`, …) and sd.cpp routes
   (`/sdapi/v1/*`) by loading the right backend on demand.
 - Supervises backend processes (spawn, health-check polling, crash/restart).
-- Idle TTL marks a loaded model stale; it stays resident until another load
-  needs the VRAM. Last resort: an idle resident (including ttl=0) is evicted
-  if it is not mid-generation.
+- `idle_ttl_seconds > 0` unloads an idle instance on a 30s sweep once that
+  TTL passes and nothing is in flight. `0` is resident and is never swept.
+  A load that needs the VRAM can still evict stale models, then other idle
+  models, then residents, as long as they are not mid-generation.
 - Admission uses live nvidia-smi free VRAM, with a per-GPU reservation ledger
   so concurrent loads cannot double-book during spin-up. A node is the sole
   authority over its own GPUs (no split-brain).
-- Advertises to peers every few seconds: loaded models (fresh/stale), live
-  free VRAM, and free VRAM if stale or idle models were evicted.
+- Peers pull `GET /_router/telemetry` every few seconds: loaded models
+  (fresh/stale), live free VRAM, and free VRAM if stale or idle models were
+  evicted.
 - Spills requests to peers when the local node can't serve them (model not
   local, or GPU full): `POST /_router/load` on the candidate, then a streamed
   transparent reverse proxy. If no peer is empty right now, the origin still
