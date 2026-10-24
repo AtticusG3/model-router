@@ -52,8 +52,8 @@ func main() {
 			if s.InstanceCount() > 1 {
 				flags += fmt.Sprintf(" instances=%d ports=%v", s.InstanceCount(), s.InstancePorts)
 			}
-			fmt.Printf("  %-28s port=%-5d vram=%-6d slots=%-2d dev=%-4s api=%-9s ttl=%-4d unlisted=%v%s\n",
-				s.ModelID, s.Port, s.VramMB, s.SlotCount(), s.Device, s.APIType, s.IdleTTLSeconds, s.Unlisted, flags)
+			fmt.Printf("  %-28s port=%-5d vram=%-6d slots=%-2d dev=%-4s api=%-9s ttl=%-4d hold=%-4d unlisted=%v%s\n",
+				s.ModelID, s.Port, s.VramMB, s.SlotCount(), s.Device, s.APIType, s.IdleTTLSeconds, s.HoldSeconds, s.Unlisted, flags)
 		}
 		for name, p := range cfg.Pools {
 			fmt.Printf("  pool %-18s spillover=%d targets=%v\n", name, p.Spillover, p.Targets)
