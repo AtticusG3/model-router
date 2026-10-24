@@ -68,6 +68,11 @@ Each node runs five logical components inside the one binary:
     body_field: model     # OpenAI-style: model id in JSON body
   health_check: /health
   idle_ttl_seconds: 600
+  # hold_seconds: keep this model resident for N seconds after it first becomes
+  # healthy, even when another stanza needs its VRAM. Use it for models with a
+  # long one-off warm-up (calibration, cold load) so they aren't evicted before a
+  # client can reach them. 0 (default) = no hold; normal admission applies.
+  hold_seconds: 900
 
 - model_id: sdxl-turbo
   command: "/opt/ai/bin/sd-server -m {model_path} --port {port}"
