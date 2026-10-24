@@ -41,6 +41,10 @@ type Managed struct {
 	// spawn, if set, overrides the GOOS spawnProc. Tests inject a fake.
 	spawn    spawner
 	lastUsed time.Time
+	// readyAt is when this backend last reported healthy. HoldSeconds protects
+	// it from eviction until readyAt+HoldSeconds, so a model with a long warm-up
+	// is not yanked away before a client can reach it.
+	readyAt time.Time
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -206,9 +210,11 @@ func (m *Managed) Start() (int, error) {
 		return -1, m.fail(fmt.Errorf("process not alive after health check for %s", m.id))
 	}
 
+	now := time.Now()
 	m.mu.Lock()
 	m.state = StateRunning
-	m.lastUsed = time.Now()
+	m.lastUsed = now
+	m.readyAt = now
 	m.mu.Unlock()
 
 	// Record the GPU this model landed on (set by the router after Start).
@@ -425,6 +431,24 @@ func (m *Managed) IsStale(now time.Time) bool {
 		return false
 	}
 	return now.Sub(m.lastUsed) > time.Duration(ttl)*time.Second
+}
+
+// InHold reports whether the stanza's hold window is still open: the backend
+// became healthy less than HoldSeconds ago. Held models are not evicted for any
+// reason, so a client has time to reach a model that just finished a long
+// warm-up (calibration, cold load) before admission reclaims its VRAM.
+// 0 = no hold. Only running backends hold; starting ones are protected anyway.
+func (m *Managed) InHold(now time.Time) bool {
+	hold := m.stanza.HoldSeconds
+	if hold <= 0 {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state != StateRunning || m.readyAt.IsZero() {
+		return false
+	}
+	return now.Before(m.readyAt.Add(time.Duration(hold) * time.Second))
 }
 
 func (m *Managed) setLastUsed(t time.Time) {
