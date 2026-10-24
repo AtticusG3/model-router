@@ -74,8 +74,8 @@ func (p *GPUPoller) pollOnce() {
 	p.ledger.SetGPUs(gpus)
 }
 
-// queryGPUs reads GPU state from nvidia-smi. The SPEC allows nvidia-smi or
-// pynvml; nvidia-smi keeps the binary dependency-free.
+// queryGPUs reads GPU state from nvidia-smi. SPEC specifies nvidia-smi only;
+// that keeps the binary dependency-free.
 //
 // It is resilient to a single bad GPU: one failing device (common with a
 // flaky driver) must not blind the router to the healthy ones, so it queries

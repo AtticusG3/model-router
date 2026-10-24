@@ -412,8 +412,8 @@ func (m *Managed) fail(err error) error {
 }
 
 // IsStale reports whether a running backend has been idle longer than its TTL.
-// ttl <= 0 means never stale (resident). Stale models stay loaded until a
-// later admission needs their VRAM.
+// ttl <= 0 means never stale (resident). SweepStale unloads a stale instance
+// when it has no in-flight request; evictToFit also prefers stale occupants.
 func (m *Managed) IsStale(now time.Time) bool {
 	ttl := m.stanza.IdleTTLSeconds
 	if ttl <= 0 {
