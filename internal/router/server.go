@@ -210,7 +210,14 @@ func handleMetrics(r *Router) http.HandlerFunc {
 			fmt.Fprintf(&sb, "model_router_peer_fresh{peer=%q} %d\n", p.Name, fresh)
 		}
 
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		// Request counters, latency histograms and token totals. Kept in the
+		// same hand-rolled exposition as the gauges above so the binary stays
+		// dependency-free.
+		if r.metrics != nil {
+			sb.WriteString(r.metrics.Render(r.node))
+		}
+
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		fmt.Fprint(w, sb.String())
 	}
 }

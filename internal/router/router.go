@@ -38,6 +38,7 @@ type Router struct {
 
 	httpc    *http.Client
 	activity *ActivityLog
+	metrics  *Metrics
 }
 
 // New builds a Router from parsed config.
@@ -56,8 +57,12 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		shutdown:  make(chan struct{}),
 		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
 		activity:  NewActivityLog(),
+		metrics:   NewMetrics(),
 	}
 }
+
+// Metrics returns the request counters and latency histograms behind /metrics.
+func (r *Router) Metrics() *Metrics { return r.metrics }
 
 // Shutdown tells supervisors not to restart backends and cancels in-flight
 // peer loads. Call it before unloading on process exit.
@@ -1335,6 +1340,10 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	if r.metrics != nil {
+		r.metrics.IncInflight()
+		defer r.metrics.DecInflight()
 	}
 	wrapped, done := r.wrapProxy(w, req, model, target)
 	defer done()

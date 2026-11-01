@@ -69,7 +69,34 @@ __EMBED_CSS__
         <section><h3>Response</h3><pre class="capture-body" id="capture-resp"></pre></section>
       </div>
     </dialog>
-    <main id="logs" class="view"><div class="section-heading"><div><h2>Logs & metrics</h2><p>Router Prometheus text, llama.cpp /metrics from running backends, plus router / upstream / mesh event rings.</p></div></div><div class="grid"><section class="panel"><div class="panel-header"><div><h2>Router metrics</h2><p>This process: running backends, GPU free, peer freshness.</p></div></div><div id="metrics" class="output metric-output">Loading metrics…</div></section><section class="panel"><div class="panel-header"><div><h2>Upstream metrics</h2><p>Scraped from each running backend's <code>/metrics</code>.</p></div></div><div id="upstream-metrics" class="output metric-output">Loading upstream metrics…</div></section><section class="panel"><div class="panel-header"><div><h2>Router events</h2><p>Admission, spawn, preload, errors.</p></div></div><div id="logs-output" class="logs">Loading logs…</div></section><section class="panel"><div class="panel-header"><div><h2>Upstream logs</h2><p>Backend stdout/stderr.</p></div></div><div id="upstream-logs" class="logs">Loading upstream logs…</div></section><section class="panel"><div class="panel-header"><div><h2>Mesh logs</h2><p>Peer telemetry and forwarded requests.</p></div></div><div id="mesh-logs" class="logs">Loading mesh logs…</div></section></div></main>
+    <main id="logs" class="view">
+      <section class="overview" aria-label="Router activity summary">
+        <div class="stat-card"><div class="stat-top"><span>Requests</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12h11M12 6l6 6-6 6"/></svg></span></div><div class="stat-value" id="log-req-count">—</div><div class="stat-foot">last 200 proxied</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Error rate</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg></span></div><div class="stat-value" id="log-err-rate">—</div><div class="stat-foot">4xx and 5xx</div></div>
+        <div class="stat-card"><div class="stat-top"><span>p95 duration</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></span></div><div class="stat-value" id="log-p95">—</div><div class="stat-foot">tail latency</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Generation speed</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg></span></div><div class="stat-value" id="log-tps">—<small> tok/s</small></div><div class="stat-foot">avg completion</div></div>
+      </section>
+
+      <div class="log-toolbar" role="region" aria-label="Log filters">
+        <div class="chips" id="log-levels" role="group" aria-label="Filter by level">
+          <button class="chip active" data-level="all" aria-pressed="true">All <span class="n" id="n-all">0</span></button>
+          <button class="chip" data-level="error" aria-pressed="false">Errors <span class="n" id="n-error">0</span></button>
+          <button class="chip" data-level="warn" aria-pressed="false">Warnings <span class="n" id="n-warn">0</span></button>
+          <button class="chip" data-level="debug" aria-pressed="false">Debug <span class="n" id="n-debug">0</span></button>
+        </div>
+        <input class="log-search" id="log-search" type="search" placeholder="Filter lines…" aria-label="Filter log lines by text" autocomplete="off">
+        <label class="pause-toggle"><input type="checkbox" id="log-pause"> Pause refresh</label>
+        <span class="subtle mono" id="log-updated">—</span>
+      </div>
+
+      <div class="grid">
+        <section class="panel"><div class="panel-header"><div><h2>Router metrics</h2><p>This process: request counters, latency histograms, GPU gauges, peer freshness.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-metrics">—</span><button class="ghost copy-btn" data-copy="metrics">Copy</button></div></div><div class="metric-summary" id="metrics-summary"></div><div id="metrics" class="output metric-output">Loading metrics…</div></section>
+        <section class="panel"><div class="panel-header"><div><h2>Upstream metrics</h2><p>Scraped from each running backend's <code>/metrics</code>.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-upstream-metrics">—</span></div></div><div id="upstream-metrics" class="output metric-output">Loading upstream metrics…</div></section>
+        <section class="panel"><div class="panel-header"><div><h2>Router events</h2><p>Admission, spawn, preload, evictions, errors.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-logs-output">—</span></div></div><div id="logs-output" class="logs">Loading logs…</div></section>
+        <section class="panel"><div class="panel-header"><div><h2>Upstream logs</h2><p>Backend stdout/stderr.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-upstream-logs">—</span></div></div><div id="upstream-logs" class="logs">Loading upstream logs…</div></section>
+        <section class="panel"><div class="panel-header"><div><h2>Mesh logs</h2><p>Peer telemetry and forwarded requests.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-mesh-logs">—</span></div></div><div id="mesh-logs" class="logs">Loading mesh logs…</div></section>
+      </div>
+    </main>
   </div>
 </div>
 <script>
