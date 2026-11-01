@@ -3,7 +3,11 @@ package router
 import (
 	"fmt"
 	"io"
+	"regexp"
+	"strings"
 	"sync"
+	"time"
+	"unicode/utf8"
 )
 
 // Logger is a minimal leveled logger to keep the router dependency-free.
@@ -40,11 +44,45 @@ func copyRing(src []string, limit int) []string {
 	return out
 }
 
+// ansiSeq matches ANSI/VT100 escape sequences. llama-server and the Python
+// backends emit colour codes and cursor moves on stdout; those look like
+// garbage in the browser and are useless in a ring buffer, so strip them.
+var ansiSeq = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
+
+// maxRingLine caps one stored line. A backend that dumps a multi-megabyte
+// stack trace must not bloat every 3-second poll of /_router/logs.
+const maxRingLine = 2000
+
+// sanitize makes one log line safe to store and render: no escape sequences,
+// no carriage returns from progress bars, and bounded length. The stdout copy
+// is left untouched so journald keeps the raw bytes.
+func sanitize(s string) string {
+	if strings.ContainsRune(s, '\x1b') {
+		s = ansiSeq.ReplaceAllString(s, "")
+	}
+	if strings.ContainsRune(s, '\r') {
+		s = strings.ReplaceAll(s, "\r", "")
+	}
+	if len(s) > maxRingLine {
+		cut := maxRingLine
+		// Do not split a multi-byte rune in half.
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "…"
+	}
+	return s
+}
+
 func (l *Logger) write(ring *[]string, prefix, format string, args ...any) {
 	line := prefix + fmt.Sprintf(format, args...)
+	// The ring gets a time-of-day prefix so an operator can tell when an
+	// event happened. stdout does not: journald already stamps each line and
+	// a second timestamp only makes `journalctl -o short` harder to read.
+	stamped := time.Now().Format("15:04:05.000") + " " + sanitize(line)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	*ring = appendRing(*ring, line)
+	*ring = appendRing(*ring, stamped)
 	fmt.Fprintln(l.w, line)
 }
 

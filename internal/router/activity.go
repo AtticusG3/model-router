@@ -449,9 +449,6 @@ func parseTokenStats(body []byte, contentType string) TokenStats {
 }
 
 func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started time.Time, reqBody []byte, reqTrunc bool, model, target string) {
-	if r.activity == nil {
-		return
-	}
 	status := rec.status
 	if status == 0 {
 		status = http.StatusOK
@@ -473,6 +470,14 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		DurationMs:  int(time.Since(started).Milliseconds()),
 		TTFTMs:      ttft,
 		Tokens:      tokens,
+	}
+	// Metrics are recorded even when the activity ring is disabled, so a
+	// scrape still sees request counts and latency on a lean deployment.
+	if r.metrics != nil {
+		r.metrics.Observe(entry)
+	}
+	if r.activity == nil {
+		return
 	}
 	reqStr, clipped := clipBody(reqBody)
 	respStr := rec.body.String()

@@ -251,6 +251,7 @@
       $('act-avg-gen').innerHTML=gens.length?(gens.reduce((a,b)=>a+b,0)/gens.length).toFixed(1)+'<small> tok/s</small>':'—<small> tok/s</small>';
       $('act-avg-dur').textContent=durs.length?fmtDur(durs.reduce((a,b)=>a+b,0)/durs.length):'—';
       $('act-errors').textContent=errs;
+      renderLogStats(rows);
       const chrono=rows.slice().reverse();
       spark($('chart-gen'), chrono.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0), '#63dda1');
       spark($('chart-prompt'), chrono.map(e=>Number(e.tokens&&e.tokens.prompt_per_second)||0).filter(v=>v>0), '#58d6e6');
@@ -301,6 +302,224 @@
   });
   $('capture-close').onclick=()=>$('activity-dialog').close();
 
-  async function logs(){try{const d=await json('/_router/logs');$('logs-output').textContent=(d.entries||[]).join('\n')||'No router events yet.';$('upstream-logs').textContent=(d.upstream||[]).join('\n')||'No upstream output yet.';$('mesh-logs').textContent=(d.mesh||[]).join('\n')||'No mesh events yet.';const bm=d.backend_metrics||[];$('upstream-metrics').textContent=bm.length?bm.map(x=>'# '+x.id+'\n'+(x.body||'')+'\n').join('\n'):'No running backends to scrape.'}catch(e){$('logs-output').textContent=e.message}try{$('metrics').textContent=await (await fetch('/metrics')).text()}catch(e){$('metrics').textContent=e.message}}
+  // ---- Logs & metrics ----
+  const LEVEL_CLASS={error:'lvl-error',warn:'lvl-warn',debug:'lvl-debug',mesh:'lvl-mesh',upstream:'lvl-upstream',info:''};
+  let logData={entries:[],upstream:[],mesh:[],backend_metrics:[]};
+  let logLevel='all';
+  let logQuery='';
+  let logPause=false;
+  const setText=(id,v)=>{const el=$(id);if(el)el.textContent=v};
+
+  // renderLogStats fills the four cards above the log panels from the same
+  // activity ring the Activity page uses. Cheap, and gives an at-a-glance
+  // answer before reading a single line.
+  function renderLogStats(rows){
+    const reqs=rows.length;
+    const errs=rows.filter(e=>Number(e.status)>=400).length;
+    const durs=rows.map(e=>Number(e.duration_ms)||0).filter(v=>v>0).sort((a,b)=>a-b);
+    const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
+    const p95=durs.length?durs[Math.min(durs.length-1,Math.ceil(durs.length*0.95)-1)]:0;
+    setText('log-req-count',reqs||'0');
+    setText('log-err-rate',reqs?((errs/reqs)*100).toFixed(errs&&(errs/reqs)<0.01?2:1)+'%':'—');
+    setText('log-p95',p95?fmtDur(p95):'—');
+    const tps=gens.length?gens.reduce((a,b)=>a+b,0)/gens.length:0;
+    const tpsEl=$('log-tps');if(tpsEl)tpsEl.innerHTML=(tps?tps.toFixed(1):'—')+'<small> tok/s</small>';
+    const errEl=$('log-err-rate');if(errEl)errEl.className='stat-value'+(reqs&&errs/reqs>=0.05?' error':'');
+  }
+
+  // splitTs peels the HH:MM:SS.mmm prefix the logger writes into the ring.
+  function splitTs(line){
+    const m=/^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)\s+([\s\S]*)$/.exec(String(line||''));
+    return m?{ts:m[1],msg:m[2]}:{ts:'',msg:String(line||'')};
+  }
+
+  // classify maps a ring line to a severity for colouring. The logger encodes
+  // level in the prefix; upstream lines are raw backend stdout so we look for
+  // the words backends actually emit on failure.
+  function classify(msg){
+    if(msg.startsWith('[router:error]')||msg.startsWith('[error]'))return 'error';
+    if(msg.startsWith('[router:warn]')||msg.startsWith('[warn]'))return 'warn';
+    if(msg.startsWith('[router:debug]'))return 'debug';
+    if(msg.startsWith('[mesh]'))return 'mesh';
+    if(msg.startsWith('[upstream]'))return /\b(error|failed|fatal|panic|exception)\b/i.test(msg)?'error':(/\bwarn/i.test(msg)?'warn':'upstream');
+    return /\b(error|failed|fatal|panic|exception)\b/i.test(msg)?'error':'info';
+  }
+
+  function matchLevel(lvl){
+    if(logLevel==='all')return true;
+    if(logLevel==='error')return lvl==='error';
+    if(logLevel==='warn')return lvl==='warn';
+    if(logLevel==='debug')return lvl==='debug';
+    return true;
+  }
+
+  // highlight escapes first, then wraps search hits so the markup cannot be
+  // injected through a crafted log line.
+  function highlight(s){
+    const safe=esc(s);
+    if(!logQuery)return safe;
+    try{
+      const q=logQuery.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      return safe.replace(new RegExp(q,'gi'),m=>'<mark>'+m+'</mark>');
+    }catch(e){return safe}
+  }
+
+  function renderRing(id,lines,emptyText){
+    const el=$(id);if(!el)return 0;
+    const out=[];
+    for(const line of lines){
+      const {ts,msg}=splitTs(line);
+      const lvl=classify(msg);
+      if(!matchLevel(lvl))continue;
+      if(logQuery&&msg.toLowerCase().indexOf(logQuery)<0)continue;
+      out.push('<div class="log-line '+LEVEL_CLASS[lvl]+'"><span class="log-ts">'+esc(ts)+'</span><span class="log-msg">'+highlight(msg)+'</span></div>');
+    }
+    const nearBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-8;
+    el.innerHTML=out.length?out.join(''):'<div class="log-empty">'+esc(emptyText)+'</div>';
+    if(nearBottom)el.scrollTop=el.scrollHeight;
+    return out.length;
+  }
+
+  function setBadge(id,shown,total){
+    const el=$(id);if(!el)return;
+    el.textContent=shown===total?total+' lines':shown+'/'+total+' lines';
+    el.classList.toggle('hot',total>0&&shown===0);
+  }
+
+  // renderMetricsText formats Prometheus exposition for reading: HELP/TYPE
+  // dimmed, metric name cyan, labels muted, value emphasised. A zero on a
+  // "healthy means 1" series is flagged so a down peer or backend stands out.
+  function renderMetricsText(text){
+    const out=[];
+    for(const raw of String(text||'').split('\n')){
+      const line=raw.replace(/\s+$/,'');
+      if(!line)continue;
+      if(line.startsWith('# TYPE ')){out.push('<span class="m-type">'+esc(line)+'</span>');continue}
+      if(line.startsWith('#')){out.push('<span class="m-help">'+esc(line)+'</span>');continue}
+      const sp=line.lastIndexOf(' ');
+      let name=line,val='';
+      if(sp>0){name=line.slice(0,sp);val=line.slice(sp+1)}
+      let base=name,labels='';
+      const br=name.indexOf('{');
+      if(br>0){base=name.slice(0,br);labels=name.slice(br)}
+      // Only genuine faults go red. A stopped model is normal — the router
+      // spawns on demand — so flagging every idle stanza would cry wolf.
+      const hot=val==='0'&&/^(model_router_peer_fresh|model_router_up)$/.test(base);
+      out.push('<span class="m-line'+(hot?' hot':'')+'"><span class="m-name">'+esc(base)+'</span><span class="m-lbl">'+esc(labels)+'</span> <span class="m-val">'+esc(val)+'</span></span>');
+    }
+    return out.join('');
+  }
+
+  function summarizeMetrics(text){
+    const t=String(text||'');
+    const count=re=>(t.match(re)||[]).length;
+    const running=count(/^model_router_model_running\{[^}]*\} 1$/gm);
+    const declared=count(/^model_router_model_running\{[^}]*\} \d+$/gm);
+    const fresh=count(/^model_router_peer_fresh\{[^}]*\} 1$/gm);
+    const peerTotal=count(/^model_router_peer_fresh\{[^}]*\} \d+$/gm);
+    let free=0,total=0;
+    t.replace(/^model_router_gpu_free_mb\{[^}]*\} (\d+)$/gm,(_,v)=>{free+=Number(v);return''});
+    t.replace(/^model_router_gpu_total_mb\{[^}]*\} (\d+)$/gm,(_,v)=>{total+=Number(v);return''});
+    let reqTotal=0;
+    t.replace(/^model_router_requests_total\{[^}]*\} (\d+)$/gm,(_,v)=>{reqTotal+=Number(v);return''});
+    const inflight=/^model_router_inflight_requests\{[^}]*\} (\d+)$/m.exec(t);
+    const pills=[];
+    if(declared)pills.push('<span class="metric-pill'+(running>0?'':' bad')+'"><b>'+running+'</b>/'+declared+' models running</span>');
+    if(total){const usedPct=Math.round((1-free/total)*100);pills.push('<span class="metric-pill'+(usedPct>=90?' warn':'')+'"><b>'+usedPct+'%</b> GPU used · '+Math.round(free/1024)+' GB free</span>')}
+    if(peerTotal)pills.push('<span class="metric-pill'+(fresh<peerTotal?' warn':'')+'"><b>'+fresh+'</b>/'+peerTotal+' peers fresh</span>');
+    if(reqTotal)pills.push('<span class="metric-pill"><b>'+reqTotal+'</b> requests since start</span>');
+    if(inflight&&Number(inflight[1])>0)pills.push('<span class="metric-pill good"><b>'+inflight[1]+'</b> in flight</span>');
+    return pills.join('')||'<span class="metric-pill">No series parsed yet</span>';
+  }
+
+  function renderLogs(){
+    const e=renderRing('logs-output',logData.entries,'No router events yet.');
+    const u=renderRing('upstream-logs',logData.upstream,'No upstream output yet.');
+    const m=renderRing('mesh-logs',logData.mesh,'No mesh events yet.');
+    setBadge('count-logs-output',e,logData.entries.length);
+    setBadge('count-upstream-logs',u,logData.upstream.length);
+    setBadge('count-mesh-logs',m,logData.mesh.length);
+    const counts={all:0,error:0,warn:0,debug:0};
+    for(const ring of [logData.entries,logData.upstream,logData.mesh]){
+      for(const line of ring){
+        const lvl=classify(splitTs(line).msg);
+        counts.all++;
+        if(lvl==='error')counts.error++;
+        else if(lvl==='warn')counts.warn++;
+        else if(lvl==='debug')counts.debug++;
+      }
+    }
+    for(const k in counts)setText('n-'+k,counts[k]);
+    const chip=$('log-levels')&&$('log-levels').querySelector('button[data-level="error"]');
+    if(chip)chip.classList.toggle('hot',counts.error>0);
+  }
+
+  async function logs(){
+    if(logPause)return;
+    try{
+      const d=await json('/_router/logs');
+      logData={entries:d.entries||[],upstream:d.upstream||[],mesh:d.mesh||[],backend_metrics:d.backend_metrics||[]};
+      const total=logData.entries.length+logData.upstream.length+logData.mesh.length;
+      setText('log-updated',total+' lines · '+new Date().toLocaleTimeString());
+      renderLogs();
+    }catch(e){
+      const el=$('logs-output');if(el)el.innerHTML='<div class="log-empty">'+esc(e.message)+'</div>';
+    }
+    try{
+      const text=await (await fetch('/metrics')).text();
+      const mEl=$('metrics');if(mEl)mEl.innerHTML=renderMetricsText(text);
+      const sEl=$('metrics-summary');if(sEl)sEl.innerHTML=summarizeMetrics(text);
+      setText('count-metrics',text.split('\n').filter(l=>l&&!l.startsWith('#')).length+' series');
+      const bm=logData.backend_metrics||[];
+      const uEl=$('upstream-metrics');
+      if(uEl)uEl.innerHTML=bm.length?bm.map(x=>'<span class="m-help"># '+esc(x.id)+'</span>'+renderMetricsText(x.body||'')).join(''):'<div class="log-empty">No running backends to scrape.</div>';
+      setText('count-upstream-metrics',bm.length?bm.length+' backends':'none');
+    }catch(e){
+      const el=$('metrics');if(el)el.innerHTML='<div class="log-empty">'+esc(e.message)+'</div>';
+    }
+  }
+
+  const levelsEl=$('log-levels');
+  if(levelsEl)levelsEl.addEventListener('click',ev=>{
+    const b=ev.target.closest('button[data-level]');if(!b)return;
+    logLevel=b.dataset.level;
+    levelsEl.querySelectorAll('button').forEach(x=>{
+      const on=x===b;
+      x.classList.toggle('active',on);
+      x.setAttribute('aria-pressed',on?'true':'false');
+    });
+    renderLogs();
+  });
+  const searchEl=$('log-search');
+  if(searchEl){
+    let timer=null;
+    searchEl.addEventListener('input',()=>{
+      clearTimeout(timer);
+      timer=setTimeout(()=>{logQuery=searchEl.value.trim().toLowerCase();renderLogs()},140);
+    });
+  }
+  const pauseEl=$('log-pause');
+  if(pauseEl){
+    pauseEl.addEventListener('change',()=>{
+      logPause=pauseEl.checked;
+      if(logPause)setText('log-updated','paused');
+      else logs();
+    });
+  }
+  document.querySelectorAll('[data-copy]').forEach(b=>{
+    b.addEventListener('click',async()=>{
+      const target=$(b.dataset.copy);
+      if(!target)return;
+      const label=b.textContent;
+      try{
+        await navigator.clipboard.writeText(target.innerText);
+        b.textContent='Copied';
+      }catch(e){
+        b.textContent='Copy failed';
+      }
+      setTimeout(()=>{b.textContent=label},1200);
+    });
+  });
+
   refresh();logs();activity();setInterval(refresh,3000);setInterval(logs,3000);setInterval(activity,3000);
 })();
