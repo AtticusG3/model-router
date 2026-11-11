@@ -421,6 +421,11 @@ func (m *Managed) fail(err error) error {
 // ttl <= 0 means never stale (resident). SweepStale unloads a stale instance
 // when it has no in-flight request; evictToFit also prefers stale occupants.
 func (m *Managed) IsStale(now time.Time) bool {
+	// A pinned stanza is never stale, whatever its TTL says: the sweep must
+	// not unload a model a service is depending on.
+	if m.stanza.Pin {
+		return false
+	}
 	ttl := m.stanza.IdleTTLSeconds
 	if ttl <= 0 {
 		return false
