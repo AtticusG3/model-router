@@ -554,6 +554,12 @@ func (r *Router) evictableLocked(id string, kind evictKind) bool {
 		return false
 	}
 	m := r.managed[id]
+	// A pinned stanza is never evicted, for any reason. Its VRAM is not
+	// reclaimable, so an admission that would need it fails instead of
+	// silently pulling the model out from under a running service.
+	if s := r.cfg.Stanza(id); s != nil && s.Pin {
+		return false
+	}
 	sticky := r.residentModel(id)
 	switch kind {
 	case evictStale:

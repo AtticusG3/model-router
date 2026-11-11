@@ -69,6 +69,11 @@ type Stanza struct {
 	// (e.g. a one-off calibration) would otherwise be evicted the instant it
 	// reports healthy but before a client can reach it. 0 = no hold.
 	HoldSeconds int `yaml:"hold_seconds"`
+	// Pin keeps the stanza resident no matter what: it is never evicted, not
+	// even as a last resort when another load needs its VRAM. A load that
+	// cannot fit without disturbing it fails instead. Use for a model a
+	// service depends on continuously (e.g. a review worker's backend).
+	Pin bool `yaml:"pin"`
 	// Unlisted is accepted for llama-swap configs. Listing ignores it: the
 	// mesh catalog shows every available model id once.
 	Unlisted bool `yaml:"unlisted"`
