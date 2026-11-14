@@ -40,6 +40,19 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/model-router ./cmd/mo
 
 ## Run
 
+`configs/buster.yaml` is a **byte-identical mirror of the live production config**
+at `/opt/ai/config/model-router.yaml`. Production is the authority; this copy exists
+so the repo shows what the box actually runs. Do not hand-edit it — edit
+`/opt/ai/config/model-router.yaml` (or here and then install it), and re-sync:
+
+```bash
+cp /opt/ai/config/model-router.yaml configs/buster.yaml
+diff -q configs/buster.yaml /opt/ai/config/model-router.yaml && echo in sync
+```
+
+It drifted once for three weeks (Oct 2026) and ended up describing a llama.cpp
+topology that no longer existed, so treat a non-empty `diff` as a bug.
+
 ```bash
 ./build/model-router -config configs/buster.yaml -node buster
 ./build/model-router -check -config configs/buster.yaml   # validate only
