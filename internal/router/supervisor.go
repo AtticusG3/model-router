@@ -46,6 +46,9 @@ type Managed struct {
 	// it from eviction until readyAt+HoldSeconds, so a model with a long warm-up
 	// is not yanked away before a client can reach it.
 	readyAt time.Time
+	// progress is the last numeric "progress" a loading health body reported.
+	progress    float64
+	hasProgress bool
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -132,6 +135,7 @@ func (m *Managed) Start() (int, error) {
 	m.stopOnce = sync.Once{}
 	m.proc = nil
 	m.waitDone = nil
+	m.progress, m.hasProgress = 0, false
 	spawn := m.spawn
 	cmd, env := m.command, m.env
 	m.mu.Unlock()
@@ -185,6 +189,9 @@ func (m *Managed) Start() (int, error) {
 		// spin-up window from now. A repeat or a missing number does not.
 		if hasProgress && (!seenProgress || progress != lastProgress) {
 			lastProgress, seenProgress = progress, true
+			m.mu.Lock()
+			m.progress, m.hasProgress = progress, true
+			m.mu.Unlock()
 			deadline = time.Now().Add(spinUp)
 		}
 		m.mu.Lock()
