@@ -160,6 +160,23 @@ func TestLogStreamFilters(t *testing.T) {
 	}
 }
 
+// Extra copies of a model (max_instances) log as id#n. They belong in that
+// model's stream, history and live, and keep the #n tag so they can be told apart.
+func TestModelStreamIncludesCopies(t *testing.T) {
+	srv, l := logTestServer(t)
+	l.Upstreamf("agents-a1#1", "%s", "copy-history")
+	sc, closeFn := openStream(t, srv.URL+"/logs/stream/agents-a1")
+	defer closeFn()
+	if got := nextLine(t, sc); !strings.HasSuffix(got, "[upstream] [agents-a1#1] copy-history") {
+		t.Fatalf("history: got %q", got)
+	}
+	l.Upstreamf("embed#1", "%s", "skip")
+	l.Upstreamf("agents-a1#2", "%s", "copy-live")
+	if got := nextLine(t, sc); !strings.HasSuffix(got, "[upstream] [agents-a1#2] copy-live") {
+		t.Fatalf("live: got %q", got)
+	}
+}
+
 func TestLogStreamUnknownModel(t *testing.T) {
 	srv, _ := logTestServer(t)
 	resp, err := http.Get(srv.URL + "/logs/stream/no-such-model")

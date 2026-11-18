@@ -71,9 +71,10 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/load`, `/_router/unload` | local-only control (this node's admission; peers call these) |
 | `POST /_router/reload` | re-read the config file now (same path as the file watch and `SIGHUP`); `200` applied, `422` rejected with the error, running config unchanged. Public clients need an API key |
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
+| `/_router/backend-metrics` | per-backend generation speed and KV cache, summarised from each running backend's `/metrics` (feeds Performance) |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/activity`, `/_router/activity/{id}` | in-memory generation request log and request/response captures |
-| `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
+| `/ui/` | embedded operator WebUI (Overview, Chat lab, Image lab, Activity, Performance, Logs) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
 
 ## API keys for public clients
@@ -119,6 +120,26 @@ The chat/image selectors keep the current choice across the 3s status poll.
 click a row for request/response). Captures live in memory only (256 KB per
 body, 8 MB total) and reset on restart. Hard-refresh `/ui/` after deploying a
 new binary.
+
+**Performance** shows request rate, generation speed, GPU memory, KV cache and
+peer freshness as gauges and charts. `/metrics` stays the Prometheus scrape
+endpoint; the UI only links to it.
+
+**Logs** is one live stream: Combined, Router, Upstream, Mesh, or one model
+(every copy of it). Filter and Pause work on the last 2000 lines in the
+browser. The view follows the tail while you are at the bottom; scroll up to
+stop, scroll back down to resume. The same streams work from a shell:
+
+```bash
+curl -s  http://<router>/logs                         # buffered history, then exit
+curl -Ns http://<router>/logs/stream                  # combined, history first
+curl -Ns 'http://<router>/logs/stream?no-history'     # new lines only
+curl -Ns http://<router>/logs/stream/proxy            # router only
+curl -Ns http://<router>/logs/stream/upstream         # every backend
+curl -Ns http://<router>/logs/stream/mesh             # spills, pool fallbacks, peer state
+curl -Ns http://<router>/logs/stream/<model_id>       # one model
+curl -Ns http://<router>/logs/stream | grep -i error  # filter with a pipe
+```
 
 ## Config
 
