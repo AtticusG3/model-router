@@ -1,6 +1,7 @@
 package router
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -172,10 +173,19 @@ func (m *Managed) Start() (int, error) {
 	spinUp := time.Duration(m.stanza.SpinUpSeconds) * time.Second
 	deadline := time.Now().Add(spinUp)
 	healthOK := false
+	var lastProgress float64
+	seenProgress := false
 	for time.Now().Before(deadline) {
-		if err := m.health(); err == nil {
+		progress, hasProgress, err := m.health()
+		if err == nil {
 			healthOK = true
 			break
+		}
+		// A new progress number proves the load is moving, so it buys a full
+		// spin-up window from now. A repeat or a missing number does not.
+		if hasProgress && (!seenProgress || progress != lastProgress) {
+			lastProgress, seenProgress = progress, true
+			deadline = time.Now().Add(spinUp)
 		}
 		m.mu.Lock()
 		alive := m.proc != nil && m.proc.Alive()
@@ -299,20 +309,27 @@ func (m *Managed) copyLogs(r io.Reader) {
 	}
 }
 
-// health polls the stanza's health endpoint.
-func (m *Managed) health() error {
+// health polls the stanza's health endpoint. When it is not healthy, a numeric
+// "progress" field in a JSON body is returned so Start can extend spin-up.
+func (m *Managed) health() (progress float64, hasProgress bool, err error) {
 	url := fmt.Sprintf("http://127.0.0.1:%d%s", m.port, m.stanza.HealthCheck)
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("health %s -> %d", url, resp.StatusCode)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode == http.StatusOK {
+		return 0, false, nil
 	}
-	return nil
+	var v struct {
+		Progress *float64 `json:"progress"`
+	}
+	if json.Unmarshal(body, &v) == nil && v.Progress != nil {
+		progress, hasProgress = *v.Progress, true
+	}
+	return progress, hasProgress, fmt.Errorf("health %s -> %d", url, resp.StatusCode)
 }
 
 // watch is the single Wait owner. It restarts the backend if it dies
