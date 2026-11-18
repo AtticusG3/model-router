@@ -301,7 +301,11 @@ Two mechanisms:
 ## Supervisor
 
 One supervised process per instance, on that instance's port. Health is
-polled until `spin_up_seconds`. The process must still be alive when health
+polled until `spin_up_seconds`. While the backend is still loading, a health
+body with a numeric `progress` that differs from the last one moves the
+deadline to now plus `spin_up_seconds`; there is no second cap. The same
+number again, or no number, expires on the deadline already set. A 200
+response ends the wait whatever the body says. The process must still be alive when health
 passes, so a leftover occupant of the port cannot be mistaken for this
 spawn. The process is not bound to the HTTP request that triggered it.
 
