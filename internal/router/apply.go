@@ -12,6 +12,10 @@ import (
 // Config is the running config.
 func (r *Router) Config() *config.Config { return r.cfg() }
 
+// SetReloader wires the config reload gate to /_router/reload and the status
+// page. Call it before the HTTP server starts.
+func (r *Router) SetReloader(rl *config.Reloader) { r.reloader = rl }
+
 // Apply puts a validated config into service without restarting the process.
 // See "Reloading config" in SPEC.md for the rules.
 //

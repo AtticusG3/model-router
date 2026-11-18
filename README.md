@@ -69,6 +69,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/sdapi/v1/*` | sd.cpp/A1111 passthrough |
 | `/v1/models` | unique mesh models (local + reachable remotes, no selectors) |
 | `/_router/load`, `/_router/unload` | local-only control (this node's admission; peers call these) |
+| `POST /_router/reload` | re-read the config file now (same path as the file watch and `SIGHUP`); `200` applied, `422` rejected with the error, running config unchanged. Public clients need an API key |
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/activity`, `/_router/activity/{id}` | in-memory generation request log and request/response captures |

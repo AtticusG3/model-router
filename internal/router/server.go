@@ -20,6 +20,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 	}{
 		{"/_router/load", handleLoad(r)},
 		{"/_router/unload", handleUnload(r)},
+		{"/_router/reload", handleReload(r)},
 		{"/_router/status", func(w http.ResponseWriter, req *http.Request) {
 			peers := r.Peers().Snapshot()
 			// Freshness is judged on this node's clock, not the peer's timestamp.
@@ -129,6 +130,43 @@ func handleUnload(r *Router) http.HandlerFunc {
 			return
 		}
 		fmt.Fprintln(w, `{"status":"unloaded"}`)
+	}
+}
+
+// reloadStatus is the last reload's outcome for the UI; nil until one has run.
+func (r *Router) reloadStatus() map[string]any {
+	if r.reloader == nil {
+		return nil
+	}
+	at, errMsg := r.reloader.LastReload()
+	if at.IsZero() {
+		return nil
+	}
+	return map[string]any{"at": at.Format(time.RFC3339), "ok": errMsg == "", "error": errMsg}
+}
+
+// handleReload runs the same validate-then-apply path as the file watch and
+// SIGHUP, from the current config path. The body is ignored. A rejected file
+// is 422 and leaves the running config as it was.
+func handleReload(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.reloader == nil {
+			http.Error(w, "config reload is not enabled", http.StatusServiceUnavailable)
+			return
+		}
+		err := r.reloader.Reload()
+		out := r.reloadStatus() // set by Reload, so never nil here
+		out["status"] = "reloaded"
+		if err != nil {
+			out["status"] = "rejected"
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity)
+		}
+		writeJSON(w, out)
 	}
 }
 
