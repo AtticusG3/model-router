@@ -144,7 +144,7 @@ func TestEvictsOnTheCardWithAStaleModelNotTheIdleOne(t *testing.T) {
 		stanzaYAML("idle-x", 27000, "1")+
 			stanzaYAML("stale-y", 27000, "2")+
 			stanzaYAML("qwopus", 30000, "1|2"))
-	r.cfg.Stanza("stale-y").IdleTTLSeconds = 1
+	r.cfg().Stanza("stale-y").IdleTTLSeconds = 1
 	mustLoad(t, r, "idle-x")
 	mustLoad(t, r, "stale-y")
 	r.managed["stale-y"].setLastUsed(time.Now().Add(-time.Minute))
@@ -182,7 +182,7 @@ func TestEvictsTheSmallerIdleOccupantWhenNoneAreStale(t *testing.T) {
 func TestBusyModelGetsSecondInstanceOnFreeCard(t *testing.T) {
 	r, log := placementRouter(t,
 		stanzaYAML("agents-a1", 27000, "1|2", "    max_instances: 2\n"))
-	s := r.cfg.Stanza("agents-a1")
+	s := r.cfg().Stanza("agents-a1")
 	mustLoad(t, r, "agents-a1")
 	r.holdOccupancy("agents-a1")
 
@@ -206,10 +206,10 @@ func TestSecondInstanceNeverEvicts(t *testing.T) {
 	mustLoad(t, r, "other")
 	r.holdOccupancy("agents-a1")
 
-	if key, ok := r.acquireInstance(r.cfg.Stanza("agents-a1"), false); ok {
+	if key, ok := r.acquireInstance(r.cfg().Stanza("agents-a1"), false); ok {
 		t.Fatalf("acquire without queue = %q; no card is free, want busy", key)
 	}
-	key, ok := r.acquireInstance(r.cfg.Stanza("agents-a1"), true)
+	key, ok := r.acquireInstance(r.cfg().Stanza("agents-a1"), true)
 	if !ok || key != "agents-a1" {
 		t.Fatalf("queued acquire = %q, %v; want to queue on agents-a1", key, ok)
 	}
@@ -224,7 +224,7 @@ func TestSecondInstanceNeverEvicts(t *testing.T) {
 func TestIdleSecondInstanceIsSweptWhileBusyOneStays(t *testing.T) {
 	r, _ := placementRouter(t,
 		stanzaYAML("agents-a1", 27000, "1|2", "    max_instances: 2\n"))
-	r.cfg.Stanza("agents-a1").IdleTTLSeconds = 1
+	r.cfg().Stanza("agents-a1").IdleTTLSeconds = 1
 	mustLoad(t, r, "agents-a1")
 	mustLoad(t, r, "agents-a1#1")
 	r.managed["agents-a1"].setLastUsed(time.Now().Add(-time.Minute))

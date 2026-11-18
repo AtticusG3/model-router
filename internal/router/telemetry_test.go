@@ -39,8 +39,8 @@ func TestPeerCacheFreshSetErrAndStale(t *testing.T) {
 
 func TestTelemetrySnapshotFreshStaleAndReclaim(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestTelemetrySnapshotFreshStaleAndReclaim(t *testing.T) {
 
 func TestTelemetrySnapshotReportsSlotsAndInFlight(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Slots = 2
+	r.cfg().Stanza("a").Slots = 2
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}

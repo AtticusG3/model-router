@@ -339,7 +339,7 @@ func TestLoadKeepsReservationUntilUnload(t *testing.T) {
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
-	b := r.cfg.Stanza("b")
+	b := r.cfg().Stanza("b")
 	if _, ok := r.ledger.Reserve(b.ModelID, b); ok {
 		t.Fatal("healthy Load must keep the reservation; b should not fit")
 	}
@@ -365,7 +365,7 @@ func TestUnloadDeletesManagedAndReleases(t *testing.T) {
 		t.Fatal("second Load must create a new Managed")
 	}
 	r.Unload("a")
-	if _, ok := r.ledger.Reserve("b", r.cfg.Stanza("b")); !ok {
+	if _, ok := r.ledger.Reserve("b", r.cfg().Stanza("b")); !ok {
 		t.Fatal("b should admit after Unload released a")
 	}
 }
@@ -378,19 +378,19 @@ func TestFailedStartReleasesReservation(t *testing.T) {
 	if _, err := r.Load("a"); err == nil {
 		t.Fatal("expected Load to fail")
 	}
-	if _, ok := r.ledger.Reserve("a", r.cfg.Stanza("a")); !ok {
+	if _, ok := r.ledger.Reserve("a", r.cfg().Stanza("a")); !ok {
 		t.Fatal("failed Start must release so the model can be reserved again")
 	}
 }
 
 func TestLoadEvictsIdleResidentLastResort(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("a").IdleTTLSeconds = 0
-	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("a").IdleTTLSeconds = 0
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -464,12 +464,12 @@ stanzas:
 
 func TestLoadEvictsStaleNeighbor(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
-	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -487,11 +487,11 @@ func TestLoadEvictsStaleNeighbor(t *testing.T) {
 
 func TestLoadDoesNotEvictInFlight(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -506,14 +506,14 @@ func TestLoadDoesNotEvictInFlight(t *testing.T) {
 
 func TestLoadDoesNotEvictStartingNeighbor(t *testing.T) {
 	r := loadTestRouter(t)
-	healthPort := r.cfg.Stanza("a").Port
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("a").Port = 1
-	r.cfg.Stanza("a").SpinUpSeconds = 30
-	r.cfg.Stanza("b").Port = healthPort
+	healthPort := r.cfg().Stanza("a").Port
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("a").Port = 1
+	r.cfg().Stanza("a").SpinUpSeconds = 30
+	r.cfg().Stanza("b").Port = healthPort
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -569,10 +569,10 @@ func TestLoadDoesNotRetryHardStartForever(t *testing.T) {
 
 func TestEvictSkipsZeroVRAM(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 0
-	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 0
+	r.cfg().Stanza("b").VramMB = 8000
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -609,12 +609,12 @@ func TestLoadRetriesAfterExitDuringStart(t *testing.T) {
 
 func TestEvictReleasesOrphanReservation(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
-	if _, ok := r.ledger.Reserve("a", r.cfg.Stanza("a")); !ok {
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
+	if _, ok := r.ledger.Reserve("a", r.cfg().Stanza("a")); !ok {
 		t.Fatal("reserve a")
 	}
 	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 1500}})
@@ -625,11 +625,11 @@ func TestEvictReleasesOrphanReservation(t *testing.T) {
 
 func TestLoadWaitsForInFlightThenEvicts(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -663,10 +663,10 @@ func TestLoadWaitsForInFlightThenEvicts(t *testing.T) {
 
 func TestLoadWaitCanceled(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -680,8 +680,8 @@ func TestLoadWaitCanceled(t *testing.T) {
 
 func TestLoadWaitDoesNotWaitForTooSmallGPU(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("a").VramMB = 22000
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("a").VramMB = 22000
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	start := time.Now()
@@ -706,10 +706,10 @@ func TestLoadAlreadyRunningIgnoresLiveFree(t *testing.T) {
 
 func TestLocalCanServeIdleWhenLiveFreeShort(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -717,7 +717,7 @@ func TestLocalCanServeIdleWhenLiveFreeShort(t *testing.T) {
 	if r.protected("a") {
 		t.Fatal("idle a must not be treated as generating")
 	}
-	if !r.localCanServe(r.cfg.Stanza("b")) {
+	if !r.localCanServe(r.cfg().Stanza("b")) {
 		t.Fatal("idle a must be evictable so b can wait locally instead of 503")
 	}
 }
@@ -728,18 +728,18 @@ func TestLocalCanServeAlreadyRunningDespiteLowFree(t *testing.T) {
 		t.Fatalf("Load a: %v", err)
 	}
 	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 500}})
-	if !r.localCanServe(r.cfg.Stanza("a")) {
+	if !r.localCanServe(r.cfg().Stanza("a")) {
 		t.Fatal("already-running a must be servable without 27500 free")
 	}
 }
 
 func TestLoadEvictsIdleDespiteLowLiveFree(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").VramMB = 8000
-	r.cfg.Stanza("b").VramMB = 8000
-	r.cfg.Stanza("b").Port = r.cfg.Stanza("a").Port
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").VramMB = 8000
+	r.cfg().Stanza("b").VramMB = 8000
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}

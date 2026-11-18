@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"model-router/internal/config"
@@ -22,12 +23,13 @@ import (
 // Router is one node's full instance of the model router. It owns the local
 // backends, the admission ledger, and the peer cache.
 type Router struct {
-	cfg    *config.Config
+	cfgp   atomic.Pointer[config.Config] // swapped whole by Apply; read via cfg()
 	logger *Logger
 	ledger *Ledger
 	peers  *PeerCache
 	node   string
 
+	applyMu   sync.Mutex // one Apply at a time
 	mu        sync.Mutex
 	managed   map[string]*Managed  // local stanza id -> supervisor
 	occupancy map[string]int       // target key -> in-flight selected requests
@@ -51,8 +53,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 	stale := time.Duration(cfg.Telemetry.PeerStaleSeconds) * time.Second
 	ledger := NewLedger()
 	ledger.headroomMB = cfg.HeadroomMB
-	return &Router{
-		cfg:       cfg,
+	r := &Router{
 		logger:    logger,
 		ledger:    ledger,
 		peers:     NewPeerCache(stale),
@@ -68,7 +69,13 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		activity:  NewActivityLog(),
 		metrics:   NewMetrics(),
 	}
+	r.cfgp.Store(cfg)
+	return r
 }
+
+// cfg is the running config. Apply replaces it whole, so a request reads one
+// consistent catalog; take it once per decision rather than re-reading.
+func (r *Router) cfg() *config.Config { return r.cfgp.Load() }
 
 // Metrics returns the request counters and latency histograms behind /metrics.
 func (r *Router) Metrics() *Metrics { return r.metrics }
@@ -96,7 +103,7 @@ func (r *Router) Load(modelID string) (int, error) {
 }
 
 func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
-	s := r.cfg.Stanza(instanceModel(key))
+	s := r.cfg().Stanza(instanceModel(key))
 	if n := instanceIndex(key); s == nil || n < 0 || n >= s.InstanceCount() {
 		return -1, fmt.Errorf("unknown local model %q", key)
 	}
@@ -325,7 +332,7 @@ func (r *Router) waitAdmit(ctx context.Context) error {
 // Unload stops a local model: every instance for a model id, or a single one
 // for "model#n".
 func (r *Router) Unload(id string) error {
-	s := r.cfg.Stanza(id)
+	s := r.cfg().Stanza(id)
 	if s == nil || s.InstanceCount() == 1 {
 		return r.unloadInstance(id)
 	}
@@ -582,7 +589,7 @@ func (r *Router) evictableLocked(id string, kind evictKind) bool {
 	// A pinned stanza is never evicted, for any reason. Its VRAM is not
 	// reclaimable, so an admission that would need it fails instead of
 	// silently pulling the model out from under a running service.
-	if s := r.cfg.Stanza(id); s != nil && s.Pin {
+	if s := r.cfg().Stanza(id); s != nil && s.Pin {
 		return false
 	}
 	sticky := r.residentModel(id)
@@ -670,7 +677,7 @@ func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 	case ref.Pool != "":
 		return r.resolvePool(ref.Pool)
 	case ref.Peer != "":
-		p := r.cfg.Peer(ref.Peer)
+		p := r.cfg().Peer(ref.Peer)
 		if p == nil {
 			return Target{}, fmt.Errorf("unknown peer %q", ref.Peer)
 		}
@@ -703,8 +710,9 @@ func (r *Router) resolveMesh(modelID string) (Target, error) {
 // shortest such window still to run, 0 if none was left out.
 func (r *Router) rankPeers(modelID string, slotSpill bool) (ranked []Target, soonest time.Duration) {
 	var ready, admit, wait, full []Target
-	for i := range r.cfg.Peers {
-		p := &r.cfg.Peers[i]
+	cfg := r.cfg()
+	for i := range cfg.Peers {
+		p := &cfg.Peers[i]
 		if !r.peerHasModel(p, modelID) {
 			continue
 		}
@@ -890,7 +898,7 @@ func (r *Router) localCanServe(s *config.Stanza) bool {
 // already spent). A peer that does not have it loaded uses cached VRAM as a
 // hint. Unknown VRAM still tries a fresh peer and lets that node admit.
 func (r *Router) peerEligible(name, modelID string) bool {
-	p := r.cfg.Peer(name)
+	p := r.cfg().Peer(name)
 	if p == nil {
 		return false
 	}
@@ -985,7 +993,7 @@ func (r *Router) peerFits(name string, vramMB int64) bool {
 // when occupancy is below the cap and the peer is eligible. Occupancy
 // increments when a target is chosen.
 func (r *Router) resolvePool(poolName string) (Target, error) {
-	pool := r.cfg.Pool(poolName)
+	pool := r.cfg().Pool(poolName)
 	if pool == nil {
 		return Target{}, fmt.Errorf("unknown pool %q", poolName)
 	}
@@ -997,11 +1005,12 @@ func (r *Router) resolvePool(poolName string) (Target, error) {
 }
 
 func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target, error) {
+	cfg := r.cfg()
 	for _, target := range pool.Targets {
 		if skip[target] {
 			continue
 		}
-		ref := resolveRef(target, r.cfg)
+		ref := resolveRef(target, cfg)
 		var cand Target
 		switch {
 		case ref.Local != "":
@@ -1017,7 +1026,7 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 		limit := pool.Spillover
 		if limit <= 0 {
 			if ref.Local != "" {
-				limit = r.cfg.Stanza(ref.Local).SlotCount()
+				limit = cfg.Stanza(ref.Local).SlotCount()
 			} else {
 				limit = 1
 			}
@@ -1040,7 +1049,7 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 				return t, nil
 			}
 			r.mu.Unlock()
-			if r.localCanServe(r.cfg.Stanza(ref.Local)) {
+			if r.localCanServe(r.cfg().Stanza(ref.Local)) {
 				r.mu.Lock()
 				if r.occupancy[key] >= limit {
 					r.mu.Unlock()
@@ -1077,7 +1086,7 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 
 // ServeHTTP is the entry for model-routed endpoints.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	ref, err := matchRequest(req, r.cfg)
+	ref, err := matchRequest(req, r.cfg())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -1109,7 +1118,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
 	// If this GPU cannot admit now, try an idle peer before waiting locally.
 	if !incomingPeer {
-		if s := r.cfg.Stanza(modelID); s != nil && !r.localCanServe(s) {
+		if s := r.cfg().Stanza(modelID); s != nil && !r.localCanServe(s) {
 			if r.serveSpill(w, req, modelID) {
 				return
 			}
@@ -1117,7 +1126,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 	}
 	// A free slot on a running instance, or a new instance on a free GPU,
 	// beats sending the request off-node.
-	if s := r.cfg.Stanza(modelID); !incomingPeer && s != nil {
+	if s := r.cfg().Stanza(modelID); !incomingPeer && s != nil {
 		if key, ok := r.acquireInstance(s, false); ok {
 			err := r.proxyLocalHeld(w, req, key)
 			r.releaseOccupancy(Target{Local: key})
@@ -1146,7 +1155,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 }
 
 func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName string) {
-	pool := r.cfg.Pool(poolName)
+	pool := r.cfg().Pool(poolName)
 	if pool == nil {
 		http.Error(w, fmt.Sprintf("unknown pool %q", poolName), http.StatusServiceUnavailable)
 		return
@@ -1244,10 +1253,10 @@ func (a *attemptWriter) Flush() {
 // requests do not bounce (X-Model-Router-Peer).
 func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLocal string) bool {
 	for _, raw := range r.spillTargets(failedLocal) {
-		ref := resolveRef(raw, r.cfg)
+		ref := resolveRef(raw, r.cfg())
 		switch {
 		case ref.Local != "" && ref.Local != failedLocal:
-			if !r.localCanServe(r.cfg.Stanza(ref.Local)) {
+			if !r.localCanServe(r.cfg().Stanza(ref.Local)) {
 				continue
 			}
 			if err := r.proxyLocal(w, req, ref.Local); err == nil {
@@ -1307,7 +1316,7 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 			}
 		}
 		ranked = rest
-		if rem := r.peerCooling(first, modelID); rem > 0 && r.cfg.Peer(first).Kind != "openai" {
+		if rem := r.peerCooling(first, modelID); rem > 0 && !r.peerIsOpenAI(first) {
 			if soonest == 0 || rem < soonest {
 				soonest = rem
 			}
@@ -1326,7 +1335,7 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 		if errors.As(err, &ref) && ref.retryAfter > 0 && (retry == 0 || ref.retryAfter < retry) {
 			retry = ref.retryAfter
 		}
-		if r.cfg.Peer(t.Peer).Kind == "openai" {
+		if r.peerIsOpenAI(t.Peer) {
 			break
 		}
 	}
@@ -1340,10 +1349,10 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 func (r *Router) spillTargets(failedLocal string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, p := range r.cfg.Pools {
+	for _, p := range r.cfg().Pools {
 		found := false
 		for _, t := range p.Targets {
-			ref := resolveRef(t, r.cfg)
+			ref := resolveRef(t, r.cfg())
 			if !found {
 				if ref.Local == failedLocal {
 					found = true
@@ -1370,7 +1379,7 @@ func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID st
 // proxyLocal serves req on the best instance of modelID, queueing on the
 // least-loaded one when every instance is busy.
 func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID string) error {
-	s := r.cfg.Stanza(modelID)
+	s := r.cfg().Stanza(modelID)
 	if s == nil {
 		return fmt.Errorf("unknown local model %q", modelID)
 	}
@@ -1385,7 +1394,7 @@ func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID st
 // proxyLocalHeld loads instance key if needed and proxies to it. The caller
 // already holds an occupancy slot on key.
 func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key string) error {
-	if r.cfg.StreamLoadProgress && wantsStream(req) {
+	if r.cfg().StreamLoadProgress && wantsStream(req) {
 		lw := &loadStream{ResponseWriter: w}
 		err := r.loadReportingProgress(lw, req, key)
 		if err != nil && lw.started {
@@ -1414,7 +1423,7 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			return nil
 		}
 	}
-	r.proxyTo(w, req, m.proxyURL, key, r.node)
+	r.proxyTo(w, req, m.proxy(), key, r.node)
 	return nil
 }
 
@@ -1427,7 +1436,7 @@ func (r *Router) servePeer(w http.ResponseWriter, req *http.Request, peerName, p
 }
 
 func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, peerModel string) error {
-	p := r.cfg.Peer(peerName)
+	p := r.cfg().Peer(peerName)
 	if p == nil {
 		return fmt.Errorf("unknown peer %q", peerName)
 	}
@@ -1575,10 +1584,18 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 	proxy.ServeHTTP(wrapped, req)
 }
 
+// peerIsOpenAI is false for an unknown peer: a reload may have removed it
+// since the caller picked it.
+func (r *Router) peerIsOpenAI(name string) bool {
+	p := r.cfg().Peer(name)
+	return p != nil && p.Kind == "openai"
+}
+
 // Preload loads the configured startup models in order.
 func (r *Router) Preload() {
-	for _, id := range r.cfg.Preload {
-		if r.cfg.Stanza(id) == nil {
+	cfg := r.cfg()
+	for _, id := range cfg.Preload {
+		if cfg.Stanza(id) == nil {
 			r.logger.Errorf("preload: unknown model %q", id)
 			continue
 		}
@@ -1617,8 +1634,9 @@ func (r *Router) catalogStatuses() []ModelStatus {
 	var out []ModelStatus
 	seen := map[string]bool{}
 	now := time.Now()
-	for _, id := range r.cfg.StanzaIDs() {
-		s := r.cfg.Stanza(id)
+	cfg := r.cfg()
+	for _, id := range cfg.StanzaIDs() {
+		s := cfg.Stanza(id)
 		var insts []*Managed
 		r.mu.Lock()
 		for n := 0; n < s.InstanceCount(); n++ {
@@ -1665,8 +1683,8 @@ func (r *Router) catalogStatuses() []ModelStatus {
 			seen[a] = true
 		}
 	}
-	for i := range r.cfg.Peers {
-		p := &r.cfg.Peers[i]
+	for i := range cfg.Peers {
+		p := &cfg.Peers[i]
 		if p.Kind != "openai" && !r.peers.Fresh(p.Name) {
 			continue
 		}
@@ -1732,7 +1750,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 	}
 	// Every published free figure is after headroom, so peers never pick
 	// this node for a load it must refuse.
-	head := r.cfg.HeadroomMB
+	head := r.cfg().HeadroomMB
 	for _, g := range gpus {
 		stale := g.FreeMB + staleByGPU[g.Index]
 		idle := g.FreeMB + idleByGPU[g.Index]
@@ -1806,9 +1824,10 @@ func loadWaitTimeout(s *config.Stanza) time.Duration {
 }
 
 func (r *Router) HandleLoad(_ context.Context, modelID string) error {
-	s := r.cfg.Stanza(modelID)
+	cfg := r.cfg()
+	s := cfg.Stanza(modelID)
 	if s == nil {
-		s = r.cfg.Alias(modelID)
+		s = cfg.Alias(modelID)
 	}
 	if s == nil {
 		return fmt.Errorf("unknown local model %q", modelID)

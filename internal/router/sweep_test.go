@@ -7,7 +7,7 @@ import (
 
 func TestSweepStaleEvictsExpiredTTL(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestSweepStaleEvictsExpiredTTL(t *testing.T) {
 
 func TestSweepStaleSkipsResidentAndProtected(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").IdleTTLSeconds = 0 // resident: never swept
+	r.cfg().Stanza("a").IdleTTLSeconds = 0 // resident: never swept
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestSweepStaleSkipsResidentAndProtected(t *testing.T) {
 		t.Fatal("in-flight model must not be swept")
 	}
 	r.occupancy["a"] = 0
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
 	r.managed["a"].setLastUsed(time.Now().Add(-2 * time.Second))
 	r.occupancy["a"] = 1
 	r.SweepStale()
@@ -53,7 +53,7 @@ func TestSweepStaleSkipsResidentAndProtected(t *testing.T) {
 		t.Fatal("in-flight stale model must not be swept")
 	}
 	r.occupancy["a"] = 0
-	r.cfg.Stanza("a").IdleTTLSeconds = 0
+	r.cfg().Stanza("a").IdleTTLSeconds = 0
 	r.SweepStale()
 	if _, ok := r.managed["a"]; !ok {
 		t.Fatal("ttl=0 resident must never be swept (2)")

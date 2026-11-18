@@ -54,7 +54,7 @@ func walkRouter(t *testing.T, extra string, peers ...*walkPeer) *Router {
 	}
 	r := spilloverRouter(t, yaml)
 	for i, p := range peers {
-		r.cfg.Peer(names[i]).BaseURL = p.srv.URL
+		r.cfg().Peer(names[i]).BaseURL = p.srv.URL
 		r.peers.Set(names[i], &Telemetry{Node: names[i]})
 	}
 	return r
@@ -226,8 +226,8 @@ peers:
     base_url: http://127.0.0.1:9
     models: [shared-model]
 `)
-	r.cfg.Peer("hosted").BaseURL = openai.URL
-	r.cfg.Peer("bravo").BaseURL = b.srv.URL
+	r.cfg().Peer("hosted").BaseURL = openai.URL
+	r.cfg().Peer("bravo").BaseURL = b.srv.URL
 	r.peers.Set("bravo", &Telemetry{Node: "bravo"})
 
 	if rec := chat(r, "shared-model"); rec.Code != http.StatusInternalServerError {

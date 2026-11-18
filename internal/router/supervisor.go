@@ -69,6 +69,32 @@ func (m *Managed) State() ProcessState {
 	return m.state
 }
 
+// stz is the stanza this backend currently follows. Apply swaps it when a
+// reload changes anything but the launch.
+func (m *Managed) stz() *config.Stanza {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stanza
+}
+
+// retarget points a running backend at the reloaded stanza. The caller has
+// checked that the launch is unchanged, so the process keeps running.
+func (m *Managed) retarget(s *config.Stanza) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stanza = s
+	if instanceIndex(m.id) == 0 {
+		m.proxyURL = s.Proxy
+	}
+}
+
+// proxy is the upstream URL requests are sent to.
+func (m *Managed) proxy() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.proxyURL
+}
+
 // markUsed resets the idle-TTL stale clock. Pool occupancy lives on Router.
 func (m *Managed) markUsed() {
 	m.mu.Lock()
@@ -174,7 +200,7 @@ func (m *Managed) Start() (int, error) {
 
 	// Wait for health. Unload/evict closes stopCh so a non-generating
 	// spin-up can be replaced instead of blocking admission for spin_up_seconds.
-	spinUp := time.Duration(m.stanza.SpinUpSeconds) * time.Second
+	spinUp := time.Duration(m.stz().SpinUpSeconds) * time.Second
 	deadline := time.Now().Add(spinUp)
 	healthOK := false
 	var lastProgress float64
@@ -209,7 +235,7 @@ func (m *Managed) Start() (int, error) {
 		}
 	}
 	if !healthOK {
-		m.logger.Errorf("health check for %s never returned 200 within %ds", m.id, m.stanza.SpinUpSeconds)
+		m.logger.Errorf("health check for %s never returned 200 within %ds", m.id, m.stz().SpinUpSeconds)
 		m.stop()
 		return -1, m.fail(fmt.Errorf("health check timed out for %s", m.id))
 	}
@@ -273,7 +299,7 @@ func (m *Managed) gpuIndex() int {
 // place renders the backend command for the GPU admission chose. A start
 // already in flight keeps the command it spawned with.
 func (m *Managed) place(gpu int) {
-	cmd, env := m.stanza.Render(instanceIndex(m.id), gpu)
+	cmd, env := m.stz().Render(instanceIndex(m.id), gpu)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.state == StateStarting || m.state == StateRunning {
@@ -338,7 +364,7 @@ func (m *Managed) copyLogs(r io.Reader) {
 // health polls the stanza's health endpoint. When it is not healthy, a numeric
 // "progress" field in a JSON body is returned so Start can extend spin-up.
 func (m *Managed) health() (progress float64, hasProgress bool, err error) {
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", m.port, m.stanza.HealthCheck)
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", m.port, m.stz().HealthCheck)
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -466,10 +492,11 @@ func (m *Managed) fail(err error) error {
 func (m *Managed) IsStale(now time.Time) bool {
 	// A pinned stanza is never stale, whatever its TTL says: the sweep must
 	// not unload a model a service is depending on.
-	if m.stanza.Pin {
+	s := m.stz()
+	if s.Pin {
 		return false
 	}
-	ttl := m.stanza.IdleTTLSeconds
+	ttl := s.IdleTTLSeconds
 	if ttl <= 0 {
 		return false
 	}
@@ -487,7 +514,7 @@ func (m *Managed) IsStale(now time.Time) bool {
 // warm-up (calibration, cold load) before admission reclaims its VRAM.
 // 0 = no hold. Only running backends hold; starting ones are protected anyway.
 func (m *Managed) InHold(now time.Time) bool {
-	hold := m.stanza.HoldSeconds
+	hold := m.stz().HoldSeconds
 	if hold <= 0 {
 		return false
 	}

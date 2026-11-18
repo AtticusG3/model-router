@@ -194,6 +194,35 @@ Bodies that are not JSON objects (forms, multipart, GETs) pass unchanged.
 Filters apply where a request is sent to a local backend or a peer, so a
 spill to another node carries the already-filtered body.
 
+### Reloading config
+
+The file is re-read on change and on `SIGHUP`. A file that fails validation is
+rejected and the running config stays. A valid file is applied without
+restarting the process:
+
+- Stanzas (routing, aliases, TTL, hold, slots, filters), pools and peers
+  switch in one step. A request sees either the old catalog or the new one,
+  never a mix. Requests already proxying keep the settings they started with.
+- A running backend restarts only if its launch changed: `command`, `env` or
+  its ports. Everything else (TTL, pools, peers, filters, `device`, `vram_mb`)
+  leaves the process alone; the new values govern it from the next request.
+  A backend that is not running is never started by a reload; it picks up the
+  new launch when it is next loaded.
+- In-flight requests are never dropped or preempted. A restart waits until the
+  model has no request in flight, then stops and starts it. New requests for
+  that model queue meanwhile, then go to the new process. Other models are not
+  touched. The wait has no deadline, so a stuck stream holds the reload.
+- A model removed from the file is unloaded after its in-flight requests finish
+  (not left running until idle). It stops taking new requests at once.
+- A failed apply rolls back. If a restarted backend fails to start, the
+  previous config is put back whole and every backend the reload had
+  restarted is started again on its old launch, so the router never serves a
+  half-applied catalog. The reload is recorded as failed. If a backend cannot
+  be brought back, it starts on its next request.
+- `listen`, `security`, `telemetry`, `headroom_mb` and `preload` are read once
+  at startup. A reload keeps the running values for them; restart to change
+  them.
+
 ## Request flow
 
 1. The client hits this node's HTTP API.

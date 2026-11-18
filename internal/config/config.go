@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -159,6 +160,14 @@ func (s *Stanza) SlotCount() int {
 		return 1
 	}
 	return s.Slots
+}
+
+// LaunchEqual reports whether a backend started from s is the same process a
+// backend started from o would be: same command, env and ports. Routing, TTL,
+// hold, slots, filters and the rest are not part of the launch.
+func (s *Stanza) LaunchEqual(o *Stanza) bool {
+	return s.Command == o.Command && s.rawCommand == o.rawCommand && s.Port == o.Port &&
+		slices.Equal(s.Env, o.Env) && slices.Equal(s.InstancePorts, o.InstancePorts)
 }
 
 // FilterIDs are the ids minted by Filters.SetParamsByID, sorted.

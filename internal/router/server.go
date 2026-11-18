@@ -217,8 +217,9 @@ func handleMetrics(r *Router) http.HandlerFunc {
 
 		fmt.Fprintf(&sb, "# HELP model_router_peer_fresh 1 if peer telemetry is within the stale window\n")
 		fmt.Fprintf(&sb, "# TYPE model_router_peer_fresh gauge\n")
-		for i := range r.cfg.Peers {
-			p := &r.cfg.Peers[i]
+		cfg := r.cfg()
+		for i := range cfg.Peers {
+			p := &cfg.Peers[i]
 			if p.Kind != "router" {
 				continue
 			}
@@ -273,7 +274,7 @@ func handleUpstream(r *Router) http.HandlerFunc {
 			http.Redirect(w, req, "/ui/", http.StatusFound)
 			return
 		}
-		ref := resolveRef(id, r.cfg)
+		ref := resolveRef(id, r.cfg())
 		if ref.Local == "" {
 			http.Error(w, fmt.Sprintf("unknown local model %q", id), http.StatusNotFound)
 			return
@@ -342,7 +343,7 @@ func handleLogs(logger *Logger) http.HandlerFunc {
 func handleModelLogStream(r *Router, logger *Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		id := req.PathValue("model_id")
-		if r.cfg.Stanza(id) == nil {
+		if r.cfg().Stanza(id) == nil {
 			http.Error(w, "unknown model id: "+id, http.StatusNotFound)
 			return
 		}

@@ -208,8 +208,8 @@ func (c *PeerCache) Snapshot() map[string]*Telemetry {
 
 // PeerSyncer periodically pulls telemetry from router-kind peers.
 type PeerSyncer struct {
-	cfg    *config.Config
-	cache  *PeerCache
+	cfg    func() *config.Config // the live config, so a reload changes the peer list
+	cache *PeerCache
 	every  time.Duration
 	client *http.Client
 	logger *Logger
@@ -217,7 +217,7 @@ type PeerSyncer struct {
 	last   map[string]string
 }
 
-func NewPeerSyncer(cfg *config.Config, cache *PeerCache, every time.Duration, logger *Logger) *PeerSyncer {
+func NewPeerSyncer(cfg func() *config.Config, cache *PeerCache, every time.Duration, logger *Logger) *PeerSyncer {
 	return &PeerSyncer{
 		cfg:    cfg,
 		cache:  cache,
@@ -243,7 +243,7 @@ func (s *PeerSyncer) Run(ctx context.Context) {
 }
 
 func (s *PeerSyncer) syncOnce() {
-	for _, p := range s.cfg.Peers {
+	for _, p := range s.cfg().Peers {
 		if p.Kind != "router" {
 			continue // openai peers have no control API
 		}

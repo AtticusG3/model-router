@@ -16,11 +16,11 @@ type Logger interface {
 }
 
 // Reloader is the reload gate: it loads and fully validates the config file,
-// and only a valid result reaches the apply hook. An invalid file leaves the
-// running config alone and is recorded for the UI.
+// and only a valid result reaches the apply hook. An invalid file, or an
+// apply that fails, leaves the running config alone and is recorded for the UI.
 type Reloader struct {
 	path  string
-	apply func(*Config)
+	apply func(*Config) error
 	log   Logger
 
 	mu        sync.Mutex
@@ -30,32 +30,34 @@ type Reloader struct {
 }
 
 // NewReloader returns a reloader for path. current is the running config;
-// apply receives each newly validated config.
-func NewReloader(path string, current *Config, apply func(*Config), log Logger) *Reloader {
+// apply receives each newly validated config; an error means it was not taken.
+func NewReloader(path string, current *Config, apply func(*Config) error, log Logger) *Reloader {
 	return &Reloader{path: path, current: current, apply: apply, log: log}
 }
 
-// Reload validates the file and hands a valid config to the apply hook.
+// Reload validates the file and hands a valid config to the apply hook. The
+// watch loop calls it serially, so a slow apply delays the next reload.
 // The file and signal triggers both come through here.
 func (r *Reloader) Reload() error {
 	cfg, err := Load(r.path)
+	if err == nil {
+		err = r.apply(cfg)
+	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err != nil {
 		r.lastErr, r.lastErrAt = err.Error(), time.Now()
-		r.mu.Unlock()
-		// Parse errors name a line or field, never a value, so this is safe to log.
+		// Parse and apply errors name a line, field or model, never a value, so this is safe to log.
 		r.log.Errorf("config reload rejected, keeping running config: %v", err)
 		return err
 	}
 	r.lastErr, r.lastErrAt = "", time.Time{}
 	r.current = cfg
-	r.mu.Unlock()
-	r.log.Infof("config reload accepted: %s", r.path)
-	r.apply(cfg)
+	r.log.Infof("config reload applied: %s", r.path)
 	return nil
 }
 
-// Current is the last config that passed validation (the initial one until then).
+// Current is the last config that was applied (the initial one until then).
 func (r *Reloader) Current() *Config {
 	r.mu.Lock()
 	defer r.mu.Unlock()
