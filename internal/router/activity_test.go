@@ -217,3 +217,55 @@ func TestActivityWriterStampsStreamingTTFT(t *testing.T) {
 		t.Fatalf("ttft overwritten: %d -> %d", stamped, w.ttftMs)
 	}
 }
+
+func TestIsGenerationRequest(t *testing.T) {
+	for _, tc := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"POST", "/v1/chat/completions", true},
+		{"POST", "/v1/embeddings", true},
+		{"POST", "/sdapi/v1/txt2img", true},
+		{"POST", "/completion", true},
+		{"GET", "/metrics", false},
+		{"GET", "/web/sprite.svg", false},
+		{"GET", "/mcp", false},
+		{"POST", "/mcp", false},
+		{"GET", "/v1/chat/completions", false},
+		{"POST", "/tokenize", false},
+	} {
+		if got := isGenerationRequest(tc.method, tc.path); got != tc.want {
+			t.Errorf("isGenerationRequest(%s %s) = %v, want %v", tc.method, tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestActivitySkipsNonGenerationRequests(t *testing.T) {
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer peer.Close()
+
+	cfg, err := config.Load("../../test/router-a.yaml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.Peer("digger").BaseURL = peer.URL
+
+	logger := NewLogger(io.Discard, false)
+	r := New(cfg, logger, "router-a")
+	h := NewHandler(r, logger)
+
+	for _, path := range []string{"/props", "/web/sprite.svg", "/mcp"} {
+		req := httptest.NewRequest("GET", path+"?model=digger/remote-model", nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", path, rec.Code)
+		}
+	}
+	if n := len(r.Activity().List()); n != 0 {
+		t.Fatalf("activity rows = %d, want 0", n)
+	}
+}
