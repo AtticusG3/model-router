@@ -84,7 +84,8 @@ stanzas:
     vram_mb: 9000
     health_check: /
     spin_up_seconds: 5
-`, headroom, port)))
+    port: %d
+`, headroom, port, port)))
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}

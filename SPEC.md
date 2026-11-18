@@ -221,6 +221,19 @@ Mesh pick walks peers in config order:
 A peer's cached view is only a candidate hint. Accept or reject always
 happens on the node that owns the GPU, inside `POST /_router/load`.
 
+A refused load walks on to the next router peer in that order (ADR 0003). The
+walk covers a direct `peer/model` target, the mesh hop after a local model
+could not start, and a slot spill. A peer that answered `Retry-After` for a
+model is skipped for that model until the window ends; the origin stores the
+window the peer sent and runs no doubling clock of its own. A refusal with no
+`Retry-After` is forgotten. The walk stops once a peer has written response
+bytes, including an error body after it accepted the load. A slot spill that
+finds no router peer queues on the local model. With no local model and every
+router peer refusing, the client gets `503` whose body is the last failure and
+whose `Retry-After` is the smallest window any refusal sent, or absent if none
+sent one. An `openai` peer is a single hop. Pools keep their configured order
+and do not consult remembered windows.
+
 `POST /_router/load` is detached from the caller's cancel. A dropped client
 does not abort a spin-up that is already useful. The wait is capped at
 `max(spin_up_seconds, 90s) + 8 minutes`, or until this process shuts down.

@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +29,12 @@ type Router struct {
 	node   string
 
 	mu        sync.Mutex
-	managed   map[string]*Managed // local stanza id -> supervisor
-	occupancy map[string]int      // target key -> in-flight selected requests
-	draining  map[string]bool     // claimed for unload; new requests wait
-	spawn     spawner             // tests inject a fake; nil uses the GOOS default
-	admitWait chan struct{}       // 1-buffer poke when occupancy/unload may free VRAM
+	managed   map[string]*Managed  // local stanza id -> supervisor
+	occupancy map[string]int       // target key -> in-flight selected requests
+	draining  map[string]bool      // claimed for unload; new requests wait
+	peerUntil map[string]time.Time // "peer/model" -> end of the Retry-After that peer sent
+	spawn     spawner              // tests inject a fake; nil uses the GOOS default
+	admitWait chan struct{}        // 1-buffer poke when occupancy/unload may free VRAM
 	shutdown  chan struct{}
 	shutOnce  sync.Once
 
@@ -58,6 +60,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		managed:   map[string]*Managed{},
 		occupancy: map[string]int{},
 		draining:  map[string]bool{},
+		peerUntil: map[string]time.Time{},
 		cooldowns: map[string]*startCooldown{},
 		admitWait: make(chan struct{}, 1),
 		shutdown:  make(chan struct{}),
@@ -212,14 +215,17 @@ func stanzaGPUs(s *config.Stanza) []int {
 }
 
 // canEventuallyAdmit is true unless we know the pinned (or every) card is
-// smaller than s. Missing telemetry and a missing pinned GPU wait rather
-// than 503: occupied VRAM can free after idle eviction.
-// shortcut: compares raw card totals, so a model that fits the card but not card minus headroom waits instead of 503, upgrade when an operator hits it.
+// smaller than s after headroom. Missing telemetry and a missing pinned GPU
+// wait rather than 503: occupied VRAM can free after idle eviction.
 func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 	idxs := deviceIndexes(s.Device)
 	gpus := r.ledger.GPUs()
 	if len(gpus) == 0 {
 		return true
+	}
+	headroom := r.ledger.headroomMB
+	usable := func(total int64) int64 {
+		return max(total-headroom, 0)
 	}
 	totals := map[int]int64{}
 	for _, g := range gpus {
@@ -243,7 +249,7 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 				need = s.VramMB * totals[idx] / capSum
 				assigned += need
 			}
-			if totals[idx] < need {
+			if usable(totals[idx]) < need {
 				return false
 			}
 		}
@@ -262,7 +268,7 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 			continue
 		}
 		saw = true
-		if total <= 0 || total >= s.VramMB {
+		if total <= 0 || usable(total) >= s.VramMB {
 			return true
 		}
 	}
@@ -678,66 +684,104 @@ func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 	return Target{}, ErrNoModel
 }
 
-// resolveMesh picks a peer that advertises modelID. Local stanzas are
-// resolved before this runs. Prefers a peer that already has a free slot,
-// then one that can admit a fresh load. A loaded-but-full peer is last
-// resort (that node will queue).
+// resolveMesh picks the first peer rankPeers offers for modelID. Local
+// stanzas are resolved before this runs.
 func (r *Router) resolveMesh(modelID string) (Target, error) {
-	return r.pickPeerForModel(modelID, false)
+	ranked, _ := r.rankPeers(modelID, false)
+	if len(ranked) == 0 {
+		return Target{}, fmt.Errorf("no node can serve %q", modelID)
+	}
+	return ranked[0], nil
 }
 
-// pickPeerForModel ranks router peers that advertise modelID.
-// slotSpill skips loaded-but-full peers so the caller can queue locally.
-func (r *Router) pickPeerForModel(modelID string, slotSpill bool) (Target, error) {
-	var admit, wait, full Target
-	haveAdmit, haveWait, haveFull := false, false, false
+// rankPeers orders the peers that advertise modelID. A peer with the model
+// loaded and a slot free (or an openai peer) comes first, then one that can
+// admit a fresh load, then one that must wait or evict (that node queues it),
+// then a loaded peer whose slots are full. Each tier keeps config order.
+// slotSpill drops the loaded-but-full tier so the caller can queue locally.
+// A router peer inside a remembered Retry-After is left out; soonest is the
+// shortest such window still to run, 0 if none was left out.
+func (r *Router) rankPeers(modelID string, slotSpill bool) (ranked []Target, soonest time.Duration) {
+	var ready, admit, wait, full []Target
 	for i := range r.cfg.Peers {
 		p := &r.cfg.Peers[i]
 		if !r.peerHasModel(p, modelID) {
 			continue
 		}
+		t := Target{Peer: p.Name, PeerID: modelID}
 		if p.Kind == "openai" {
-			return Target{Peer: p.Name, PeerID: modelID}, nil
+			ready = append(ready, t)
+			continue
+		}
+		if rem := r.peerCooling(p.Name, modelID); rem > 0 {
+			if soonest == 0 || rem < soonest {
+				soonest = rem
+			}
+			continue
 		}
 		if !r.peers.Fresh(p.Name) {
 			continue
 		}
 		loaded, free, known := r.peerSlotInfo(p.Name, modelID)
-		if known && loaded && free {
-			return Target{Peer: p.Name, PeerID: modelID}, nil
-		}
-		if known && loaded && !free {
-			if !slotSpill && !haveFull {
-				full = Target{Peer: p.Name, PeerID: modelID}
-				haveFull = true
+		switch {
+		case known && loaded && free:
+			ready = append(ready, t)
+		case known && loaded:
+			if !slotSpill {
+				full = append(full, t)
 			}
-			continue
-		}
-		if r.peerEligible(p.Name, modelID) {
-			if !haveAdmit {
-				admit = Target{Peer: p.Name, PeerID: modelID}
-				haveAdmit = true
-			}
-			continue
-		}
-		// Card is occupied (in-flight, or our local vram_mb is larger than
-		// their free bytes). They listed this model_id — POST /_router/load
-		// and let that node wait/evict instead of 503 here.
-		if !haveWait {
-			wait = Target{Peer: p.Name, PeerID: modelID}
-			haveWait = true
+		case r.peerEligible(p.Name, modelID):
+			admit = append(admit, t)
+		default:
+			// Card is occupied (in-flight, or our local vram_mb is larger than
+			// their free bytes). They listed this model_id — POST /_router/load
+			// and let that node wait/evict instead of 503 here.
+			wait = append(wait, t)
 		}
 	}
-	if haveAdmit {
-		return admit, nil
+	ranked = append(append(append(ready, admit...), wait...), full...)
+	return ranked, soonest
+}
+
+// peerCooling returns how long peer must still be left alone for model, from
+// the Retry-After it sent. The window is the peer's; the origin keeps no
+// doubling clock of its own.
+func (r *Router) peerCooling(peer, model string) time.Duration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return time.Until(r.peerUntil[peer+"/"+model])
+}
+
+// notePeerLoad remembers the window a peer sent for model, or forgets any
+// earlier one when it sent none or accepted the load.
+func (r *Router) notePeerLoad(peer, model string, window time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if window > 0 {
+		r.peerUntil[peer+"/"+model] = time.Now().Add(window)
+	} else {
+		delete(r.peerUntil, peer+"/"+model)
 	}
-	if haveWait {
-		return wait, nil
+}
+
+// peerRefusal is a peer's refusal to load a model, with the Retry-After it
+// sent (0 if none).
+type peerRefusal struct {
+	msg        string
+	retryAfter time.Duration
+}
+
+func (e *peerRefusal) Error() string { return e.msg }
+
+// parseRetryAfter reads delay-seconds or an HTTP date; anything else is 0.
+func parseRetryAfter(v string) time.Duration {
+	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+		return time.Duration(n) * time.Second
 	}
-	if haveFull {
-		return full, nil
+	if t, err := http.ParseTime(v); err == nil {
+		return time.Until(t)
 	}
-	return Target{}, fmt.Errorf("no node can serve %q", modelID)
+	return 0
 }
 
 func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
@@ -1042,21 +1086,22 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.servePool(w, req, ref.Pool)
 		return
 	}
-	tgt, err := r.resolveTarget(ref)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	if ref.Local != "" {
+		r.serveLocalTarget(w, req, ref.Local)
 		return
 	}
-	switch {
-	case tgt.Local != "":
-		r.serveLocalTarget(w, req, tgt.Local)
-	case tgt.Peer != "":
-		if err := r.proxyPeer(w, req, tgt.Peer, tgt.PeerID); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		}
-	default:
-		http.Error(w, "no router for requested model", http.StatusNotFound)
+	if ref.Peer != "" {
+		r.servePeers(w, req, ref.Peer, ref.PeerID)
+		return
 	}
+	if ref.Raw != "" {
+		// Mesh id only: peers advertise it, and it is not a local stanza,
+		// pool, or peer-qualified name. Raw is also filled for those
+		// other kinds, so this branch must run last.
+		r.servePeers(w, req, "", ref.Raw)
+		return
+	}
+	http.Error(w, "no router for requested model", http.StatusNotFound)
 }
 
 func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
@@ -1158,12 +1203,8 @@ func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLoca
 			}
 		}
 	}
-	tgt, err := r.resolveMesh(failedLocal)
-	if err != nil || tgt.Peer == "" {
-		return false
-	}
-	r.logger.Meshf("spill %s -> %s", failedLocal, tgt.Peer)
-	return r.proxyPeer(w, req, tgt.Peer, tgt.PeerID) == nil
+	served, _, _ := r.walkPeers(w, req, "", failedLocal, false)
+	return served
 }
 
 // serveSlotSpill sends a request to a peer that already has a free slot (or
@@ -1174,12 +1215,67 @@ func (r *Router) serveSlotSpill(w http.ResponseWriter, req *http.Request, localI
 	if req.Header.Get("X-Model-Router-Peer") != "" {
 		return false
 	}
-	tgt, err := r.pickPeerForModel(localID, true)
-	if err != nil || tgt.Peer == "" {
-		return false
+	served, _, _ := r.walkPeers(w, req, "", localID, true)
+	return served
+}
+
+// servePeers serves a request that has no local model: the named peer first
+// (empty for a mesh id), then the other router peers. When every peer refuses
+// the client gets 503 with the last failure and the shortest Retry-After sent.
+func (r *Router) servePeers(w http.ResponseWriter, req *http.Request, first, modelID string) {
+	served, last, retry := r.walkPeers(w, req, first, modelID, false)
+	if served {
+		return
 	}
-	r.logger.Meshf("slot spill %s -> %s", localID, tgt.Peer)
-	return r.proxyPeer(w, req, tgt.Peer, tgt.PeerID) == nil
+	if retry > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int((retry+time.Second-1)/time.Second)))
+	}
+	http.Error(w, last.Error(), http.StatusServiceUnavailable)
+}
+
+// walkPeers tries first (if set), then the peers rankPeers offers, until one
+// writes a response. A refused load wrote nothing, so the next peer is tried;
+// once a peer has written bytes the walk is over. An openai peer is a single
+// hop: a failure there ends the walk. On failure it returns the last error and
+// the shortest Retry-After any refusal sent (0 if none sent one).
+func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, modelID string, slotSpill bool) (served bool, last error, retry time.Duration) {
+	ranked, soonest := r.rankPeers(modelID, slotSpill)
+	if first != "" {
+		rest := ranked[:0:0]
+		for _, c := range ranked {
+			if c.Peer != first {
+				rest = append(rest, c)
+			}
+		}
+		ranked = rest
+		if rem := r.peerCooling(first, modelID); rem > 0 && r.cfg.Peer(first).Kind != "openai" {
+			if soonest == 0 || rem < soonest {
+				soonest = rem
+			}
+		} else {
+			ranked = append([]Target{{Peer: first, PeerID: modelID}}, ranked...)
+		}
+	}
+	for _, t := range ranked {
+		r.logger.Meshf("peer walk %s -> %s", modelID, t.Peer)
+		err := r.proxyPeer(w, req, t.Peer, t.PeerID)
+		if err == nil {
+			return true, nil, 0
+		}
+		last = err
+		var ref *peerRefusal
+		if errors.As(err, &ref) && ref.retryAfter > 0 && (retry == 0 || ref.retryAfter < retry) {
+			retry = ref.retryAfter
+		}
+		if r.cfg.Peer(t.Peer).Kind == "openai" {
+			break
+		}
+	}
+	if last == nil {
+		// Nothing was asked: every router peer is inside a window it sent.
+		last, retry = fmt.Errorf("no node can serve %q", modelID), soonest
+	}
+	return false, last, retry
 }
 
 func (r *Router) spillTargets(failedLocal string) []string {
@@ -1353,8 +1449,14 @@ func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) e
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("peer %s rejected load of %s (%d)", p.Name, modelID, resp.StatusCode)
+		window := parseRetryAfter(resp.Header.Get("Retry-After"))
+		r.notePeerLoad(p.Name, modelID, window)
+		return &peerRefusal{
+			msg:        fmt.Sprintf("peer %s rejected load of %s (%d)", p.Name, modelID, resp.StatusCode),
+			retryAfter: window,
+		}
 	}
+	r.notePeerLoad(p.Name, modelID, 0)
 	return nil
 }
 

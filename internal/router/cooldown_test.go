@@ -48,6 +48,7 @@ start_port: 5900
 stanzas:
   - model_id: bad
     command: "bad --port {port}"
+    env: ["CUDA_VISIBLE_DEVICES={gpu}"]
     vram_mb: 3000
     health_check: /
     spin_up_seconds: 5
@@ -56,6 +57,7 @@ stanzas:
     %s
   - model_id: good
     command: "good --port {port}"
+    env: ["CUDA_VISIBLE_DEVICES={gpu}"]
     vram_mb: 3000
     health_check: /
     spin_up_seconds: 5
