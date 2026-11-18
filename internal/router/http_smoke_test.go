@@ -138,6 +138,7 @@ func TestHTTPServerWebUI(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status endpoint = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	statusBody := rec.Body.String()
 	var snapshot struct {
 		Models []struct {
 			ID      string `json:"id"`
@@ -163,6 +164,16 @@ func TestHTTPServerWebUI(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "entries") {
 		t.Fatalf("logs status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	if !strings.Contains(statusBody, `"peers_fresh"`) {
+		t.Fatalf("status missing peers_fresh: %s", statusBody)
+	}
+	req = httptest.NewRequest("GET", "/_router/backend-metrics", nil)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"backends"`) {
+		t.Fatalf("backend-metrics status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

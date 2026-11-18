@@ -3,11 +3,11 @@
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
-  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
-  document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart()});
+  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],performance:['Observability','Performance','Request rate, generation speed, GPU memory and peer freshness.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
+  document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];perfSet(view==='performance');if(view!=='logs')logStop();else if(!wasLogs)logStart()});
   async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok)throw new Error(data.error||text||('HTTP '+r.status));return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
-  window.refresh=async function(){try{status=await json('/_router/status');const node=status.node||'unknown';const now=new Date();$('side-node').textContent=node;$('updated').textContent='Updated '+now.toLocaleTimeString();setHealth(true,'Router healthy');renderSummary();renderGPUs();renderModels();renderPeers();fillSelectors()}catch(e){setHealth(false,e.message);$('updated').textContent='Snapshot unavailable'}};
+  window.refresh=async function(){try{status=await json('/_router/status');const node=status.node||'unknown';const now=new Date();$('side-node').textContent=node;$('updated').textContent='Updated '+now.toLocaleTimeString();setHealth(true,'Router healthy');renderSummary();renderGPUs();renderModels();renderPeers();fillSelectors();if(perfOn)perfRender()}catch(e){setHealth(false,e.message);$('updated').textContent='Snapshot unavailable'}};
   function renderSummary(){const gs=status.telemetry&&status.telemetry.gpus||[];const models=status.models||[];const running=models.filter(m=>m.state==='running').length;const peers=status.peers||{};$('stat-gpus').textContent=gs.length;$('stat-running').textContent=running;$('stat-models').textContent=models.length;$('stat-peers').textContent=Object.keys(peers).length;$('model-summary').textContent=models.length+' entries · '+running+' online'}
   function renderGPUs(){const gs=status.telemetry&&status.telemetry.gpus||[];const lm=status.telemetry&&status.telemetry.loaded_models||[];$('gpu-cards').innerHTML=gs.map(g=>{const on=lm.filter(m=>m.gpu===g.index).map(m=>(m.instance||m.id)+(m.slots?' '+m.in_flight+'/'+m.slots:''));const total=Number(g.total_mb)||0,free=Number(g.free_mb)||0,stale=Number(g.free_if_stale_evicted_mb)||free,idle=Number(g.free_if_idle_evicted_mb)||stale;const used=total?Math.max(0,Math.min(100,((total-free)/total)*100)):0;return '<article class="panel gpu-card"><div class="gpu-title"><span class="gpu-name">'+esc(g.name||'GPU '+g.index)+'</span><span class="gpu-index">GPU '+esc(g.index)+'</span></div><div class="gpu-memory"><span class="gpu-free">'+esc(free)+'</span><span class="gpu-unit">MB free</span></div><div class="meter" role="progressbar" aria-label="GPU memory used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(used)+'"><div class="meter-fill" style="width:'+used+'%"></div></div><div class="gpu-footer"><span>'+esc(total)+' MB total</span><span>'+esc(idle)+' MB if idle evicted</span></div><div class="gpu-footer"><span class="mono">'+esc(on.join(', ')||'No models')+'</span></div></article>'}).join('')||'<div class="panel empty">No GPU telemetry available yet.</div>'}
   function renderModels(){const rows=(status.models||[]).map(m=>{const origin=m.origin||'local';const freshness=m.freshness||'';const state=freshness||m.state||(origin==='remote'?'available':'stopped');const can=origin==='local';return '<tr><td><div class="model-cell"><span class="model-glyph">'+icon(origin==='remote'?'peer':'model')+'</span><div><span class="model-id">'+esc(m.id)+'</span>'+(m.name?'<span class="model-name">'+esc(m.name)+'</span>':'')+'</div></div></td><td><span class="state '+esc(origin)+'">'+esc(origin==='remote'?'remote':'local')+'</span></td><td><span class="state '+esc(state)+'">'+esc(state)+'</span></td><td class="mono">'+(m.vram_mb?esc(m.vram_mb)+' MB':'—')+'</td><td>'+(can?'<div class="actions"><a class="ghost" href="/upstream/'+encodeURIComponent(m.id)+'/" target="_blank" rel="noopener">Open UI</a><button data-act="load" data-id="'+esc(m.id)+'">Load</button><button class="danger" data-act="unload" data-id="'+esc(m.id)+'">Unload</button></div>':'<span class="subtle">Mesh routed</span>')+'</td></tr>'}).join('');$('models').innerHTML=rows||'<tr><td colspan="5" class="empty">No models in the catalog.</td></tr>'}
@@ -224,13 +224,13 @@
     Object.keys(h||{}).sort().forEach(k=>(h[k]||[]).forEach(v=>lines.push(k+': '+v)));
     return lines.join('\n');
   }
-  function spark(el, values, color){
+  function spark(el, values, color, zero){
     const w=320,h=96,pad=8;
     if(!values.length){
       el.innerHTML='<text x="160" y="52" text-anchor="middle" fill="#5d6c7f" font-size="11">No samples yet</text>';
       return;
     }
-    const min=Math.min(...values), max=Math.max(...values);
+    const min=zero?0:Math.min(...values), max=Math.max(...values);
     const span=max-min||1;
     const pts=values.map((v,i)=>{
       const x=pad+(i/(Math.max(values.length-1,1)))*(w-pad*2);
@@ -300,6 +300,57 @@
     openCapture(row.dataset.id, row);
   });
   $('capture-close').onclick=()=>$('activity-dialog').close();
+
+  // ---- Performance ----
+  // Gauges come from /_router/status (already polled) plus Activity and the
+  // backend scrape. Those two are fetched only while this view is showing and
+  // the tab is visible.
+  // shortcut: request rate is counted from the in-memory Activity ring, so a busy node undercounts the older minutes, upgrade to sampling the /metrics counters if that matters.
+  const PERF_MINUTES=15;
+  let perfOn=false,perfTimer=0,perfAct=[],perfBack=[];
+  const mb=v=>(Number(v)||0).toLocaleString()+' MB';
+  const perfNum=(v,d)=>v==null?'—':Number(v).toFixed(d);
+  function perfRender(){
+    const t=status.telemetry||{},gs=t.gpus||[],lm=t.loaded_models||[];
+    const slots=lm.reduce((a,m)=>a+(Number(m.slots)||0),0),busy=lm.reduce((a,m)=>a+(Number(m.in_flight)||0),0);
+    const ps=status.peers||{},fresh=status.peers_fresh||{},names=Object.keys(ps).sort();
+    $('perf-running').textContent=lm.length;
+    $('perf-slots').textContent=slots?busy+' / '+slots:'—';
+    $('perf-reqs').textContent=perfAct.length;
+    $('perf-peers').textContent=names.length?names.filter(n=>fresh[n]).length+' / '+names.length:'—';
+    const now=Date.now(),rate=new Array(PERF_MINUTES).fill(0);
+    perfAct.forEach(e=>{const age=Math.max(0,Math.floor((now-new Date(e.timestamp))/60000));if(age<PERF_MINUTES)rate[PERF_MINUTES-1-age]++});
+    spark($('perf-chart-rate'),rate,'#8db8ff',true);
+    spark($('perf-chart-gen'),perfAct.slice().reverse().map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0),'#63dda1');
+    $('perf-gpus').innerHTML=gs.map(g=>{
+      const total=Number(g.total_mb)||0,free=Number(g.free_mb)||0,used=Math.max(0,total-free),pct=total?Math.min(100,used/total*100):0;
+      return '<article class="panel perf-gpu-card"><div class="gpu-title"><span class="gpu-name">'+esc(g.name||'GPU '+g.index)+'</span><span class="gpu-index">GPU '+esc(g.index)+'</span></div><div class="gpu-memory"><span class="gpu-free">'+esc(mb(used))+'</span><span class="gpu-unit">used of '+esc(mb(total))+'</span></div><div class="meter" role="progressbar" aria-label="GPU '+esc(g.index)+' memory used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(pct)+'"><div class="meter-fill'+(pct>=90?' hot':'')+'" style="width:'+pct+'%"></div></div><div class="gpu-footer"><span>'+esc(mb(free))+' free</span><span>'+Math.round(pct)+'% used</span></div></article>';
+    }).join('')||'<div class="panel empty">No GPU telemetry available yet.</div>';
+    $('perf-models').innerHTML=lm.map(m=>{
+      const id=m.instance||m.id,mine=perfAct.filter(e=>e.model===m.id),gens=mine.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
+      const s=(perfBack.find(b=>b.id===id)||{}).series||{},kv=s.kv_cache_ratio==null?null:Math.min(100,s.kv_cache_ratio*100);
+      return '<tr><td class="model-id">'+esc(id)+'</td><td class="mono">'+(m.gpu>=0?esc(m.gpu):'—')+'</td><td class="mono">'+(m.slots?esc(m.in_flight+' / '+m.slots):'—')+'</td><td class="mono">'+mine.length+'</td><td class="mono">'+(gens.length?(gens.reduce((a,b)=>a+b,0)/gens.length).toFixed(1):'—')+'</td><td class="mono">'+perfNum(s.gen_tps,1)+'</td><td class="mono">'+perfNum(s.prompt_tps,1)+'</td><td>'+(kv==null?'<span class="subtle">—</span>':'<div class="perf-kv"><div class="meter" role="progressbar" aria-label="KV cache used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(kv)+'"><div class="meter-fill'+(kv>=90?' hot':'')+'" style="width:'+kv+'%"></div></div><span class="mono">'+Math.round(kv)+'%</span></div>')+'</td></tr>';
+    }).join('')||'<tr><td colspan="8" class="empty">No models running.</td></tr>';
+    $('perf-peer-list').innerHTML=names.map(n=>{
+      const p=ps[n]||{},ok=!!fresh[n];
+      return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+'</div><div class="subtle mono">'+(p.timestamp?'Reported '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="state '+(ok?'fresh':'stale')+'">'+(ok?'fresh':'stale')+'</span></div></article>';
+    }).join('')||'<div class="panel empty">No peer telemetry.</div>';
+  }
+  async function perfPoll(){
+    if(document.hidden)return;
+    const [a,b]=await Promise.allSettled([json('/_router/activity'),json('/_router/backend-metrics')]);
+    if(!perfOn)return;
+    if(a.status==='fulfilled')perfAct=a.value.entries||[];
+    if(b.status==='fulfilled')perfBack=b.value.backends||[];
+    $('perf-updated').textContent=a.status==='fulfilled'&&b.status==='fulfilled'?'Updated '+new Date().toLocaleTimeString():'Some data unavailable';
+    perfRender();
+  }
+  function perfSet(on){
+    if(on===perfOn)return;
+    perfOn=on;
+    clearInterval(perfTimer);
+    if(on){perfRender();perfPoll();perfTimer=setInterval(perfPoll,3000)}
+  }
 
   // ---- Logs ----
   // One live transcript fed by GET /logs/stream[/...]. The stream is open only

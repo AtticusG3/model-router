@@ -246,3 +246,50 @@ func (m *Metrics) Render(node string) string {
 func formatBound(b float64) string {
 	return strconv.FormatFloat(b, 'g', -1, 64)
 }
+
+// backendSeries are the llama.cpp series the Performance page shows, keyed by
+// the exposition name; the value is the short key sent to the UI.
+var backendSeries = map[string]string{
+	"llamacpp:prompt_tokens_seconds":    "prompt_tps",
+	"llamacpp:predicted_tokens_seconds": "gen_tps",
+	"llamacpp:kv_cache_usage_ratio":     "kv_cache_ratio",
+	"llamacpp:requests_processing":      "processing",
+	"llamacpp:requests_deferred":        "deferred",
+}
+
+// BackendSummary is the handful of upstream series worth charting for one
+// running backend. Series is empty when the backend serves no metrics.
+type BackendSummary struct {
+	ID     string             `json:"id"`
+	Series map[string]float64 `json:"series"`
+}
+
+// summariseBackendMetrics picks the backendSeries out of a Prometheus text
+// body. Anything else, including a scrape error message, is ignored.
+func summariseBackendMetrics(body string) map[string]float64 {
+	out := map[string]float64{}
+	for _, line := range strings.Split(body, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 || strings.HasPrefix(f[0], "#") {
+			continue
+		}
+		key, ok := backendSeries[f[0]]
+		if !ok {
+			continue
+		}
+		if v, err := strconv.ParseFloat(f[1], 64); err == nil {
+			out[key] = v
+		}
+	}
+	return out
+}
+
+// BackendSummaries scrapes the running backends and reduces each to its summary.
+func (r *Router) BackendSummaries() []BackendSummary {
+	scraped := r.BackendMetrics()
+	out := make([]BackendSummary, 0, len(scraped))
+	for _, b := range scraped {
+		out = append(out, BackendSummary{ID: b.ID, Series: summariseBackendMetrics(b.Body)})
+	}
+	return out
+}
