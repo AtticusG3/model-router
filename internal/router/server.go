@@ -152,11 +152,14 @@ func handleActivityCapture(r *Router) http.HandlerFunc {
 	}
 }
 
+// maxControlBodyBytes caps the JSON body of /_router/load and /_router/unload.
+const maxControlBodyBytes = 1 << 20
+
 func decodeModelID(w http.ResponseWriter, req *http.Request) (string, bool) {
 	var body struct {
 		ModelID string `json:"model_id"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.ModelID == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxControlBodyBytes)).Decode(&body); err != nil || body.ModelID == "" {
 		http.Error(w, "model_id required", http.StatusBadRequest)
 		return "", false
 	}

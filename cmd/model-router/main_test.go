@@ -58,3 +58,19 @@ func TestHTTPServerAvailableWhilePreloadRuns(t *testing.T) {
 	default:
 	}
 }
+
+// A server-wide WriteTimeout would kill SSE chat and log streams, so it must stay unset.
+func TestHTTPServerTimeouts(t *testing.T) {
+	logger := router.NewLogger(io.Discard, false)
+	srv, _, _, err := startHTTPServer("127.0.0.1:0", http.NotFoundHandler(), logger)
+	if err != nil {
+		t.Fatalf("start HTTP server: %v", err)
+	}
+	defer srv.Close()
+	if srv.ReadHeaderTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Fatalf("ReadHeaderTimeout=%v IdleTimeout=%v, want both set", srv.ReadHeaderTimeout, srv.IdleTimeout)
+	}
+	if srv.WriteTimeout != 0 {
+		t.Fatalf("WriteTimeout=%v, want unset so streams stay open", srv.WriteTimeout)
+	}
+}

@@ -91,6 +91,19 @@ func TestHandlerUnloadCallsUnload(t *testing.T) {
 	}
 }
 
+func TestControlRoutesRejectOversizedBody(t *testing.T) {
+	h := testHandler(t)
+	big := `{"model_id":"` + strings.Repeat("a", maxControlBodyBytes) + `"}`
+	for _, path := range []string{"/_router/load", "/_router/unload"} {
+		req := httptest.NewRequest("POST", path, strings.NewReader(big))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest && rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("%s oversized body: status=%d", path, rec.Code)
+		}
+	}
+}
+
 func TestSplitUpstreamPath(t *testing.T) {
 	cases := []struct {
 		path     string
