@@ -1150,6 +1150,11 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 		http.Error(w, fmt.Sprintf("unknown pool %q", poolName), http.StatusServiceUnavailable)
 		return
 	}
+	body, err := readBody(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	skip := map[string]bool{}
 	var last error
 	for {
@@ -1163,20 +1168,73 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 			return
 		}
 		skip[occupancyKey(tgt)] = true
+		// Each attempt starts from the original body; the last one consumed it.
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+		aw := &attemptWriter{dst: w, h: http.Header{}}
 		var serveErr error
 		switch {
 		case tgt.Local != "":
-			serveErr = r.proxyLocalHeld(w, req, tgt.Local)
+			serveErr = r.proxyLocalHeld(aw, req, tgt.Local)
 		case tgt.Peer != "":
-			serveErr = r.proxyPeer(w, req, tgt.Peer, tgt.PeerID)
+			serveErr = r.proxyPeer(aw, req, tgt.Peer, tgt.PeerID)
 		default:
 			serveErr = fmt.Errorf("no router for requested model")
 		}
 		r.releaseOccupancy(tgt)
+		if serveErr == nil && aw.failed != 0 {
+			serveErr = fmt.Errorf("upstream %s answered %d", occupancyKey(tgt), aw.failed)
+		}
 		if serveErr == nil {
 			return
 		}
 		last = serveErr
+		r.logger.Warnf("pool %s: %s failed before any response (%v); trying next target", poolName, occupancyKey(tgt), serveErr)
+		r.logger.Meshf("pool %s: skipped %s: %v", poolName, occupancyKey(tgt), serveErr)
+	}
+}
+
+// attemptWriter holds one pool attempt's response head back from the client.
+// A 5xx head is swallowed with its body and recorded in failed, so servePool can
+// try the next target; any other head passes through and commits the attempt.
+// Once committed (started) nothing is retried.
+type attemptWriter struct {
+	dst     http.ResponseWriter
+	h       http.Header
+	started bool
+	failed  int
+}
+
+func (a *attemptWriter) Header() http.Header { return a.h }
+
+func (a *attemptWriter) WriteHeader(code int) {
+	if a.started || a.failed != 0 {
+		return
+	}
+	if code >= 500 {
+		a.failed = code
+		return
+	}
+	for k, v := range a.h {
+		a.dst.Header()[k] = v
+	}
+	a.dst.WriteHeader(code)
+	a.started = true
+}
+
+func (a *attemptWriter) Write(b []byte) (int, error) {
+	if !a.started && a.failed == 0 {
+		a.WriteHeader(http.StatusOK)
+	}
+	if a.failed != 0 {
+		return len(b), nil
+	}
+	return a.dst.Write(b)
+}
+
+func (a *attemptWriter) Flush() {
+	if a.started {
+		_ = http.NewResponseController(a.dst).Flush()
 	}
 }
 
