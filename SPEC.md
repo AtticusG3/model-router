@@ -234,6 +234,16 @@ whose `Retry-After` is the smallest window any refusal sent, or absent if none
 sent one. An `openai` peer is a single hop. Pools keep their configured order
 and do not consult remembered windows.
 
+Pools also fall back on error, which is separate from spillover on capacity.
+If the chosen pool target fails before any response bytes reach the client (a
+refused or failed load, a connect error, or an upstream `5xx`), the router
+tries the next eligible target in that pool, releasing the failed target's
+slot first. The failure is logged on the router and mesh rings. Once a target
+has written its response head (any status below `500`), the request is not
+retried, and a running generation on another target is never preempted. When
+every target fails, the client gets `503` with the last failure. A full target
+is still skipped by spillover, not treated as an error.
+
 `POST /_router/load` is detached from the caller's cancel. A dropped client
 does not abort a spin-up that is already useful. The wait is capped at
 `max(spin_up_seconds, 90s) + 8 minutes`, or until this process shuts down.
