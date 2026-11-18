@@ -3,8 +3,8 @@
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
-  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],logs:['Observability','Logs & metrics','Router gauges, backend /metrics, and event rings.']};
-  document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2]});
+  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
+  document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart()});
   async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok)throw new Error(data.error||text||('HTTP '+r.status));return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
   window.refresh=async function(){try{status=await json('/_router/status');const node=status.node||'unknown';const now=new Date();$('side-node').textContent=node;$('updated').textContent='Updated '+now.toLocaleTimeString();setHealth(true,'Router healthy');renderSummary();renderGPUs();renderModels();renderPeers();fillSelectors()}catch(e){setHealth(false,e.message);$('updated').textContent='Snapshot unavailable'}};
@@ -14,7 +14,7 @@
   function renderPeers(){const ps=status.peers||{};const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+m.gpu:'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');$('peers').innerHTML=cards||'<div class="panel empty">No fresh peer telemetry.</div>'}
   function sameOptions(sel,ids){return sel.options.length===ids.length&&ids.every((id,i)=>sel.options[i].value===id)}
   function fillSelect(sel,ids,html){const prev=sel.value;if(sameOptions(sel,ids))return;sel.innerHTML=html;if([...sel.options].some(o=>o.value===prev))sel.value=prev}
-  function fillSelectors(){const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''))}
+  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''))}
   window.loadModel=async function(id){try{await json('/_router/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Load failed: '+e.message)}};
   window.unloadModel=async function(id){try{await json('/_router/unload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Unload failed: '+e.message)}};
   $('models').onclick=e=>{const b=e.target.closest('[data-act]');if(!b)return;if(b.dataset.act==='load')loadModel(b.dataset.id);else if(b.dataset.act==='unload')unloadModel(b.dataset.id)};
@@ -251,7 +251,6 @@
       $('act-avg-gen').innerHTML=gens.length?(gens.reduce((a,b)=>a+b,0)/gens.length).toFixed(1)+'<small> tok/s</small>':'—<small> tok/s</small>';
       $('act-avg-dur').textContent=durs.length?fmtDur(durs.reduce((a,b)=>a+b,0)/durs.length):'—';
       $('act-errors').textContent=errs;
-      renderLogStats(rows);
       const chrono=rows.slice().reverse();
       spark($('chart-gen'), chrono.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0), '#63dda1');
       spark($('chart-prompt'), chrono.map(e=>Number(e.tokens&&e.tokens.prompt_per_second)||0).filter(v=>v>0), '#58d6e6');
@@ -302,38 +301,21 @@
   });
   $('capture-close').onclick=()=>$('activity-dialog').close();
 
-  // ---- Logs & metrics ----
+  // ---- Logs ----
+  // One live transcript fed by GET /logs/stream[/...]. The stream is open only
+  // while the Logs view is showing.
   const LEVEL_CLASS={error:'lvl-error',warn:'lvl-warn',debug:'lvl-debug',mesh:'lvl-mesh',upstream:'lvl-upstream',info:''};
-  let logData={entries:[],upstream:[],mesh:[],backend_metrics:[]};
-  let logLevel='all';
-  let logQuery='';
-  let logPause=false;
-  const setText=(id,v)=>{const el=$(id);if(el)el.textContent=v};
+  const LOG_MAX=2000;
+  const logOut=$('log-output');
+  let logSrc='',logQuery='',logPause=false,logConn='',logAbort=null,logTimer=0,logRaf=0,logLines=[],logPending=[];
 
-  // renderLogStats fills the four cards above the log panels from the same
-  // activity ring the Activity page uses. Cheap, and gives an at-a-glance
-  // answer before reading a single line.
-  function renderLogStats(rows){
-    const reqs=rows.length;
-    const errs=rows.filter(e=>Number(e.status)>=400).length;
-    const durs=rows.map(e=>Number(e.duration_ms)||0).filter(v=>v>0).sort((a,b)=>a-b);
-    const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
-    const p95=durs.length?durs[Math.min(durs.length-1,Math.ceil(durs.length*0.95)-1)]:0;
-    setText('log-req-count',reqs||'0');
-    setText('log-err-rate',reqs?((errs/reqs)*100).toFixed(errs&&(errs/reqs)<0.01?2:1)+'%':'—');
-    setText('log-p95',p95?fmtDur(p95):'—');
-    const tps=gens.length?gens.reduce((a,b)=>a+b,0)/gens.length:0;
-    const tpsEl=$('log-tps');if(tpsEl)tpsEl.innerHTML=(tps?tps.toFixed(1):'—')+'<small> tok/s</small>';
-    const errEl=$('log-err-rate');if(errEl)errEl.className='stat-value'+(reqs&&errs/reqs>=0.05?' error':'');
-  }
-
-  // splitTs peels the HH:MM:SS.mmm prefix the logger writes into the ring.
+  // splitTs peels the HH:MM:SS.mmm prefix the logger writes.
   function splitTs(line){
     const m=/^(\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?)\s+([\s\S]*)$/.exec(String(line||''));
     return m?{ts:m[1],msg:m[2]}:{ts:'',msg:String(line||'')};
   }
 
-  // classify maps a ring line to a severity for colouring. The logger encodes
+  // classify maps a line to a severity for colouring. The logger encodes
   // level in the prefix; upstream lines are raw backend stdout so we look for
   // the words backends actually emit on failure.
   function classify(msg){
@@ -345,181 +327,106 @@
     return /\b(error|failed|fatal|panic|exception)\b/i.test(msg)?'error':'info';
   }
 
-  function matchLevel(lvl){
-    if(logLevel==='all')return true;
-    if(logLevel==='error')return lvl==='error';
-    if(logLevel==='warn')return lvl==='warn';
-    if(logLevel==='debug')return lvl==='debug';
-    return true;
-  }
-
   // highlight escapes first, then wraps search hits so the markup cannot be
   // injected through a crafted log line.
   function highlight(s){
     const safe=esc(s);
     if(!logQuery)return safe;
-    try{
-      const q=logQuery.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-      return safe.replace(new RegExp(q,'gi'),m=>'<mark>'+m+'</mark>');
-    }catch(e){return safe}
+    const q=logQuery.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    return safe.replace(new RegExp(q,'gi'),m=>'<mark>'+m+'</mark>');
   }
 
-  function renderRing(id,lines,emptyText){
-    const el=$(id);if(!el)return 0;
-    const out=[];
-    for(const line of lines){
-      const {ts,msg}=splitTs(line);
-      const lvl=classify(msg);
-      if(!matchLevel(lvl))continue;
-      if(logQuery&&msg.toLowerCase().indexOf(logQuery)<0)continue;
-      out.push('<div class="log-line '+LEVEL_CLASS[lvl]+'"><span class="log-ts">'+esc(ts)+'</span><span class="log-msg">'+highlight(msg)+'</span></div>');
-    }
-    const nearBottom=el.scrollTop+el.clientHeight>=el.scrollHeight-8;
-    el.innerHTML=out.length?out.join(''):'<div class="log-empty">'+esc(emptyText)+'</div>';
-    if(nearBottom)el.scrollTop=el.scrollHeight;
-    return out.length;
+  const logMatch=line=>!logQuery||line.toLowerCase().includes(logQuery);
+  function logRow(line){
+    const {ts,msg}=splitTs(line);
+    return '<div class="log-line '+LEVEL_CLASS[classify(msg)]+'"><span class="log-ts">'+esc(ts)+'</span><span class="log-msg">'+highlight(msg)+'</span></div>';
   }
-
-  function setBadge(id,shown,total){
-    const el=$(id);if(!el)return;
-    el.textContent=shown===total?total+' lines':shown+'/'+total+' lines';
-    el.classList.toggle('hot',total>0&&shown===0);
+  function logStatus(t){
+    if(t!==undefined)logConn=t;
+    $('log-state').textContent=logPause?'Paused · '+logConn:logConn;
   }
-
-  // renderMetricsText formats Prometheus exposition for reading: HELP/TYPE
-  // dimmed, metric name cyan, labels muted, value emphasised. A zero on a
-  // "healthy means 1" series is flagged so a down peer or backend stands out.
-  function renderMetricsText(text){
-    const out=[];
-    for(const raw of String(text||'').split('\n')){
-      const line=raw.replace(/\s+$/,'');
-      if(!line)continue;
-      if(line.startsWith('# TYPE ')){out.push('<span class="m-type">'+esc(line)+'</span>');continue}
-      if(line.startsWith('#')){out.push('<span class="m-help">'+esc(line)+'</span>');continue}
-      const sp=line.lastIndexOf(' ');
-      let name=line,val='';
-      if(sp>0){name=line.slice(0,sp);val=line.slice(sp+1)}
-      let base=name,labels='';
-      const br=name.indexOf('{');
-      if(br>0){base=name.slice(0,br);labels=name.slice(br)}
-      // Only genuine faults go red. A stopped model is normal — the router
-      // spawns on demand — so flagging every idle stanza would cry wolf.
-      const hot=val==='0'&&/^(model_router_peer_fresh|model_router_up)$/.test(base);
-      out.push('<span class="m-line'+(hot?' hot':'')+'"><span class="m-name">'+esc(base)+'</span><span class="m-lbl">'+esc(labels)+'</span> <span class="m-val">'+esc(val)+'</span></span>');
-    }
-    return out.join('');
+  // logPaint redraws everything held in memory (filter change, resume).
+  function logPaint(){
+    logPending=[];
+    logOut.innerHTML=logLines.filter(logMatch).map(logRow).join('');
+    logOut.scrollTop=logOut.scrollHeight;
   }
-
-  function summarizeMetrics(text){
-    const t=String(text||'');
-    const count=re=>(t.match(re)||[]).length;
-    const running=count(/^model_router_model_running\{[^}]*\} 1$/gm);
-    const declared=count(/^model_router_model_running\{[^}]*\} \d+$/gm);
-    const fresh=count(/^model_router_peer_fresh\{[^}]*\} 1$/gm);
-    const peerTotal=count(/^model_router_peer_fresh\{[^}]*\} \d+$/gm);
-    let free=0,total=0;
-    t.replace(/^model_router_gpu_free_mb\{[^}]*\} (\d+)$/gm,(_,v)=>{free+=Number(v);return''});
-    t.replace(/^model_router_gpu_total_mb\{[^}]*\} (\d+)$/gm,(_,v)=>{total+=Number(v);return''});
-    let reqTotal=0;
-    t.replace(/^model_router_requests_total\{[^}]*\} (\d+)$/gm,(_,v)=>{reqTotal+=Number(v);return''});
-    const inflight=/^model_router_inflight_requests\{[^}]*\} (\d+)$/m.exec(t);
-    const pills=[];
-    if(declared)pills.push('<span class="metric-pill'+(running>0?'':' bad')+'"><b>'+running+'</b>/'+declared+' models running</span>');
-    if(total){const usedPct=Math.round((1-free/total)*100);pills.push('<span class="metric-pill'+(usedPct>=90?' warn':'')+'"><b>'+usedPct+'%</b> GPU used · '+Math.round(free/1024)+' GB free</span>')}
-    if(peerTotal)pills.push('<span class="metric-pill'+(fresh<peerTotal?' warn':'')+'"><b>'+fresh+'</b>/'+peerTotal+' peers fresh</span>');
-    if(reqTotal)pills.push('<span class="metric-pill"><b>'+reqTotal+'</b> requests since start</span>');
-    if(inflight&&Number(inflight[1])>0)pills.push('<span class="metric-pill good"><b>'+inflight[1]+'</b> in flight</span>');
-    return pills.join('')||'<span class="metric-pill">No series parsed yet</span>';
+  // logAppend adds newly streamed lines once per frame. It only follows the
+  // tail when the reader was already at the bottom.
+  function logAppend(){
+    logRaf=0;
+    const rows=logPending.splice(0).filter(logMatch);
+    if(!rows.length)return;
+    const near=logOut.scrollTop+logOut.clientHeight>=logOut.scrollHeight-8;
+    logOut.insertAdjacentHTML('beforeend',rows.map(logRow).join(''));
+    while(logOut.childElementCount>LOG_MAX)logOut.firstElementChild.remove();
+    if(near)logOut.scrollTop=logOut.scrollHeight;
   }
-
-  function renderLogs(){
-    const e=renderRing('logs-output',logData.entries,'No router events yet.');
-    const u=renderRing('upstream-logs',logData.upstream,'No upstream output yet.');
-    const m=renderRing('mesh-logs',logData.mesh,'No mesh events yet.');
-    setBadge('count-logs-output',e,logData.entries.length);
-    setBadge('count-upstream-logs',u,logData.upstream.length);
-    setBadge('count-mesh-logs',m,logData.mesh.length);
-    const counts={all:0,error:0,warn:0,debug:0};
-    for(const ring of [logData.entries,logData.upstream,logData.mesh]){
-      for(const line of ring){
-        const lvl=classify(splitTs(line).msg);
-        counts.all++;
-        if(lvl==='error')counts.error++;
-        else if(lvl==='warn')counts.warn++;
-        else if(lvl==='debug')counts.debug++;
-      }
-    }
-    for(const k in counts)setText('n-'+k,counts[k]);
-    const chip=$('log-levels')&&$('log-levels').querySelector('button[data-level="error"]');
-    if(chip)chip.classList.toggle('hot',counts.error>0);
-  }
-
-  async function logs(){
+  function logPush(line){
+    logLines.push(line);
+    if(logLines.length>LOG_MAX)logLines.shift();
     if(logPause)return;
-    try{
-      const d=await json('/_router/logs');
-      logData={entries:d.entries||[],upstream:d.upstream||[],mesh:d.mesh||[],backend_metrics:d.backend_metrics||[]};
-      const total=logData.entries.length+logData.upstream.length+logData.mesh.length;
-      setText('log-updated',total+' lines · '+new Date().toLocaleTimeString());
-      renderLogs();
-    }catch(e){
-      const el=$('logs-output');if(el)el.innerHTML='<div class="log-empty">'+esc(e.message)+'</div>';
-    }
-    try{
-      const text=await (await fetch('/metrics')).text();
-      const mEl=$('metrics');if(mEl)mEl.innerHTML=renderMetricsText(text);
-      const sEl=$('metrics-summary');if(sEl)sEl.innerHTML=summarizeMetrics(text);
-      setText('count-metrics',text.split('\n').filter(l=>l&&!l.startsWith('#')).length+' series');
-      const bm=logData.backend_metrics||[];
-      const uEl=$('upstream-metrics');
-      if(uEl)uEl.innerHTML=bm.length?bm.map(x=>'<span class="m-help"># '+esc(x.id)+'</span>'+renderMetricsText(x.body||'')).join(''):'<div class="log-empty">No running backends to scrape.</div>';
-      setText('count-upstream-metrics',bm.length?bm.length+' backends':'none');
-    }catch(e){
-      const el=$('metrics');if(el)el.innerHTML='<div class="log-empty">'+esc(e.message)+'</div>';
-    }
+    logPending.push(line);
+    if(!logRaf)logRaf=requestAnimationFrame(logAppend);
   }
 
-  const levelsEl=$('log-levels');
-  if(levelsEl)levelsEl.addEventListener('click',ev=>{
-    const b=ev.target.closest('button[data-level]');if(!b)return;
-    logLevel=b.dataset.level;
-    levelsEl.querySelectorAll('button').forEach(x=>{
-      const on=x===b;
-      x.classList.toggle('active',on);
-      x.setAttribute('aria-pressed',on?'true':'false');
-    });
-    renderLogs();
-  });
-  const searchEl=$('log-search');
-  if(searchEl){
-    let timer=null;
-    searchEl.addEventListener('input',()=>{
-      clearTimeout(timer);
-      timer=setTimeout(()=>{logQuery=searchEl.value.trim().toLowerCase();renderLogs()},140);
-    });
+  function logStop(){
+    clearTimeout(logTimer);
+    if(logAbort)logAbort.abort();
+    logAbort=null;
+    if(logRaf)cancelAnimationFrame(logRaf);
+    logRaf=0;
   }
-  const pauseEl=$('log-pause');
-  if(pauseEl){
-    pauseEl.addEventListener('change',()=>{
-      logPause=pauseEl.checked;
-      if(logPause)setText('log-updated','paused');
-      else logs();
-    });
-  }
-  document.querySelectorAll('[data-copy]').forEach(b=>{
-    b.addEventListener('click',async()=>{
-      const target=$(b.dataset.copy);
-      if(!target)return;
-      const label=b.textContent;
-      try{
-        await navigator.clipboard.writeText(target.innerText);
-        b.textContent='Copied';
-      }catch(e){
-        b.textContent='Copy failed';
+  async function logStart(){
+    logStop();
+    logLines=[];logPending=[];logOut.innerHTML='';
+    const ac=logAbort=new AbortController();
+    logStatus('Connecting…');
+    try{
+      const url='/logs/stream'+(logSrc?'/'+logSrc.split('/').map(encodeURIComponent).join('/'):'');
+      const r=await fetch(url,{signal:ac.signal});
+      if(!r.ok){logStatus((await r.text()).trim()||'HTTP '+r.status);return}
+      logStatus('Live');
+      const reader=r.body.getReader(),dec=new TextDecoder();
+      let buf='';
+      for(;;){
+        const x=await reader.read();
+        if(x.done)break;
+        buf+=dec.decode(x.value,{stream:true});
+        const parts=buf.split('\n');
+        buf=parts.pop();
+        parts.forEach(l=>{if(l)logPush(l)});
       }
-      setTimeout(()=>{b.textContent=label},1200);
-    });
+      throw new Error('stream closed');
+    }catch(e){
+      if(ac.signal.aborted)return;
+      logStatus('Disconnected · retrying');
+      logTimer=setTimeout(logStart,2000);
+    }
+  }
+
+  const logModelEl=$('log-model');
+  const logTabs=$('log-tabs');
+  function logSelect(src,tab){
+    logSrc=src;
+    logTabs.querySelectorAll('button').forEach(x=>{x.classList.toggle('active',x===tab);x.setAttribute('aria-pressed',x===tab?'true':'false')});
+    logModelEl.classList.toggle('active',!tab);
+    if(tab)logModelEl.value='';
+    logStart();
+  }
+  logTabs.addEventListener('click',ev=>{const b=ev.target.closest('button[data-src]');if(b)logSelect(b.dataset.src,b)});
+  logModelEl.addEventListener('change',()=>{if(logModelEl.value)logSelect(logModelEl.value,null)});
+  const searchEl=$('log-search');
+  let searchTimer=0;
+  searchEl.addEventListener('input',()=>{
+    clearTimeout(searchTimer);
+    searchTimer=setTimeout(()=>{logQuery=searchEl.value.trim().toLowerCase();logPaint()},140);
+  });
+  $('log-pause').addEventListener('change',ev=>{
+    logPause=ev.target.checked;
+    logStatus();
+    if(!logPause)logPaint();
   });
 
-  refresh();logs();activity();setInterval(refresh,3000);setInterval(logs,3000);setInterval(activity,3000);
+  refresh();activity();setInterval(refresh,3000);setInterval(activity,3000);
 })();
