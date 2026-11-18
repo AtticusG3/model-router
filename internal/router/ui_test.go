@@ -33,6 +33,15 @@ func TestEmbeddedUILogsPage(t *testing.T) {
 	}
 }
 
+// The last config reload shows in the top bar, fed by "reload" on /_router/status.
+func TestEmbeddedUIReloadIndicator(t *testing.T) {
+	for _, want := range []string{`id="reload" role="status"`, `id="reload-text"`, "status.reload"} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
+
 // The Performance page shows gauges and charts. It must not render
 // Prometheus text, and its poll must start and stop with the view.
 func TestEmbeddedUIPerformancePage(t *testing.T) {

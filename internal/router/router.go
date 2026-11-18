@@ -39,6 +39,7 @@ type Router struct {
 	admitWait chan struct{}        // 1-buffer poke when occupancy/unload may free VRAM
 	shutdown  chan struct{}
 	shutOnce  sync.Once
+	reloader  *config.Reloader // set once at startup, before the server takes requests; nil in most tests
 
 	coolMu    sync.Mutex
 	cooldowns map[string]*startCooldown // stanza model id -> failed-start state

@@ -31,7 +31,7 @@ __EMBED_CSS__
   <div class="content">
     <header class="topbar">
       <div><div class="eyebrow" id="eyebrow">Fleet node</div><h1 class="page-title" id="page-title">Overview</h1><p class="page-subtitle" id="page-subtitle">Live capacity and model activity for this router.</p></div>
-      <div class="top-actions"><div class="connection"><span class="status-dot" id="health-dot"></span><span id="health">Checking health</span></div><button class="ghost" onclick="refresh()" aria-label="Refresh router status"><svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3.9L4 9"/><path d="M4 5v4h4M4 13a8 8 0 0 0 14.9 3.9L20 15"/><path d="M20 19v-4h-4"/></svg></button></div>
+      <div class="top-actions"><div class="connection" id="reload" role="status" hidden><span class="status-dot" id="reload-dot"></span><span id="reload-text"></span></div><div class="connection"><span class="status-dot" id="health-dot"></span><span id="health">Checking health</span></div><button class="ghost" onclick="refresh()" aria-label="Refresh router status"><svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-3.9L4 9"/><path d="M4 5v4h4M4 13a8 8 0 0 0 14.9 3.9L20 15"/><path d="M20 19v-4h-4"/></svg></button></div>
     </header>
 
     <main id="dashboard" class="view active">

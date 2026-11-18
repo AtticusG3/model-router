@@ -196,7 +196,13 @@ spill to another node carries the already-filtered body.
 
 ### Reloading config
 
-The file is re-read on change and on `SIGHUP`. A file that fails validation is
+The file is re-read on change, on `SIGHUP` and on `POST /_router/reload`
+(empty body; the same gate as the other two, and one reload runs at a time).
+The POST answers `200` with `{"status":"reloaded","ok":true,"at":...}`, or
+`422` with `"status":"rejected"` and the `error`. `/_router/status` carries
+the last reload as `reload` (`at`, `ok`, `error`), and the operator UI shows it
+in the top bar whichever trigger ran it. Public clients need an API key, as for
+every other route. A file that fails validation is
 rejected and the running config stays. A valid file is applied without
 restarting the process:
 

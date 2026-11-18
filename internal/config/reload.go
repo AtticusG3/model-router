@@ -23,10 +23,12 @@ type Reloader struct {
 	apply func(*Config) error
 	log   Logger
 
+	run       sync.Mutex // the watcher, SIGHUP and POST /_router/reload apply one at a time
 	mu        sync.Mutex
 	current   *Config
 	lastErr   string
 	lastErrAt time.Time
+	lastAt    time.Time // when the last reload finished, ok or not
 }
 
 // NewReloader returns a reloader for path. current is the running config;
@@ -36,15 +38,18 @@ func NewReloader(path string, current *Config, apply func(*Config) error, log Lo
 }
 
 // Reload validates the file and hands a valid config to the apply hook. The
-// watch loop calls it serially, so a slow apply delays the next reload.
-// The file and signal triggers both come through here.
+// file, signal and HTTP triggers all come through here and run one at a time,
+// so a slow apply delays the next reload.
 func (r *Reloader) Reload() error {
+	r.run.Lock()
+	defer r.run.Unlock()
 	cfg, err := Load(r.path)
 	if err == nil {
 		err = r.apply(cfg)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.lastAt = time.Now()
 	if err != nil {
 		r.lastErr, r.lastErrAt = err.Error(), time.Now()
 		// Parse and apply errors name a line, field or model, never a value, so this is safe to log.
@@ -70,6 +75,14 @@ func (r *Reloader) LastError() (string, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.lastErr, r.lastErrAt
+}
+
+// LastReload is when the most recent reload finished (zero before the first)
+// and its error text, empty if it was applied.
+func (r *Reloader) LastReload() (time.Time, string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastAt, r.lastErr
 }
 
 // Watch reloads on SIGHUP and whenever the file's mtime or size changes, until ctx ends.

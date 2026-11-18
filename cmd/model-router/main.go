@@ -93,6 +93,7 @@ func main() {
 
 	// Reload gate: file changes and SIGHUP validate the config, then the router applies it.
 	reloader := config.NewReloader(*configPath, cfg, r.Apply, logger)
+	r.SetReloader(reloader)
 	go reloader.Watch(ctx, 2*time.Second)
 
 	handler := router.NewAccessHandler(cfg.Security, router.NewHandler(r, logger))
