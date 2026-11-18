@@ -91,6 +91,13 @@ func main() {
 	// expired (lazy eviction alone only frees VRAM under admission pressure).
 	go router.IdleTTLReaper(ctx, r, 30*time.Second)
 
+	// Reload gate: file changes and SIGHUP validate the config before any apply.
+	// The apply step itself lands in the next ticket; for now it only logs.
+	reloader := config.NewReloader(*configPath, cfg, func(*config.Config) {
+		logger.Infof("config reload: validated config ready; apply not wired yet, running config unchanged")
+	}, logger)
+	go reloader.Watch(ctx, 2*time.Second)
+
 	handler := router.NewAccessHandler(cfg.Security, router.NewHandler(r, logger))
 	if len(cfg.Security.APIKeys) == 0 {
 		logger.Infof("security: no api keys configured; clients on public addresses are refused")
