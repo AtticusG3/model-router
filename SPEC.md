@@ -310,6 +310,22 @@ with backoff from 1 second, doubling to 30 seconds, until unload or
 shutdown. Stop is SIGTERM to the process group, then SIGKILL. On Windows the
 stop path is process-kill only.
 
+A model that never becomes healthy is a different event from one that crashes
+after it was healthy (ADR 0001). After the one retry inside a start, the
+failed start opens a **start cooldown** for that model on this node: 10
+seconds, doubling on each consecutive failed start up to 5 minutes. A start
+that becomes healthy resets the next window to 10 seconds. The windows are
+fixed, not config. Every copy of the model shares the window.
+
+- A request inside the window gets `503` with `Retry-After` set to the whole
+  seconds left. It spawns nothing and evicts nothing.
+- `POST /_router/load` from a peer gets the same `503` and `Retry-After`, and
+  this node does not call another node. A request proxied from a peer is
+  refused here and not sent onward.
+- Other models on the node start normally, and a generation already in
+  flight keeps running.
+- A crash restart does not open or wait on a start cooldown.
+
 Extra-instance ports are allocated above every stanza port and every
 `reserved_ports` entry, in config order. `-check` prints them.
 

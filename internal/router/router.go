@@ -36,6 +36,9 @@ type Router struct {
 	shutdown  chan struct{}
 	shutOnce  sync.Once
 
+	coolMu    sync.Mutex
+	cooldowns map[string]*startCooldown // stanza model id -> failed-start state
+
 	httpc    *http.Client
 	activity *ActivityLog
 	metrics  *Metrics
@@ -53,6 +56,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		managed:   map[string]*Managed{},
 		occupancy: map[string]int{},
 		draining:  map[string]bool{},
+		cooldowns: map[string]*startCooldown{},
 		admitWait: make(chan struct{}, 1),
 		shutdown:  make(chan struct{}),
 		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
@@ -115,6 +119,10 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 		if m.State() == StateRunning {
 			return m.gpuIndex(), nil
 		}
+		// Inside a start cooldown nothing is spawned and nothing is evicted.
+		if err := r.startRefused(s.ModelID); err != nil {
+			return -1, err
+		}
 
 		// Admission control: reserve VRAM before spawning. Keep it until Unload
 		// or failed Start so crash-restart does not need to re-reserve.
@@ -140,13 +148,16 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 				lastErr = err
 				r.ledger.Release(key)
 				r.forgetManaged(key, m)
+				// A stop (unload, eviction) is not this model's failure. Any other
+				// failure that will not be retried opens the start cooldown.
+				willRetry := wait && hardStartFailure(err) && hardRetries == 0 && r.canEventuallyAdmit(s)
+				if !willRetry && !stoppedDuringStart(err) {
+					return -1, r.startFailed(s.ModelID, err)
+				}
 				if !wait || !r.canEventuallyAdmit(s) {
 					return -1, err
 				}
 				if hardStartFailure(err) {
-					if hardRetries >= 1 {
-						return -1, err
-					}
 					hardRetries++
 					r.logger.Infof("retrying load of %s after %v", key, err)
 					if err := r.waitAdmit(ctx); err != nil {
@@ -164,11 +175,16 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 				continue
 			}
 			m.SetGPU(gpu)
+			r.startHealthy(s.ModelID)
 			return gpu, nil
 		}
 		if hardRetries > 0 || !wait || !r.canEventuallyAdmit(s) {
 			if !evictOK {
 				r.forgetManaged(key, m)
+			}
+			if hardRetries > 0 {
+				// The retry could not reserve: the first failure stands.
+				return -1, r.startFailed(s.ModelID, lastErr)
 			}
 			if lastErr != nil {
 				return -1, lastErr
@@ -1065,7 +1081,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 			if r.serveSpill(w, req, modelID) {
 				return
 			}
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			loadFailed(w, err)
 			return
 		}
 	}
@@ -1076,7 +1092,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 		if !incomingPeer && r.serveSpill(w, req, modelID) {
 			return
 		}
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		loadFailed(w, err)
 	}
 }
 
@@ -1092,7 +1108,7 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 		tgt, err := r.pickPoolTarget(pool, skip)
 		if err != nil {
 			if last != nil {
-				http.Error(w, last.Error(), http.StatusServiceUnavailable)
+				loadFailed(w, last)
 				return
 			}
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -1189,7 +1205,7 @@ func (r *Router) spillTargets(failedLocal string) []string {
 // serveLocal proxies to a local backend, spawning it if needed.
 func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID string) {
 	if err := r.proxyLocal(w, req, modelID); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		loadFailed(w, err)
 	}
 }
 
