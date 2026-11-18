@@ -94,6 +94,7 @@ including extra-instance ports, then exits.
 listen: 0.0.0.0:18080
 start_port: 5800          # base for auto-allocated ports
 reserved_ports: [8081, 6333]
+headroom_mb: 0            # MB left unbooked on every GPU; default 0
 preload: [intent-model]
 
 telemetry:
@@ -285,6 +286,10 @@ cached, possibly stale copy and never treat it as ground truth.
   waits or evicts.
 - An extra copy never evicts and never waits for VRAM. If its card is gone,
   the request queues on a sibling that is already up.
+- `headroom_mb` is subtracted once from each GPU's available VRAM (the
+  tighter of live and ledger free) before any `vram_mb` check. A split
+  model's share is checked against each card after that card's headroom.
+  It does not change a stanza's `vram_mb` and is not a reservation.
 - `vram_mb <= 0` with no GPU telemetry is allowed (a CPU process). A positive
   `vram_mb` is refused until the first successful poll.
 
@@ -314,7 +319,11 @@ Two mechanisms:
 ## Supervisor
 
 One supervised process per instance, on that instance's port. Health is
-polled until `spin_up_seconds`. The process must still be alive when health
+polled until `spin_up_seconds`. While the backend is still loading, a health
+body with a numeric `progress` that differs from the last one moves the
+deadline to now plus `spin_up_seconds`; there is no second cap. The same
+number again, or no number, expires on the deadline already set. A 200
+response ends the wait whatever the body says. The process must still be alive when health
 passes, so a leftover occupant of the port cannot be mistaken for this
 spawn. The process is not bound to the HTTP request that triggered it.
 
@@ -322,6 +331,22 @@ An unexpected exit while the model is supposed to be running restarts it
 with backoff from 1 second, doubling to 30 seconds, until unload or
 shutdown. Stop is SIGTERM to the process group, then SIGKILL. On Windows the
 stop path is process-kill only.
+
+A model that never becomes healthy is a different event from one that crashes
+after it was healthy (ADR 0001). After the one retry inside a start, the
+failed start opens a **start cooldown** for that model on this node: 10
+seconds, doubling on each consecutive failed start up to 5 minutes. A start
+that becomes healthy resets the next window to 10 seconds. The windows are
+fixed, not config. Every copy of the model shares the window.
+
+- A request inside the window gets `503` with `Retry-After` set to the whole
+  seconds left. It spawns nothing and evicts nothing.
+- `POST /_router/load` from a peer gets the same `503` and `Retry-After`, and
+  this node does not call another node. A request proxied from a peer is
+  refused here and not sent onward.
+- Other models on the node start normally, and a generation already in
+  flight keeps running.
+- A crash restart does not open or wait on a start cooldown.
 
 Extra-instance ports are allocated above every stanza port and every
 `reserved_ports` entry, in config order. `-check` prints them.
@@ -336,7 +361,8 @@ polled.
 The snapshot a node publishes:
 
 - Per GPU: index, name, total MB, free MB, free MB if stale models were
-  evicted, free MB if idle models were evicted.
+  evicted, free MB if idle models were evicted. All three free figures are
+  after `headroom_mb`.
 - Each running instance: `model_id`, instance key when it is not instance 0,
   `fresh` or `stale`, VRAM budget, GPU, slot count, in-flight count.
 
@@ -356,6 +382,9 @@ the peer admits against its own budget.
 | `GET /_router/status` | Node name, catalog, local telemetry, cached peers. |
 | `GET /_router/telemetry` | The snapshot peers pull. |
 | `GET /_router/logs` | Router, upstream, and mesh rings, plus a scrape of each running backend's `/metrics`. |
+| `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
+| `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
+| `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
 | `GET /_router/activity`, `GET /_router/activity/{id}` | In-memory generation log and request/response captures. |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |

@@ -29,14 +29,17 @@ type Router struct {
 	node   string
 
 	mu        sync.Mutex
-	managed   map[string]*Managed // local stanza id -> supervisor
-	occupancy map[string]int      // target key -> in-flight selected requests
-	draining  map[string]bool     // claimed for unload; new requests wait
+	managed   map[string]*Managed  // local stanza id -> supervisor
+	occupancy map[string]int       // target key -> in-flight selected requests
+	draining  map[string]bool      // claimed for unload; new requests wait
 	peerUntil map[string]time.Time // "peer/model" -> end of the Retry-After that peer sent
-	spawn     spawner             // tests inject a fake; nil uses the GOOS default
-	admitWait chan struct{}       // 1-buffer poke when occupancy/unload may free VRAM
+	spawn     spawner              // tests inject a fake; nil uses the GOOS default
+	admitWait chan struct{}        // 1-buffer poke when occupancy/unload may free VRAM
 	shutdown  chan struct{}
 	shutOnce  sync.Once
+
+	coolMu    sync.Mutex
+	cooldowns map[string]*startCooldown // stanza model id -> failed-start state
 
 	httpc    *http.Client
 	activity *ActivityLog
@@ -46,16 +49,19 @@ type Router struct {
 // New builds a Router from parsed config.
 func New(cfg *config.Config, logger *Logger, node string) *Router {
 	stale := time.Duration(cfg.Telemetry.PeerStaleSeconds) * time.Second
+	ledger := NewLedger()
+	ledger.headroomMB = cfg.HeadroomMB
 	return &Router{
 		cfg:       cfg,
 		logger:    logger,
-		ledger:    NewLedger(),
+		ledger:    ledger,
 		peers:     NewPeerCache(stale),
 		node:      node,
 		managed:   map[string]*Managed{},
 		occupancy: map[string]int{},
 		draining:  map[string]bool{},
 		peerUntil: map[string]time.Time{},
+		cooldowns: map[string]*startCooldown{},
 		admitWait: make(chan struct{}, 1),
 		shutdown:  make(chan struct{}),
 		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
@@ -118,6 +124,10 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 		if m.State() == StateRunning {
 			return m.gpuIndex(), nil
 		}
+		// Inside a start cooldown nothing is spawned and nothing is evicted.
+		if err := r.startRefused(s.ModelID); err != nil {
+			return -1, err
+		}
 
 		// Admission control: reserve VRAM before spawning. Keep it until Unload
 		// or failed Start so crash-restart does not need to re-reserve.
@@ -143,13 +153,16 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 				lastErr = err
 				r.ledger.Release(key)
 				r.forgetManaged(key, m)
+				// A stop (unload, eviction) is not this model's failure. Any other
+				// failure that will not be retried opens the start cooldown.
+				willRetry := wait && hardStartFailure(err) && hardRetries == 0 && r.canEventuallyAdmit(s)
+				if !willRetry && !stoppedDuringStart(err) {
+					return -1, r.startFailed(s.ModelID, err)
+				}
 				if !wait || !r.canEventuallyAdmit(s) {
 					return -1, err
 				}
 				if hardStartFailure(err) {
-					if hardRetries >= 1 {
-						return -1, err
-					}
 					hardRetries++
 					r.logger.Infof("retrying load of %s after %v", key, err)
 					if err := r.waitAdmit(ctx); err != nil {
@@ -167,11 +180,16 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 				continue
 			}
 			m.SetGPU(gpu)
+			r.startHealthy(s.ModelID)
 			return gpu, nil
 		}
 		if hardRetries > 0 || !wait || !r.canEventuallyAdmit(s) {
 			if !evictOK {
 				r.forgetManaged(key, m)
+			}
+			if hardRetries > 0 {
+				// The retry could not reserve: the first failure stands.
+				return -1, r.startFailed(s.ModelID, lastErr)
 			}
 			if lastErr != nil {
 				return -1, lastErr
@@ -197,13 +215,17 @@ func stanzaGPUs(s *config.Stanza) []int {
 }
 
 // canEventuallyAdmit is true unless we know the pinned (or every) card is
-// smaller than s. Missing telemetry and a missing pinned GPU wait rather
-// than 503: occupied VRAM can free after idle eviction.
+// smaller than s after headroom. Missing telemetry and a missing pinned GPU
+// wait rather than 503: occupied VRAM can free after idle eviction.
 func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 	idxs := deviceIndexes(s.Device)
 	gpus := r.ledger.GPUs()
 	if len(gpus) == 0 {
 		return true
+	}
+	headroom := r.ledger.headroomMB
+	usable := func(total int64) int64 {
+		return max(total-headroom, 0)
 	}
 	totals := map[int]int64{}
 	for _, g := range gpus {
@@ -227,7 +249,7 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 				need = s.VramMB * totals[idx] / capSum
 				assigned += need
 			}
-			if totals[idx] < need {
+			if usable(totals[idx]) < need {
 				return false
 			}
 		}
@@ -246,7 +268,7 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 			continue
 		}
 		saw = true
-		if total <= 0 || total >= s.VramMB {
+		if total <= 0 || usable(total) >= s.VramMB {
 			return true
 		}
 	}
@@ -1064,23 +1086,22 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.servePool(w, req, ref.Pool)
 		return
 	}
+	if ref.Local != "" {
+		r.serveLocalTarget(w, req, ref.Local)
+		return
+	}
+	if ref.Peer != "" {
+		r.servePeers(w, req, ref.Peer, ref.PeerID)
+		return
+	}
 	if ref.Raw != "" {
+		// Mesh id only: peers advertise it, and it is not a local stanza,
+		// pool, or peer-qualified name. Raw is also filled for those
+		// other kinds, so this branch must run last.
 		r.servePeers(w, req, "", ref.Raw)
 		return
 	}
-	tgt, err := r.resolveTarget(ref)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	switch {
-	case tgt.Local != "":
-		r.serveLocalTarget(w, req, tgt.Local)
-	case tgt.Peer != "":
-		r.servePeers(w, req, tgt.Peer, tgt.PeerID)
-	default:
-		http.Error(w, "no router for requested model", http.StatusNotFound)
-	}
+	http.Error(w, "no router for requested model", http.StatusNotFound)
 }
 
 func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
@@ -1108,7 +1129,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 			if r.serveSpill(w, req, modelID) {
 				return
 			}
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			loadFailed(w, err)
 			return
 		}
 	}
@@ -1119,7 +1140,7 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 		if !incomingPeer && r.serveSpill(w, req, modelID) {
 			return
 		}
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		loadFailed(w, err)
 	}
 }
 
@@ -1135,7 +1156,7 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 		tgt, err := r.pickPoolTarget(pool, skip)
 		if err != nil {
 			if last != nil {
-				http.Error(w, last.Error(), http.StatusServiceUnavailable)
+				loadFailed(w, last)
 				return
 			}
 			http.Error(w, err.Error(), http.StatusServiceUnavailable)
@@ -1283,7 +1304,7 @@ func (r *Router) spillTargets(failedLocal string) []string {
 // serveLocal proxies to a local backend, spawning it if needed.
 func (r *Router) serveLocal(w http.ResponseWriter, req *http.Request, modelID string) {
 	if err := r.proxyLocal(w, req, modelID); err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		loadFailed(w, err)
 	}
 }
 
@@ -1622,16 +1643,19 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			idleByGPU[gpu] += vram
 		}
 	}
+	// Every published free figure is after headroom, so peers never pick
+	// this node for a load it must refuse.
+	head := r.cfg.HeadroomMB
 	for _, g := range gpus {
-		reclaim := staleByGPU[g.Index]
-		g.FreeIfStaleEvictedMB = g.FreeMB + reclaim
-		if g.TotalMB > 0 && g.FreeIfStaleEvictedMB > g.TotalMB {
-			g.FreeIfStaleEvictedMB = g.TotalMB
+		stale := g.FreeMB + staleByGPU[g.Index]
+		idle := g.FreeMB + idleByGPU[g.Index]
+		if g.TotalMB > 0 {
+			stale = min(stale, g.TotalMB)
+			idle = min(idle, g.TotalMB)
 		}
-		g.FreeIfIdleEvictedMB = g.FreeMB + idleByGPU[g.Index]
-		if g.TotalMB > 0 && g.FreeIfIdleEvictedMB > g.TotalMB {
-			g.FreeIfIdleEvictedMB = g.TotalMB
-		}
+		g.FreeIfStaleEvictedMB = max(stale-head, 0)
+		g.FreeIfIdleEvictedMB = max(idle-head, 0)
+		g.FreeMB = max(g.FreeMB-head, 0)
 	}
 	return &Telemetry{
 		Node:         r.node,
