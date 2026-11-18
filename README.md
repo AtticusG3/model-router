@@ -75,6 +75,34 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
 
+## API keys for public clients
+
+Clients on loopback, RFC1918, link-local (`169.254.0.0/16`, `fe80::/10`), IPv6
+ULA (`fc00::/7`) and Tailscale (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`)
+addresses need no key. Any other client must present a configured key on every
+route except `/health`, operator and inference alike. With no keys configured,
+public requests get 401.
+
+```yaml
+security:
+  api_keys: [replace-with-a-long-random-key]
+  trusted_proxies: [10.0.0.5, 10.99.0.0/24]   # optional
+```
+
+`MODEL_ROUTER_API_KEYS` (comma separated) adds keys from the environment.
+
+The client IP is the socket peer. `X-Forwarded-For` / `X-Real-IP` are believed
+only when the peer is in `trusted_proxies`; otherwise they are ignored.
+
+A public client passes the key as `Authorization: Bearer <key>` or
+`x-api-key: <key>`. A browser opening `/ui/` from a public address gets the
+browser's own sign-in prompt: enter any user name and the key as the password.
+The browser then sends it on the UI's own calls. Keys are never logged, and
+activity captures redact `Authorization` and `x-api-key`.
+
+Peer routers call each other without a key, so keep `peers[].base_url` on a
+private or Tailscale address.
+
 ## Operator WebUI (`/ui/`)
 
 Catalog **Load** / **Unload** only start and stop **this node's** stanzas.

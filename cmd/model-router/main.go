@@ -91,7 +91,10 @@ func main() {
 	// expired (lazy eviction alone only frees VRAM under admission pressure).
 	go router.IdleTTLReaper(ctx, r, 30*time.Second)
 
-	handler := router.NewHandler(r, logger)
+	handler := router.NewAccessHandler(cfg.Security, router.NewHandler(r, logger))
+	if len(cfg.Security.APIKeys) == 0 {
+		logger.Infof("security: no api keys configured; clients on public addresses are refused")
+	}
 	srv, _, errCh, err := startHTTPServer(cfg.Listen, handler, logger)
 	if err != nil {
 		logger.Errorf("server: %v", err)
