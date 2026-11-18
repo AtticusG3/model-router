@@ -38,7 +38,7 @@ const (
 type logEntry struct {
 	seq    uint64
 	stream string
-	model  string // set for upstream lines only
+	model  string // model id without the #n copy suffix; upstream lines only
 	text   string
 }
 
@@ -77,7 +77,7 @@ func copyRing(src []logEntry, limit int) []string {
 var ansiSeq = regexp.MustCompile("\x1b\\[[0-9;?]*[ -/]*[@-~]")
 
 // maxRingLine caps one stored line. A backend that dumps a multi-megabyte
-// stack trace must not bloat every 3-second poll of /_router/logs.
+// stack trace must not bloat the rings or every open log stream.
 const maxRingLine = 2000
 
 // sanitize makes one log line safe to store and render: no escape sequences,
@@ -110,7 +110,8 @@ func (l *Logger) write(stream, model, prefix, format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seq++
-	e := logEntry{seq: l.seq, stream: stream, model: model, text: stamped}
+	// Copies (id#n) file under their model so its stream shows them all; the text keeps the #n tag.
+	e := logEntry{seq: l.seq, stream: stream, model: instanceModel(model), text: stamped}
 	switch stream {
 	case streamUpstream:
 		l.upstream = appendRing(l.upstream, e)
@@ -118,7 +119,7 @@ func (l *Logger) write(stream, model, prefix, format string, args ...any) {
 			if l.byModel == nil {
 				l.byModel = map[string][]logEntry{}
 			}
-			l.byModel[model] = appendRing(l.byModel[model], e)
+			l.byModel[e.model] = appendRing(l.byModel[e.model], e)
 		}
 	case streamMesh:
 		l.mesh = appendRing(l.mesh, e)

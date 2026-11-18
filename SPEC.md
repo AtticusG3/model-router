@@ -471,7 +471,8 @@ the peer admits against its own budget.
 | `GET /_router/logs` | Router, upstream, and mesh rings, plus a scrape of each running backend's `/metrics`. |
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
-| `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
+| `GET /logs/stream/{model_id}` | One model's backend output, every copy included (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
+| `GET /_router/backend-metrics` | Generation speed, prompt speed and KV cache per running backend, summarised from its `/metrics`. Empty series when a backend serves none. |
 | `GET /_router/activity`, `GET /_router/activity/{id}` | In-memory generation log and request/response captures. |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
@@ -489,6 +490,13 @@ in the chat or image lab is an ordinary `/v1/...` request, so this node
 spills or proxies. Activity keeps the last 200 proxied requests, with at
 most 256 KB per body and 8 MB of captures, in memory only. It resets on
 restart. Authorization and cookie headers are not stored.
+
+Logs is one live view over `/logs/stream`, opened only while it is showing:
+combined, router, upstream, mesh, or one model, with a text filter, pause and
+tail-follow. Request rows stay on Activity, not in the log stream.
+Performance draws gauges and charts from `/_router/status`, `/_router/activity`
+and `/_router/backend-metrics`. It never shows Prometheus text; `/metrics` is
+for scrapers.
 
 ## Still out of scope
 
