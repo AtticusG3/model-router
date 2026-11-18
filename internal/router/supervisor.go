@@ -282,28 +282,47 @@ func (m *Managed) SetGPU(idx int) {
 	m.gpuIdx = idx
 }
 
-// copyLogs feeds backend stdout/stderr to the upstream log ring.
+// maxPartialLine bounds an unterminated line: a progress bar that only uses
+// carriage returns never sends a newline.
+const maxPartialLine = 16 << 10
+
+// copyLogs feeds backend stdout/stderr to the upstream log ring. A read can end
+// mid-line, so the unterminated tail is held until its newline arrives.
 func (m *Managed) copyLogs(r io.Reader) {
 	if r == nil {
 		return
 	}
 	buf := make([]byte, 16<<10)
+	var pending string
+	emit := func(line string) {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			return
+		}
+		if len(line) > 2000 {
+			line = line[:2000] + "..."
+		}
+		m.logger.Upstreamf(m.id, "%s", line)
+	}
 	for {
 		n, err := r.Read(buf)
 		if n > 0 {
-			text := strings.TrimRight(string(buf[:n]), "\n")
-			for _, line := range strings.Split(text, "\n") {
-				line = strings.TrimRight(line, "\r")
-				if line == "" {
-					continue
+			pending += string(buf[:n])
+			for {
+				line, rest, ok := strings.Cut(pending, "\n")
+				if !ok {
+					break
 				}
-				if len(line) > 2000 {
-					line = line[:2000] + "..."
-				}
-				m.logger.Upstreamf("[%s] %s", m.id, line)
+				emit(line)
+				pending = rest
+			}
+			if len(pending) > maxPartialLine {
+				emit(pending)
+				pending = ""
 			}
 		}
 		if err != nil {
+			emit(pending)
 			return
 		}
 	}

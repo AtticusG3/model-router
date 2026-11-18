@@ -36,6 +36,12 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 				"backend_metrics": r.BackendMetrics(),
 			})
 		}},
+		{"/logs", handleLogs(logger)},
+		{"/logs/stream", handleLogStream(logger, "", "")},
+		{"/logs/stream/proxy", handleLogStream(logger, streamProxy, "")},
+		{"/logs/stream/upstream", handleLogStream(logger, streamUpstream, "")},
+		{"/logs/stream/mesh", handleLogStream(logger, streamMesh, "")},
+		{"/logs/stream/{model_id...}", handleModelLogStream(r, logger)},
 		{"/_router/activity/{id}", handleActivityCapture(r)},
 		{"/_router/activity", handleActivity(r)},
 		{"/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
@@ -297,6 +303,69 @@ func handleRoot(r *Router) http.HandlerFunc {
 			return
 		}
 		http.NotFound(w, req)
+	}
+}
+
+// handleLogs serves the buffered combined log as plain text; browsers are sent
+// to the UI instead.
+func handleLogs(logger *Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if strings.Contains(req.Header.Get("Accept"), "text/html") {
+			http.Redirect(w, req, "/ui/", http.StatusFound)
+			return
+		}
+		history, _, cancel := logger.Subscribe("", "")
+		cancel()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		for _, line := range history {
+			fmt.Fprintln(w, line)
+		}
+	}
+}
+
+// handleModelLogStream streams one model's backend output. Ids may contain
+// slashes. A model literally named proxy, upstream or mesh is shadowed by the
+// filter paths.
+func handleModelLogStream(r *Router, logger *Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id := req.PathValue("model_id")
+		if r.cfg.Stanza(id) == nil {
+			http.Error(w, "unknown model id: "+id, http.StatusNotFound)
+			return
+		}
+		handleLogStream(logger, "", id)(w, req)
+	}
+}
+
+// handleLogStream holds the connection open, sends history first (unless
+// ?no-history is present), then flushes each new line as it is logged.
+func handleLogStream(logger *Logger, stream, model string) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		history, live, cancel := logger.Subscribe(stream, model)
+		defer cancel()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+		if _, skip := req.URL.Query()["no-history"]; !skip {
+			for _, line := range history {
+				fmt.Fprintln(w, line)
+			}
+		}
+		fl.Flush()
+		for {
+			select {
+			case <-req.Context().Done():
+				return
+			case line := <-live:
+				fmt.Fprintln(w, line)
+				fl.Flush()
+			}
+		}
 	}
 }
 
