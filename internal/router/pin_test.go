@@ -7,8 +7,8 @@ import (
 
 func TestPinnedStanzaIsNeverEvictable(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
-	r.cfg.Stanza("a").Pin = true
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("a").Pin = true
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestPinnedStanzaIsNeverEvictable(t *testing.T) {
 
 func TestUnpinnedStanzaStaysEvictable(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}
@@ -33,8 +33,8 @@ func TestUnpinnedStanzaStaysEvictable(t *testing.T) {
 
 func TestPinnedStanzaSurvivesStaleSweep(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").IdleTTLSeconds = 1
-	r.cfg.Stanza("a").Pin = true
+	r.cfg().Stanza("a").IdleTTLSeconds = 1
+	r.cfg().Stanza("a").Pin = true
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
 	}

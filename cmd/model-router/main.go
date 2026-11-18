@@ -85,17 +85,14 @@ func main() {
 
 	// Peer telemetry syncer.
 	syncEvery := time.Duration(cfg.Telemetry.PeerSyncSeconds) * time.Second
-	go router.NewPeerSyncer(cfg, r.Peers(), syncEvery, logger).Run(ctx)
+	go router.NewPeerSyncer(r.Config, r.Peers(), syncEvery, logger).Run(ctx)
 
 	// Idle-TTL reaper: actively evict backends whose idle_ttl_seconds has
 	// expired (lazy eviction alone only frees VRAM under admission pressure).
 	go router.IdleTTLReaper(ctx, r, 30*time.Second)
 
-	// Reload gate: file changes and SIGHUP validate the config before any apply.
-	// The apply step itself lands in the next ticket; for now it only logs.
-	reloader := config.NewReloader(*configPath, cfg, func(*config.Config) {
-		logger.Infof("config reload: validated config ready; apply not wired yet, running config unchanged")
-	}, logger)
+	// Reload gate: file changes and SIGHUP validate the config, then the router applies it.
+	reloader := config.NewReloader(*configPath, cfg, r.Apply, logger)
 	go reloader.Watch(ctx, 2*time.Second)
 
 	handler := router.NewAccessHandler(cfg.Security, router.NewHandler(r, logger))
@@ -139,7 +136,7 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 	cancel()
 	<-preloadDone
-	for _, id := range cfg.StanzaIDs() {
+	for _, id := range r.Config().StanzaIDs() {
 		r.Unload(id)
 	}
 	fmt.Fprintln(os.Stderr, "shutdown complete")

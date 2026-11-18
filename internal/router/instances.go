@@ -39,10 +39,10 @@ func instanceIndex(key string) int {
 // stanzaOf resolves an instance key, model id, or alias to its stanza.
 func (r *Router) stanzaOf(key string) *config.Stanza {
 	id := instanceModel(key)
-	if s := r.cfg.Stanza(id); s != nil {
+	if s := r.cfg().Stanza(id); s != nil {
 		return s
 	}
-	return r.cfg.Alias(id)
+	return r.cfg().Alias(id)
 }
 
 // managedLocked returns the supervisor for key, creating it on the instance's

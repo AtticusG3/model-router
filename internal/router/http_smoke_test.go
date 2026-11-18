@@ -258,9 +258,9 @@ peers:
     base_url: http://127.0.0.1:9
     models: [daily-model]
 `)
-	r.cfg.Peer("digger").BaseURL = peer.URL
+	r.cfg().Peer("digger").BaseURL = peer.URL
 	r.ledger.SetGPUs([]*GPUState{gpu(1, 32768)})
-	if _, ok := r.ledger.Reserve("krea2turbo", r.cfg.Stanza("krea2turbo")); !ok {
+	if _, ok := r.ledger.Reserve("krea2turbo", r.cfg().Stanza("krea2turbo")); !ok {
 		t.Fatal("krea should reserve")
 	}
 	r.holdOccupancy("krea2turbo")
@@ -316,7 +316,7 @@ peers:
     base_url: http://127.0.0.1:9
     models: [qwen3.6-35b-a3b]
 `)
-	r.cfg.Peer("nugget").BaseURL = peer.URL
+	r.cfg().Peer("nugget").BaseURL = peer.URL
 	r.holdOccupancy("qwen3.6-35b-a3b")
 	r.peers.Set("nugget", &Telemetry{
 		Node: "nugget",

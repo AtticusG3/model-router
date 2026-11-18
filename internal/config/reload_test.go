@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,10 +31,11 @@ func newTestReloader(t *testing.T, content string) (*Reloader, string, *[]*Confi
 	}
 	var mu sync.Mutex
 	var applied []*Config
-	r := NewReloader(path, initial, func(c *Config) {
+	r := NewReloader(path, initial, func(c *Config) error {
 		mu.Lock()
 		applied = append(applied, c)
 		mu.Unlock()
+		return nil
 	}, nopLog{})
 	return r, path, &applied, &mu
 }
@@ -53,6 +55,22 @@ func TestReloadValidAppliesAndClearsError(t *testing.T) {
 	}
 	if msg, at := r.LastError(); msg != "" || !at.IsZero() {
 		t.Errorf("error not cleared: %q", msg)
+	}
+}
+
+func TestReloadApplyFailureKeepsRunning(t *testing.T) {
+	r, path, _, _ := newTestReloader(t, validYAML)
+	initial := r.Current()
+	r.apply = func(*Config) error { return errors.New("restart m1: spawn failed") }
+	os.WriteFile(path, []byte("stanzas: []\nlisten: 127.0.0.1:19004\n"), 0o644)
+	if r.Reload() == nil {
+		t.Fatal("failed apply reported as success")
+	}
+	if r.Current() != initial {
+		t.Error("current moved to a config that was not applied")
+	}
+	if msg, _ := r.LastError(); !strings.Contains(msg, "spawn failed") {
+		t.Errorf("apply error not recorded: %q", msg)
 	}
 }
 

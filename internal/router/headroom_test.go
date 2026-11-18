@@ -137,7 +137,7 @@ func TestHTTPHeadroomRefusesLoadAndShrinksTelemetry(t *testing.T) {
 		t.Fatalf("small load = %d, want 200", code)
 	}
 	// The budget is untouched and the reservation is the budget alone.
-	if got := r.cfg.Stanza("small").VramMB; got != 9000 {
+	if got := r.cfg().Stanza("small").VramMB; got != 9000 {
 		t.Fatalf("vram_mb = %d, want 9000", got)
 	}
 	if got := r.ledger.reservationUsed("small")[0]; got != 9000 {

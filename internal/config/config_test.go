@@ -542,6 +542,30 @@ func TestParseRejectsBadFilters(t *testing.T) {
 	}
 }
 
+func TestLaunchEqualIgnoresEverythingButTheLaunch(t *testing.T) {
+	stanza := func(fields string) *Stanza {
+		cfg, err := Parse([]byte("stanzas:\n  - {model_id: a, port: 5901, command: \"srv --port {port}\", " + fields + "}\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Stanza("a")
+	}
+	base := stanza("idle_ttl_seconds: 10, env: [K=1]")
+	for _, same := range []string{"idle_ttl_seconds: 99, env: [K=1]", "env: [K=1], slots: 4, filters: {stripParams: [top_k]}", "env: [K=1], hold_seconds: 30, vram_mb: 8000"} {
+		if !base.LaunchEqual(stanza(same)) {
+			t.Errorf("%q: launch reported changed", same)
+		}
+	}
+	if base.LaunchEqual(stanza("env: [K=2]")) {
+		t.Error("env change not seen")
+	}
+	other := stanza("env: [K=1]")
+	other.Command = "srv --port {port} --flag"
+	if base.LaunchEqual(other) {
+		t.Error("command change not seen")
+	}
+}
+
 func TestFilterIDsExpandModelID(t *testing.T) {
 	cfg, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {\"${MODEL_ID}:high\": {t: 1}}}}\n"))
 	if err != nil {

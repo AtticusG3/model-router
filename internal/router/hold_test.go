@@ -14,9 +14,9 @@ import (
 // before a client can reach it.
 func TestHoldProtectsRunningModelFromEviction(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").HoldSeconds = 60
-	r.cfg.Stanza("b").Device = "0"
-	r.cfg.Stanza("a").Device = "0"
+	r.cfg().Stanza("a").HoldSeconds = 60
+	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("a").Device = "0"
 
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
@@ -26,7 +26,7 @@ func TestHoldProtectsRunningModelFromEviction(t *testing.T) {
 	}
 
 	// b needs the same GPU: admission would normally evict idle a.
-	r.evictToFit("b", r.cfg.Stanza("b"))
+	r.evictToFit("b", r.cfg().Stanza("b"))
 
 	r.mu.Lock()
 	_, stillLoaded := r.managed["a"]
@@ -40,9 +40,9 @@ func TestHoldProtectsRunningModelFromEviction(t *testing.T) {
 // protection cannot leak into normal admission.
 func TestHoldExpires(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").HoldSeconds = 1
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
+	r.cfg().Stanza("a").HoldSeconds = 1
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
 
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
@@ -59,7 +59,7 @@ func TestHoldExpires(t *testing.T) {
 		t.Fatal("hold must expire once readyAt+HoldSeconds is in the past")
 	}
 
-	r.evictToFit("b", r.cfg.Stanza("b"))
+	r.evictToFit("b", r.cfg().Stanza("b"))
 
 	r.mu.Lock()
 	_, stillLoaded := r.managed["a"]
@@ -73,8 +73,8 @@ func TestHoldExpires(t *testing.T) {
 // evictable immediately.
 func TestNoHoldByDefault(t *testing.T) {
 	r := loadTestRouter(t)
-	r.cfg.Stanza("a").Device = "0"
-	r.cfg.Stanza("b").Device = "0"
+	r.cfg().Stanza("a").Device = "0"
+	r.cfg().Stanza("b").Device = "0"
 
 	if _, err := r.Load("a"); err != nil {
 		t.Fatalf("Load a: %v", err)
