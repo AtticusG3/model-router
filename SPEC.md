@@ -122,14 +122,6 @@ stanzas:
     hold_seconds: 0        # seconds after healthy during which eviction skips it
     port: 5901             # 0 = next free port from start_port
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
-    filters:               # optional, see Request filters
-      stripParams: [temperature]
-      setParams:
-        top_p: 0.9
-        "top_k?": 40       # trailing ? = only when the client omitted it
-      setParamsByID:
-        "${MODEL_ID}:high":
-          reasoning_effort: high
 
   - model_id: sdxl-turbo
     command: "/opt/ai/bin/sd-server -m /opt/ai/models/sdxl.gguf --port {port}"
@@ -171,63 +163,6 @@ and `{gpu}` (the index chosen at spawn). A multi-instance stanza needs
 
 `model_id` and aliases must not contain `#`. That character marks instance
 keys (`model#2`). Instance 0 keeps the bare id.
-
-### Request filters
-
-A stanza or a peer may carry `filters` that rewrite a JSON object body before
-the backend (or peer) sees it. They follow llama-swap:
-
-- `stripParams`: top-level keys to remove.
-- `setParams`: keys to set, overwriting the client's value. A key ending in
-  `?` is set only when the client omitted it. Stripping runs first, so a
-  stripped key can be refilled by a `?` entry.
-- `setParamsByID` (stanzas only): each key is an id, with `${MODEL_ID}` standing
-  for the stanza id. The id resolves to the same stanza and is listed in
-  `/v1/models` as its own row. A request naming it gets `setParams` and then
-  that entry, which wins on a clash. Only the parameters differ: it shares the
-  one resident process and its admission.
-
-The model id field (`model`, the stanza's `match.body_field`, or the peer's
-`body_field`) cannot be stripped or set; config load rejects it. An id from
-`setParamsByID` must not collide with a stanza, alias, pool or contain `#`.
-Bodies that are not JSON objects (forms, multipart, GETs) pass unchanged.
-Filters apply where a request is sent to a local backend or a peer, so a
-spill to another node carries the already-filtered body.
-
-### Reloading config
-
-The file is re-read on change, on `SIGHUP` and on `POST /_router/reload`
-(empty body; the same gate as the other two, and one reload runs at a time).
-The POST answers `200` with `{"status":"reloaded","ok":true,"at":...}`, or
-`422` with `"status":"rejected"` and the `error`. `/_router/status` carries
-the last reload as `reload` (`at`, `ok`, `error`), and the operator UI shows it
-in the top bar whichever trigger ran it. Public clients need an API key, as for
-every other route. A file that fails validation is
-rejected and the running config stays. A valid file is applied without
-restarting the process:
-
-- Stanzas (routing, aliases, TTL, hold, slots, filters), pools and peers
-  switch in one step. A request sees either the old catalog or the new one,
-  never a mix. Requests already proxying keep the settings they started with.
-- A running backend restarts only if its launch changed: `command`, `env` or
-  its ports. Everything else (TTL, pools, peers, filters, `device`, `vram_mb`)
-  leaves the process alone; the new values govern it from the next request.
-  A backend that is not running is never started by a reload; it picks up the
-  new launch when it is next loaded.
-- In-flight requests are never dropped or preempted. A restart waits until the
-  model has no request in flight, then stops and starts it. New requests for
-  that model queue meanwhile, then go to the new process. Other models are not
-  touched. The wait has no deadline, so a stuck stream holds the reload.
-- A model removed from the file is unloaded after its in-flight requests finish
-  (not left running until idle). It stops taking new requests at once.
-- A failed apply rolls back. If a restarted backend fails to start, the
-  previous config is put back whole and every backend the reload had
-  restarted is started again on its old launch, so the router never serves a
-  half-applied catalog. The reload is recorded as failed. If a backend cannot
-  be brought back, it starts on its next request.
-- `listen`, `security`, `telemetry`, `headroom_mb` and `preload` are read once
-  at startup. A reload keeps the running values for them; restart to change
-  them.
 
 ## Request flow
 
@@ -298,16 +233,6 @@ router peer refusing, the client gets `503` whose body is the last failure and
 whose `Retry-After` is the smallest window any refusal sent, or absent if none
 sent one. An `openai` peer is a single hop. Pools keep their configured order
 and do not consult remembered windows.
-
-Pools also fall back on error, which is separate from spillover on capacity.
-If the chosen pool target fails before any response bytes reach the client (a
-refused or failed load, a connect error, or an upstream `5xx`), the router
-tries the next eligible target in that pool, releasing the failed target's
-slot first. The failure is logged on the router and mesh rings. Once a target
-has written its response head (any status below `500`), the request is not
-retried, and a running generation on another target is never preempted. When
-every target fails, the client gets `503` with the last failure. A full target
-is still skipped by spillover, not treated as an error.
 
 `POST /_router/load` is detached from the caller's cancel. A dropped client
 does not abort a spin-up that is already useful. The wait is capped at
@@ -464,49 +389,31 @@ the peer admits against its own budget.
 | Path | Purpose |
 |------|---------|
 | `/v1/*`, `/v/*`, `/sdapi/v1/*`, `/rerank`, `/reranking`, `/infill`, `/completion`, `/props`, `/slots`, `/tokenize`, `/detokenize`, `/apply-template` | Passthrough to the resolved backend. `/` is the same when a model id is present. |
-| `/v1/models` | One row per mesh `model_id`: every local stanza, plus models listed by fresh router peers and by openai peers. Ids minted by `setParamsByID` get a row each. No other aliases, no pools, no `peer/model` ids. |
+| `/v1/models` | One row per mesh `model_id`: every local stanza, plus models listed by fresh router peers and by openai peers. No aliases, no pools, no `peer/model` ids. |
 | `POST /_router/load`, `POST /_router/unload` | This node's admission. Body `{"model_id":"..."}`. Unload of a model id stops every instance. |
 | `GET /_router/status` | Node name, catalog, local telemetry, cached peers. |
 | `GET /_router/telemetry` | The snapshot peers pull. |
 | `GET /_router/logs` | Router, upstream, and mesh rings, plus a scrape of each running backend's `/metrics`. |
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
-| `GET /logs/stream/{model_id}` | One model's backend output, every copy included (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
-| `GET /_router/backend-metrics` | Generation speed, prompt speed and KV cache per running backend, summarised from its `/metrics`. Empty series when a backend serves none. |
+| `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
 | `GET /_router/activity`, `GET /_router/activity/{id}` | In-memory generation log and request/response captures. |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
 | `GET /health` | `OK`. |
 | `GET /metrics` | Prometheus: up, running models, GPU free and reclaimable, peer freshness. |
 
-`api_type` does not choose a route. The UI uses it to filter the Playground's
-model selectors (chat, image, embedding, rerank). Routing is only the matcher
-plus the catalog.
+`api_type` does not choose a route. The UI uses it to decide which models
+the Playground Chat and Image tabs offer. Routing is only the matcher plus the catalog.
 
 ## Operator UI
 
 `/ui/` is HTML, CSS, and script embedded in the binary. Catalog Load and
 Unload start and stop this node's stanzas only. Choosing a remote `model_id`
-on the Playground is an ordinary `/v1/...` request, so this node
-spills or proxies.
-
-Playground is one page whose tabs drive Chat, Image, Embeddings, Rerank,
-Speech, Transcription, Load test and Realtime. Chat and Image behave as
-before; the other tabs call `/v1/embeddings`, `/v1/rerank`, `/v1/audio/speech`,
-`/v1/audio/transcriptions` and `/v1/realtime`, or show a clear no-matching-model
-state. The tabs share the `/ui/` origin, so a public client's browser key
-prompt covers every request; no tab asks for a key on its own.
-
-Activity keeps the last 200 proxied requests, with at
+in the Playground is an ordinary `/v1/...` request, so this node
+spills or proxies. Activity keeps the last 200 proxied requests, with at
 most 256 KB per body and 8 MB of captures, in memory only. It resets on
 restart. Authorization and cookie headers are not stored.
-
-Logs is one live view over `/logs/stream`, opened only while it is showing:
-combined, router, upstream, mesh, or one model, with a text filter, pause and
-tail-follow. Request rows stay on Activity, not in the log stream.
-Performance draws gauges and charts from `/_router/status`, `/_router/activity`
-and `/_router/backend-metrics`. It never shows Prometheus text; `/metrics` is
-for scrapers.
 
 ## Still out of scope
 
