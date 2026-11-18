@@ -229,6 +229,9 @@ type Config struct {
 	Stanzas       []Stanza        `yaml:"stanzas"`
 	Pools         map[string]Pool `yaml:"pools"`
 	Peers         []Peer          `yaml:"peers"`
+	// HeadroomMB is memory left unbooked on every GPU. Admission and every
+	// published free figure subtract it; vram_mb is unchanged. Default 0.
+	HeadroomMB int64 `yaml:"headroom_mb"`
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`
@@ -282,6 +285,10 @@ func Parse(raw []byte) (*Config, error) {
 	}
 	if cfg.Telemetry.PeerStaleSeconds == 0 {
 		cfg.Telemetry.PeerStaleSeconds = DefaultPeerStale
+	}
+
+	if cfg.HeadroomMB < 0 {
+		return nil, fmt.Errorf("headroom_mb must not be negative")
 	}
 
 	reserved := map[int]bool{}
