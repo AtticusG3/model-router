@@ -21,12 +21,22 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 		{"/_router/load", handleLoad(r)},
 		{"/_router/unload", handleUnload(r)},
 		{"/_router/status", func(w http.ResponseWriter, req *http.Request) {
+			peers := r.Peers().Snapshot()
+			// Freshness is judged on this node's clock, not the peer's timestamp.
+			fresh := make(map[string]bool, len(peers))
+			for name := range peers {
+				fresh[name] = r.Peers().Fresh(name)
+			}
 			writeJSON(w, map[string]any{
-				"node":      r.node,
-				"models":    r.AllModelStatuses(),
-				"telemetry": r.TelemetrySnapshot(),
-				"peers":     r.Peers().Snapshot(),
+				"node":        r.node,
+				"models":      r.AllModelStatuses(),
+				"telemetry":   r.TelemetrySnapshot(),
+				"peers":       peers,
+				"peers_fresh": fresh,
 			})
+		}},
+		{"/_router/backend-metrics", func(w http.ResponseWriter, req *http.Request) {
+			writeJSON(w, map[string]any{"backends": r.BackendSummaries()})
 		}},
 		{"/_router/logs", func(w http.ResponseWriter, req *http.Request) {
 			writeJSON(w, map[string]any{

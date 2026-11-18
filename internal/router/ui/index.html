@@ -22,6 +22,7 @@ __EMBED_CSS__
       <button data-view="chat" aria-label="Chat lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.4 8.4 0 0 1-3.2-.6L4 20l1.7-3.4A7.3 7.3 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg><span>Chat lab</span></button>
       <button data-view="image" aria-label="Image lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m20 15-4.5-4.5L7 19"/></svg><span>Image lab</span></button>
       <button data-view="activity" aria-label="Activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="m8 14 3-4 3 2 5-7"/></svg><span>Activity</span></button>
+      <button data-view="performance" aria-label="Performance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 18a8 8 0 1 1 16 0"/><path d="m12 18 4-6"/><path d="M12 18h.01"/></svg><span>Performance</span></button>
       <button data-view="logs" aria-label="Logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 5h14M5 9h14M5 13h9M5 17h6"/><path d="m17 15 3 3-3 3"/></svg><span>Logs</span></button>
     </nav>
     <div class="sidebar-bottom"><div class="node-chip"><span class="status-dot" id="side-dot"></span><div><strong id="side-node">Connecting…</strong><span id="side-health">Polling router status</span></div></div></div>
@@ -69,6 +70,22 @@ __EMBED_CSS__
         <section><h3>Response</h3><pre class="capture-body" id="capture-resp"></pre></section>
       </div>
     </dialog>
+    <main id="performance" class="view">
+      <section class="overview" aria-label="Performance summary">
+        <div class="stat-card"><div class="stat-top"><span>Models running</span></div><div class="stat-value" id="perf-running">—</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Slots busy</span></div><div class="stat-value" id="perf-slots">—</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Recent requests</span></div><div class="stat-value" id="perf-reqs">—</div></div>
+        <div class="stat-card"><div class="stat-top"><span>Peers fresh</span></div><div class="stat-value" id="perf-peers">—</div></div>
+      </section>
+      <section class="perf-charts" aria-label="Request charts">
+        <article class="panel chart-card"><div class="chart-head"><h2>Requests per minute</h2><span class="subtle">last 15 min</span></div><svg class="spark" id="perf-chart-rate" viewBox="0 0 320 96" role="img" aria-label="Requests per minute over the last 15 minutes"></svg></article>
+        <article class="panel chart-card"><div class="chart-head"><h2>Generation speed</h2><span class="subtle">tok/s per request</span></div><svg class="spark" id="perf-chart-gen" viewBox="0 0 320 96" role="img" aria-label="Generation tokens per second"></svg></article>
+      </section>
+      <section class="section"><div class="section-heading"><div><h2>GPU memory</h2><p>Used and free VRAM per device.</p></div></div><div class="gpu-grid" id="perf-gpus"></div></section>
+      <section class="section"><div class="section-heading"><div><h2>Running models</h2><p>Recent requests from Activity, plus live speed and KV cache from backends that serve metrics.</p></div><span class="subtle mono" id="perf-updated"></span></div><div class="panel"><div class="table-wrap"><table class="table"><thead><tr><th>Model</th><th>GPU</th><th>Slots</th><th>Requests</th><th>Avg gen tok/s</th><th>Backend gen tok/s</th><th>Backend prompt tok/s</th><th>KV cache</th></tr></thead><tbody id="perf-models"></tbody></table></div></div></section>
+      <section class="section"><div class="section-heading"><div><h2>Peer freshness</h2><p>How recently each neighbouring router reported telemetry.</p></div></div><div class="peer-grid" id="perf-peer-list"></div></section>
+      <p class="subtle">Scrapers use the Prometheus endpoint: <a href="/metrics" target="_blank" rel="noopener">/metrics</a></p>
+    </main>
     <main id="logs" class="view">
       <div class="log-toolbar" role="region" aria-label="Log controls">
         <div class="chips" id="log-tabs" role="group" aria-label="Log source">
@@ -81,7 +98,6 @@ __EMBED_CSS__
         <input class="log-search" id="log-search" type="search" placeholder="Filter lines…" aria-label="Filter log lines by text" autocomplete="off">
         <label class="pause-toggle"><input type="checkbox" id="log-pause"> Pause</label>
         <span class="subtle mono" id="log-state" role="status">—</span>
-        <a class="subtle" href="/metrics" target="_blank" rel="noopener">Raw metrics</a>
       </div>
       <div id="log-output" class="log-view" role="log" aria-live="off" aria-label="Log lines" tabindex="0"></div>
     </main>

@@ -133,3 +133,27 @@ func TestLoggerRingHasTimestamp(t *testing.T) {
 		t.Fatalf("stdout should not carry the ring timestamp: %q", sink.String())
 	}
 }
+
+func TestSummariseBackendMetrics(t *testing.T) {
+	body := `# HELP llamacpp:prompt_tokens_seconds Average prompt throughput in tokens/s.
+# TYPE llamacpp:prompt_tokens_seconds gauge
+llamacpp:prompt_tokens_seconds 812.5
+llamacpp:predicted_tokens_seconds 41.25
+llamacpp:kv_cache_usage_ratio 0.375
+llamacpp:requests_processing 2
+llamacpp:tokens_predicted_total 9999
+llamacpp:requests_deferred nope`
+	got := summariseBackendMetrics(body)
+	want := map[string]float64{"prompt_tps": 812.5, "gen_tps": 41.25, "kv_cache_ratio": 0.375, "processing": 2}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %v, want %v", k, got[k], v)
+		}
+	}
+	if got := summariseBackendMetrics("dial tcp 127.0.0.1:1: connection refused"); len(got) != 0 {
+		t.Errorf("error text produced series: %v", got)
+	}
+}
