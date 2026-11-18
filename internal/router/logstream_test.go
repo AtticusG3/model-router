@@ -130,22 +130,21 @@ func TestLogStreamNoHistory(t *testing.T) {
 }
 
 func TestLogStreamFilters(t *testing.T) {
-	srv, l := logTestServer(t)
-	seedLogs(l)
-
 	cases := []struct {
 		path string
 		want []string
-		live func()
+		live func(*Logger)
 		next string
 	}{
-		{"/logs/stream/proxy", []string{"proxy-one", "[router:warn] proxy-warn"}, func() { l.Meshf("skip"); l.Infof("proxy-live") }, "proxy-live"},
-		{"/logs/stream/upstream", []string{"[upstream] [agents-a1] up-a1", "[upstream] [embed] up-embed"}, func() { l.Infof("skip"); l.Upstreamf("embed", "up-live") }, "up-live"},
-		{"/logs/stream/mesh", []string{"mesh-one"}, func() { l.Infof("skip"); l.Meshf("mesh-live") }, "mesh-live"},
-		{"/logs/stream/agents-a1", []string{"up-a1"}, func() { l.Upstreamf("embed", "skip"); l.Upstreamf("agents-a1", "a1-live") }, "a1-live"},
+		{"/logs/stream/proxy", []string{"proxy-one", "[router:warn] proxy-warn"}, func(l *Logger) { l.Meshf("skip"); l.Infof("proxy-live") }, "proxy-live"},
+		{"/logs/stream/upstream", []string{"[upstream] [agents-a1] up-a1", "[upstream] [embed] up-embed"}, func(l *Logger) { l.Infof("skip"); l.Upstreamf("embed", "up-live") }, "up-live"},
+		{"/logs/stream/mesh", []string{"mesh-one"}, func(l *Logger) { l.Infof("skip"); l.Meshf("mesh-live") }, "mesh-live"},
+		{"/logs/stream/agents-a1", []string{"up-a1"}, func(l *Logger) { l.Upstreamf("embed", "skip"); l.Upstreamf("agents-a1", "a1-live") }, "a1-live"},
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {
+			srv, l := logTestServer(t)
+			seedLogs(l)
 			sc, closeFn := openStream(t, srv.URL+c.path)
 			defer closeFn()
 			for _, w := range c.want {
@@ -153,7 +152,7 @@ func TestLogStreamFilters(t *testing.T) {
 					t.Fatalf("history: got %q want %q", got, w)
 				}
 			}
-			c.live()
+			c.live(l)
 			if got := nextLine(t, sc); !strings.Contains(got, c.next) {
 				t.Fatalf("live: got %q want %q", got, c.next)
 			}
