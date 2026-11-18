@@ -147,6 +147,9 @@ func startHTTPServer(addr string, handler http.Handler, logger *router.Logger) (
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout stays unset: a server-wide value would cut off SSE chat and log streams.
+		// shortcut: no ReadTimeout, so a slow request body is only size-capped on control routes, add one if slow clients become a problem.
 	}
 	errCh := make(chan error, 1)
 	logger.Infof("model-router listening on %s", addr)
