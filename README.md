@@ -129,6 +129,11 @@ Staged fleet configs are in `configs/` (plus
 `qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
 stanzas). The swap procedure is in `deploy/swap-over.md`.
 
+`stream_load_progress: true` (top level, default off) writes "loading model… N%"
+chunks into the reasoning stream of a `stream: true` chat completion while its
+model starts, so chat UIs do not look hung. See the Supervisor section of
+`SPEC.md`.
+
 `device` picks GPUs:
 
 - `"1"` pins the stanza to one card.

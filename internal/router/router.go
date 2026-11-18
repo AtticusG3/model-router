@@ -1326,7 +1326,19 @@ func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID st
 // proxyLocalHeld loads instance key if needed and proxies to it. The caller
 // already holds an occupancy slot on key.
 func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key string) error {
-	if _, err := r.load(req.Context(), key, true); err != nil {
+	if r.cfg.StreamLoadProgress && wantsStream(req) {
+		lw := &loadStream{ResponseWriter: w}
+		err := r.loadReportingProgress(lw, req, key)
+		if err != nil && lw.started {
+			// The 200 is already out, so a spill or http.Error cannot follow.
+			lw.fail(err)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		w = lw
+	} else if _, err := r.load(req.Context(), key, true); err != nil {
 		return err
 	}
 	r.mu.Lock()

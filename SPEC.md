@@ -327,6 +327,18 @@ response ends the wait whatever the body says. The process must still be alive w
 passes, so a leftover occupant of the port cannot be mistaken for this
 spawn. The process is not bound to the HTTP request that triggered it.
 
+**Load progress in the stream.** `stream_load_progress: true` (top level,
+default `false`) makes a held `stream: true` `POST /v1/chat/completions` to a
+local backend show life while the model starts. Each second the router writes
+an SSE chunk (`role: assistant`, `reasoning_content: "loading model… 42%"`)
+whenever the text changes; the percentage is the last health `progress`
+(read as a 0-1 fraction). Once the backend is healthy the real stream follows
+on the same response. If the start fails after the first chunk, the client gets
+a `data: {"error": ...}` event and `data: [DONE]`, and the router does not try
+a spill target, because the `200` is already sent. A load that finishes before
+the first tick writes nothing. Non-streaming requests and every other route are
+unchanged: the connection is held and the body stays empty until the response.
+
 An unexpected exit while the model is supposed to be running restarts it
 with backoff from 1 second, doubling to 30 seconds, until unload or
 shutdown. Stop is SIGTERM to the process group, then SIGKILL. On Windows the
