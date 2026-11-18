@@ -31,6 +31,8 @@ type Ledger struct {
 	// pending is VRAM just released whose nvidia-smi FreeMB has not caught
 	// up yet. Added to live free until a later poll shows the bytes.
 	pending map[int]int64
+	// headroomMB is memory on every GPU that admission will not book.
+	headroomMB int64
 }
 
 type reservation struct {
@@ -112,17 +114,14 @@ func (l *Ledger) usageLocked(drop map[string]bool) (used, credit map[int]int64) 
 // availLocked is the VRAM that can still be admitted on g. Live nvidia-smi
 // FreeMB is the physical ceiling; the reservation ledger covers spin-up lag
 // so two concurrent loads cannot both see the same free bytes. Fit is the
-// tighter of the two.
+// tighter of the two, less the node's headroom.
 func (l *Ledger) availLocked(g *GPUState, used, credit map[int]int64) int64 {
 	ledger := g.TotalMB - used[g.Index]
-	if ledger < 0 {
-		ledger = 0
-	}
 	live := l.liveFreeLocked(g, credit[g.Index])
 	if live < ledger {
-		return live
+		ledger = live
 	}
-	return ledger
+	return max(ledger-l.headroomMB, 0)
 }
 
 // liveFreeLocked is nvidia-smi FreeMB plus pending release credit and any

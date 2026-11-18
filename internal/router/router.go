@@ -44,10 +44,12 @@ type Router struct {
 // New builds a Router from parsed config.
 func New(cfg *config.Config, logger *Logger, node string) *Router {
 	stale := time.Duration(cfg.Telemetry.PeerStaleSeconds) * time.Second
+	ledger := NewLedger()
+	ledger.headroomMB = cfg.HeadroomMB
 	return &Router{
 		cfg:       cfg,
 		logger:    logger,
-		ledger:    NewLedger(),
+		ledger:    ledger,
 		peers:     NewPeerCache(stale),
 		node:      node,
 		managed:   map[string]*Managed{},
@@ -196,6 +198,7 @@ func stanzaGPUs(s *config.Stanza) []int {
 // canEventuallyAdmit is true unless we know the pinned (or every) card is
 // smaller than s. Missing telemetry and a missing pinned GPU wait rather
 // than 503: occupied VRAM can free after idle eviction.
+// shortcut: compares raw card totals, so a model that fits the card but not card minus headroom waits instead of 503, upgrade when an operator hits it.
 func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 	idxs := deviceIndexes(s.Device)
 	gpus := r.ledger.GPUs()
@@ -1522,16 +1525,19 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			idleByGPU[gpu] += vram
 		}
 	}
+	// Every published free figure is after headroom, so peers never pick
+	// this node for a load it must refuse.
+	head := r.cfg.HeadroomMB
 	for _, g := range gpus {
-		reclaim := staleByGPU[g.Index]
-		g.FreeIfStaleEvictedMB = g.FreeMB + reclaim
-		if g.TotalMB > 0 && g.FreeIfStaleEvictedMB > g.TotalMB {
-			g.FreeIfStaleEvictedMB = g.TotalMB
+		stale := g.FreeMB + staleByGPU[g.Index]
+		idle := g.FreeMB + idleByGPU[g.Index]
+		if g.TotalMB > 0 {
+			stale = min(stale, g.TotalMB)
+			idle = min(idle, g.TotalMB)
 		}
-		g.FreeIfIdleEvictedMB = g.FreeMB + idleByGPU[g.Index]
-		if g.TotalMB > 0 && g.FreeIfIdleEvictedMB > g.TotalMB {
-			g.FreeIfIdleEvictedMB = g.TotalMB
-		}
+		g.FreeIfStaleEvictedMB = max(stale-head, 0)
+		g.FreeIfIdleEvictedMB = max(idle-head, 0)
+		g.FreeMB = max(g.FreeMB-head, 0)
 	}
 	return &Telemetry{
 		Node:         r.node,

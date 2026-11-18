@@ -94,6 +94,7 @@ including extra-instance ports, then exits.
 listen: 0.0.0.0:18080
 start_port: 5800          # base for auto-allocated ports
 reserved_ports: [8081, 6333]
+headroom_mb: 0            # MB left unbooked on every GPU; default 0
 preload: [intent-model]
 
 telemetry:
@@ -272,6 +273,10 @@ cached, possibly stale copy and never treat it as ground truth.
   waits or evicts.
 - An extra copy never evicts and never waits for VRAM. If its card is gone,
   the request queues on a sibling that is already up.
+- `headroom_mb` is subtracted once from each GPU's available VRAM (the
+  tighter of live and ledger free) before any `vram_mb` check. A split
+  model's share is checked against each card after that card's headroom.
+  It does not change a stanza's `vram_mb` and is not a reservation.
 - `vram_mb <= 0` with no GPU telemetry is allowed (a CPU process). A positive
   `vram_mb` is refused until the first successful poll.
 
@@ -323,7 +328,8 @@ polled.
 The snapshot a node publishes:
 
 - Per GPU: index, name, total MB, free MB, free MB if stale models were
-  evicted, free MB if idle models were evicted.
+  evicted, free MB if idle models were evicted. All three free figures are
+  after `headroom_mb`.
 - Each running instance: `model_id`, instance key when it is not instance 0,
   `fresh` or `stale`, VRAM budget, GPU, slot count, in-flight count.
 
