@@ -1082,6 +1082,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	req = withRequestedID(req, ref.Raw)
 	if ref.Pool != "" {
 		r.servePool(w, req, ref.Pool)
 		return
@@ -1407,6 +1408,12 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 	}
 	m.markUsed()
 	defer m.markUsed()
+	if s := r.stanzaOf(key); s != nil {
+		if err := filterLocal(req, s); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return nil
+		}
+	}
 	r.proxyTo(w, req, m.proxyURL, key, r.node)
 	return nil
 }
@@ -1436,6 +1443,9 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	// (llama-swap's ReplaceRequestModel does the same). The field rewritten is
 	// the peer's configured body_field, not a hardcoded "model".
 	if err := rewriteBodyModel(req, peerModel, p.BodyField); err != nil {
+		return err
+	}
+	if err := applyFilters(req, p.Filters.StripParams, p.Filters.SetParams); err != nil {
 		return err
 	}
 	req.Header.Set("X-Model-Router-Peer", r.node)
@@ -1644,6 +1654,13 @@ func (r *Router) catalogStatuses() []ModelStatus {
 			GPUs: gpus,
 		})
 		seen[id] = true
+		// A filter-set id is a catalog row of its own, sharing the stanza's state.
+		for _, a := range s.FilterIDs() {
+			row := out[len(out)-1]
+			row.ID, row.VramMB = a, 0
+			out = append(out, row)
+			seen[a] = true
+		}
 		for _, a := range s.Aliases {
 			seen[a] = true
 		}

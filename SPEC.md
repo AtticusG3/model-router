@@ -122,6 +122,14 @@ stanzas:
     hold_seconds: 0        # seconds after healthy during which eviction skips it
     port: 5901             # 0 = next free port from start_port
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
+    filters:               # optional, see Request filters
+      stripParams: [temperature]
+      setParams:
+        top_p: 0.9
+        "top_k?": 40       # trailing ? = only when the client omitted it
+      setParamsByID:
+        "${MODEL_ID}:high":
+          reasoning_effort: high
 
   - model_id: sdxl-turbo
     command: "/opt/ai/bin/sd-server -m /opt/ai/models/sdxl.gguf --port {port}"
@@ -163,6 +171,28 @@ and `{gpu}` (the index chosen at spawn). A multi-instance stanza needs
 
 `model_id` and aliases must not contain `#`. That character marks instance
 keys (`model#2`). Instance 0 keeps the bare id.
+
+### Request filters
+
+A stanza or a peer may carry `filters` that rewrite a JSON object body before
+the backend (or peer) sees it. They follow llama-swap:
+
+- `stripParams`: top-level keys to remove.
+- `setParams`: keys to set, overwriting the client's value. A key ending in
+  `?` is set only when the client omitted it. Stripping runs first, so a
+  stripped key can be refilled by a `?` entry.
+- `setParamsByID` (stanzas only): each key is an id, with `${MODEL_ID}` standing
+  for the stanza id. The id resolves to the same stanza and is listed in
+  `/v1/models` as its own row. A request naming it gets `setParams` and then
+  that entry, which wins on a clash. Only the parameters differ: it shares the
+  one resident process and its admission.
+
+The model id field (`model`, the stanza's `match.body_field`, or the peer's
+`body_field`) cannot be stripped or set; config load rejects it. An id from
+`setParamsByID` must not collide with a stanza, alias, pool or contain `#`.
+Bodies that are not JSON objects (forms, multipart, GETs) pass unchanged.
+Filters apply where a request is sent to a local backend or a peer, so a
+spill to another node carries the already-filtered body.
 
 ## Request flow
 
@@ -399,7 +429,7 @@ the peer admits against its own budget.
 | Path | Purpose |
 |------|---------|
 | `/v1/*`, `/v/*`, `/sdapi/v1/*`, `/rerank`, `/reranking`, `/infill`, `/completion`, `/props`, `/slots`, `/tokenize`, `/detokenize`, `/apply-template` | Passthrough to the resolved backend. `/` is the same when a model id is present. |
-| `/v1/models` | One row per mesh `model_id`: every local stanza, plus models listed by fresh router peers and by openai peers. No aliases, no pools, no `peer/model` ids. |
+| `/v1/models` | One row per mesh `model_id`: every local stanza, plus models listed by fresh router peers and by openai peers. Ids minted by `setParamsByID` get a row each. No other aliases, no pools, no `peer/model` ids. |
 | `POST /_router/load`, `POST /_router/unload` | This node's admission. Body `{"model_id":"..."}`. Unload of a model id stops every instance. |
 | `GET /_router/status` | Node name, catalog, local telemetry, cached peers. |
 | `GET /_router/telemetry` | The snapshot peers pull. |
