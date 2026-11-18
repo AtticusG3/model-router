@@ -91,7 +91,10 @@ func main() {
 	// expired (lazy eviction alone only frees VRAM under admission pressure).
 	go router.IdleTTLReaper(ctx, r, 30*time.Second)
 
-	handler := router.NewHandler(r, logger)
+	handler := router.NewAccessHandler(cfg.Security, router.NewHandler(r, logger))
+	if len(cfg.Security.APIKeys) == 0 {
+		logger.Infof("security: no api keys configured; clients on public addresses are refused")
+	}
 	srv, _, errCh, err := startHTTPServer(cfg.Listen, handler, logger)
 	if err != nil {
 		logger.Errorf("server: %v", err)
@@ -144,6 +147,9 @@ func startHTTPServer(addr string, handler http.Handler, logger *router.Logger) (
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: 30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		// WriteTimeout stays unset: a server-wide value would cut off SSE chat and log streams.
+		// shortcut: no ReadTimeout, so a slow request body is only size-capped on control routes, add one if slow clients become a problem.
 	}
 	errCh := make(chan error, 1)
 	logger.Infof("model-router listening on %s", addr)
