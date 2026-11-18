@@ -448,6 +448,32 @@ func parseTokenStats(body []byte, contentType string) TokenStats {
 	return parseJSONStats(body)
 }
 
+// generationPathSuffixes is the allow-list of POST endpoints that run a model.
+// Anything else (metrics, assets, /mcp, /props, /slots, tokenize) stays out of
+// the activity ring by default.
+var generationPathSuffixes = []string{
+	"/chat/completions", "/completions", "/completion", "/infill",
+	"/embeddings", "/embedding", "/responses", "/messages",
+	"/rerank", "/reranking",
+	"/images/generations", "/images/edits", "/images/variations",
+	"/audio/speech", "/audio/transcriptions", "/audio/translations",
+	"/txt2img", "/img2img",
+}
+
+// isGenerationRequest reports whether a proxied request is a generation or
+// inference call that belongs in the activity log.
+func isGenerationRequest(method, path string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	for _, suffix := range generationPathSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started time.Time, reqBody []byte, reqTrunc bool, model, target string) {
 	status := rec.status
 	if status == 0 {
@@ -471,12 +497,12 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		TTFTMs:      ttft,
 		Tokens:      tokens,
 	}
-	// Metrics are recorded even when the activity ring is disabled, so a
-	// scrape still sees request counts and latency on a lean deployment.
+	// Metrics see every proxied request, even when the activity ring is
+	// disabled or filters the row out.
 	if r.metrics != nil {
 		r.metrics.Observe(entry)
 	}
-	if r.activity == nil {
+	if r.activity == nil || !isGenerationRequest(req.Method, req.URL.Path) {
 		return
 	}
 	reqStr, clipped := clipBody(reqBody)
