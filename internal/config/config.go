@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"regexp"
 	"strings"
@@ -218,8 +219,27 @@ type Telemetry struct {
 	PeerStaleSeconds int `yaml:"peer_stale_seconds"`
 }
 
+// Security gates clients on public addresses. Loopback, private LAN and
+// Tailscale clients never need a key.
+type Security struct {
+	// APIKeys are the keys a public client may present. The env var
+	// MODEL_ROUTER_API_KEYS (comma separated) adds to this list. With no keys,
+	// public requests are refused.
+	APIKeys []string `yaml:"api_keys"`
+	// TrustedProxies are CIDRs or exact IPs whose X-Forwarded-For / X-Real-IP
+	// headers are believed. Any other peer's forwarded headers are ignored.
+	TrustedProxies []string `yaml:"trusted_proxies"`
+
+	// ProxyPrefixes is TrustedProxies parsed by Parse.
+	ProxyPrefixes []netip.Prefix `yaml:"-"`
+}
+
+// APIKeysEnv names the environment variable that adds API keys.
+const APIKeysEnv = "MODEL_ROUTER_API_KEYS"
+
 // Config is the whole per-node configuration file.
 type Config struct {
+	Security Security `yaml:"security"`
 	// Listen is the router's own bind address, e.g. "0.0.0.0:18080".
 	Listen string `yaml:"listen"`
 	// StartPort is the base for auto-allocated stanza ports.
@@ -285,6 +305,28 @@ func Parse(raw []byte) (*Config, error) {
 	}
 	if cfg.Telemetry.PeerStaleSeconds == 0 {
 		cfg.Telemetry.PeerStaleSeconds = DefaultPeerStale
+	}
+
+	for _, k := range strings.Split(os.Getenv(APIKeysEnv), ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			cfg.Security.APIKeys = append(cfg.Security.APIKeys, k)
+		}
+	}
+	for i, k := range cfg.Security.APIKeys {
+		if k == "" {
+			return nil, fmt.Errorf("security.api_keys[%d] is empty", i)
+		}
+	}
+	for _, tp := range cfg.Security.TrustedProxies {
+		pfx, err := netip.ParsePrefix(tp)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(tp)
+			if aerr != nil {
+				return nil, fmt.Errorf("security.trusted_proxies: %q is not a CIDR or IP", tp)
+			}
+			pfx = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		cfg.Security.ProxyPrefixes = append(cfg.Security.ProxyPrefixes, pfx.Masked())
 	}
 
 	if cfg.HeadroomMB < 0 {
