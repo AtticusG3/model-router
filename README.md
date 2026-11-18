@@ -122,7 +122,7 @@ new binary.
 ## Config
 
 Per-node YAML with `stanzas` (SPEC schema + `device`, `aliases`, `env`,
-`port`), optional `pools` (compat spillover ids such as `coding-pool`; not
+`port`, optional `filters` to strip or set body parameters), optional `pools` (compat spillover ids such as `coding-pool`; not
 listed), `peers` (`kind: router` for fleet nodes, `kind: openai` for
 proxy-only upstreams like openrouter), `preload`, and `telemetry` tuning.
 Staged fleet configs are in `configs/` (plus

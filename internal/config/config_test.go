@@ -519,3 +519,35 @@ stanzas:
 		t.Errorf("instance 0 without telemetry = %q %v, want port 5901 on the first listed GPU", cmd, env)
 	}
 }
+
+func TestParseRejectsBadFilters(t *testing.T) {
+	tests := []struct{ name, raw, want string }{
+		{"strip model", "stanzas:\n  - {model_id: a, command: x, filters: {stripParams: [model]}}\n", `cannot strip or set "model"`},
+		{"set model", "stanzas:\n  - {model_id: a, command: x, filters: {setParams: {model: b}}}\n", `cannot strip or set "model"`},
+		{"set model if absent", "stanzas:\n  - {model_id: a, command: x, filters: {setParams: {\"model?\": b}}}\n", `cannot strip or set "model"`},
+		{"set model by id", "stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {\"a:hi\": {model: b}}}}\n", `cannot strip or set "model"`},
+		{"strip custom body field", "stanzas:\n  - {model_id: a, command: x, match: {body_field: name}, filters: {stripParams: [name]}}\n", `cannot strip or set "name"`},
+		{"peer strips model", "peers:\n  - {name: p, base_url: \"http://127.0.0.1:9\", filters: {stripParams: [model]}}\n", `cannot strip or set "model"`},
+		{"peer by id", "peers:\n  - {name: p, base_url: \"http://127.0.0.1:9\", filters: {setParamsByID: {x: {a: 1}}}}\n", "only valid on stanzas"},
+		{"empty key", "stanzas:\n  - {model_id: a, command: x, filters: {stripParams: [\"?\"]}}\n", "empty parameter name"},
+		{"id collides", "stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {b: {t: 1}}}}\n  - {model_id: b, command: x}\n", `id "b" collides`},
+		{"id has hash", "stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {\"a#2\": {t: 1}}}}\n", "contains '#'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tt.raw)); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterIDsExpandModelID(t *testing.T) {
+	cfg, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {\"${MODEL_ID}:high\": {t: 1}}}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Alias("a:high") != cfg.Stanza("a") || cfg.Stanza("a").FilterIDs()[0] != "a:high" {
+		t.Error("a:high does not resolve to stanza a")
+	}
+}

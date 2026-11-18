@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,54 @@ type Match struct {
 	// PathDefault marks this stanza as the fallback for its path_prefix when
 	// the request body carries no model field.
 	PathDefault bool `yaml:"path_default"`
+}
+
+// Filters rewrite a JSON request body before the backend (or peer) sees it,
+// as in llama-swap. The model id field can never be stripped or set.
+type Filters struct {
+	// StripParams are top-level JSON keys removed from the request.
+	StripParams []string `yaml:"stripParams"`
+	// SetParams are keys set on the request, overwriting the client's value.
+	// A key ending in "?" is set only when the client omitted it.
+	SetParams map[string]any `yaml:"setParams"`
+	// SetParamsByID mints aliases (stanzas only). Each key is an alias id
+	// ("${MODEL_ID}" is the stanza id); its value is applied after SetParams
+	// when a request names that alias.
+	SetParamsByID map[string]map[string]any `yaml:"setParamsByID"`
+}
+
+// validate rejects empty keys and any attempt to touch a protected field.
+func (f *Filters) validate(owner string, protected ...string) error {
+	check := func(key string) error {
+		bare := strings.TrimSuffix(key, "?")
+		if bare == "" {
+			return fmt.Errorf("%s: filters: empty parameter name", owner)
+		}
+		for _, p := range protected {
+			if bare == p {
+				return fmt.Errorf("%s: filters cannot strip or set %q", owner, p)
+			}
+		}
+		return nil
+	}
+	for _, k := range f.StripParams {
+		if err := check(k); err != nil {
+			return err
+		}
+	}
+	for k := range f.SetParams {
+		if err := check(k); err != nil {
+			return err
+		}
+	}
+	for _, params := range f.SetParamsByID {
+		for k := range params {
+			if err := check(k); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // Stanza is one model this node can serve. See SPEC.md.
@@ -92,6 +141,9 @@ type Stanza struct {
 	// Slots is the local concurrency cap (llama.cpp --parallel). 0 in YAML
 	// means derive from --parallel / -np in Command; missing flag → 1.
 	Slots int `yaml:"slots"`
+	// Filters rewrite the request body before the backend sees it. Its
+	// SetParamsByID mints extra ids that resolve to this stanza.
+	Filters Filters `yaml:"filters"`
 
 	// InstancePorts holds the backend port of each instance; [0] is Port.
 	// Derived by Parse from MaxInstances.
@@ -107,6 +159,16 @@ func (s *Stanza) SlotCount() int {
 		return 1
 	}
 	return s.Slots
+}
+
+// FilterIDs are the ids minted by Filters.SetParamsByID, sorted.
+func (s *Stanza) FilterIDs() []string {
+	ids := make([]string, 0, len(s.Filters.SetParamsByID))
+	for id := range s.Filters.SetParamsByID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // InstanceCount is the maximum number of concurrent copies. Always >= 1.
@@ -208,6 +270,8 @@ type Peer struct {
 	// stanzas. The router rewrites this field to the peer-local model id
 	// before proxying. Default "model".
 	BodyField string `yaml:"body_field"`
+	// Filters rewrite the request body before it is sent to this peer.
+	Filters Filters `yaml:"filters"`
 }
 
 // Telemetry tunes the GPU poll and peer sync loops.
@@ -373,6 +437,19 @@ func Parse(raw []byte) (*Config, error) {
 		if s.Command == "" {
 			return nil, fmt.Errorf("stanza %q: command is required", s.ModelID)
 		}
+		if err := s.Filters.validate(fmt.Sprintf("stanza %q", s.ModelID), "model", s.Match.BodyField); err != nil {
+			return nil, err
+		}
+		// Expand ${MODEL_ID} now so the keys are the ids clients send.
+		byID := map[string]map[string]any{}
+		for id, params := range s.Filters.SetParamsByID {
+			id = strings.ReplaceAll(id, "${MODEL_ID}", s.ModelID)
+			if id == "" || strings.Contains(id, "#") {
+				return nil, fmt.Errorf("stanza %q: setParamsByID id %q is empty or contains '#'", s.ModelID, id)
+			}
+			byID[id] = params
+		}
+		s.Filters.SetParamsByID = byID
 		if s.APIType == "" {
 			s.APIType = "chat"
 		}
@@ -433,6 +510,17 @@ func Parse(raw []byte) (*Config, error) {
 		cfg.Pools[name] = cp
 	}
 
+	// Filter-set ids resolve like aliases but are also listed in the catalog.
+	for i := range cfg.Stanzas {
+		s := &cfg.Stanzas[i]
+		for _, id := range s.FilterIDs() {
+			if cfg.stanzaByID[id] != nil || cfg.aliasByID[id] != nil || cfg.poolByName[id] != nil {
+				return nil, fmt.Errorf("stanza %q: setParamsByID id %q collides with another id", s.ModelID, id)
+			}
+			cfg.aliasByID[id] = s
+		}
+	}
+
 	cfg.peerByName = map[string]*Peer{}
 	for i := range cfg.Peers {
 		p := &cfg.Peers[i]
@@ -446,6 +534,12 @@ func Parse(raw []byte) (*Config, error) {
 			return nil, fmt.Errorf("peer %q: base_url is required", p.Name)
 		}
 		p.BaseURL = strings.TrimRight(p.BaseURL, "/")
+		if len(p.Filters.SetParamsByID) > 0 {
+			return nil, fmt.Errorf("peer %q: setParamsByID is only valid on stanzas", p.Name)
+		}
+		if err := p.Filters.validate(fmt.Sprintf("peer %q", p.Name), "model", p.BodyField); err != nil {
+			return nil, err
+		}
 		if _, dup := cfg.peerByName[p.Name]; dup {
 			return nil, fmt.Errorf("duplicate peer %q", p.Name)
 		}
