@@ -90,7 +90,7 @@ func handleLoad(r *Router) http.HandlerFunc {
 			return
 		}
 		if err := r.HandleLoad(req.Context(), id); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			loadFailed(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -265,7 +265,7 @@ func handleUpstream(r *Router) http.HandlerFunc {
 		}
 		req.URL.Path = upPath
 		if err := r.proxyLocal(w, req, ref.Local); err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			loadFailed(w, err)
 		}
 	}
 }
