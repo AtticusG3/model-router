@@ -252,6 +252,9 @@ type Config struct {
 	// HeadroomMB is memory left unbooked on every GPU. Admission and every
 	// published free figure subtract it; vram_mb is unchanged. Default 0.
 	HeadroomMB int64 `yaml:"headroom_mb"`
+	// StreamLoadProgress writes loading updates into a streaming chat response
+	// while the chosen local backend spins up. Default false.
+	StreamLoadProgress bool `yaml:"stream_load_progress"`
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`
