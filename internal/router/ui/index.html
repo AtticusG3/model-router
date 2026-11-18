@@ -18,11 +18,11 @@ __EMBED_CSS__
     </div>
     <div class="nav-label">Workspace</div>
     <nav class="nav">
-      <button class="active" data-view="dashboard" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>Overview</span></button>
-      <button data-view="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.4 8.4 0 0 1-3.2-.6L4 20l1.7-3.4A7.3 7.3 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg><span>Chat lab</span></button>
-      <button data-view="image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m20 15-4.5-4.5L7 19"/></svg><span>Image lab</span></button>
-      <button data-view="activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="m8 14 3-4 3 2 5-7"/></svg><span>Activity</span></button>
-      <button data-view="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 5h14M5 9h14M5 13h9M5 17h6"/><path d="m17 15 3 3-3 3"/></svg><span>Logs & metrics</span></button>
+      <button class="active" data-view="dashboard" aria-label="Overview" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg><span>Overview</span></button>
+      <button data-view="chat" aria-label="Chat lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.4 8.4 0 0 1-3.2-.6L4 20l1.7-3.4A7.3 7.3 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/><path d="M8 11.5h.01M12 11.5h.01M16 11.5h.01"/></svg><span>Chat lab</span></button>
+      <button data-view="image" aria-label="Image lab"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="m20 15-4.5-4.5L7 19"/></svg><span>Image lab</span></button>
+      <button data-view="activity" aria-label="Activity"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="m8 14 3-4 3 2 5-7"/></svg><span>Activity</span></button>
+      <button data-view="logs" aria-label="Logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 5h14M5 9h14M5 13h9M5 17h6"/><path d="m17 15 3 3-3 3"/></svg><span>Logs</span></button>
     </nav>
     <div class="sidebar-bottom"><div class="node-chip"><span class="status-dot" id="side-dot"></span><div><strong id="side-node">Connecting…</strong><span id="side-health">Polling router status</span></div></div></div>
   </aside>
@@ -70,32 +70,20 @@ __EMBED_CSS__
       </div>
     </dialog>
     <main id="logs" class="view">
-      <section class="overview" aria-label="Router activity summary">
-        <div class="stat-card"><div class="stat-top"><span>Requests</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12h11M12 6l6 6-6 6"/></svg></span></div><div class="stat-value" id="log-req-count">—</div><div class="stat-foot">last 200 proxied</div></div>
-        <div class="stat-card"><div class="stat-top"><span>Error rate</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 2.5 20h19L12 3Z"/><path d="M12 9v5M12 17h.01"/></svg></span></div><div class="stat-value" id="log-err-rate">—</div><div class="stat-foot">4xx and 5xx</div></div>
-        <div class="stat-card"><div class="stat-top"><span>p95 duration</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></span></div><div class="stat-value" id="log-p95">—</div><div class="stat-foot">tail latency</div></div>
-        <div class="stat-card"><div class="stat-top"><span>Generation speed</span><span class="stat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg></span></div><div class="stat-value" id="log-tps">—<small> tok/s</small></div><div class="stat-foot">avg completion</div></div>
-      </section>
-
-      <div class="log-toolbar" role="region" aria-label="Log filters">
-        <div class="chips" id="log-levels" role="group" aria-label="Filter by level">
-          <button class="chip active" data-level="all" aria-pressed="true">All <span class="n" id="n-all">0</span></button>
-          <button class="chip" data-level="error" aria-pressed="false">Errors <span class="n" id="n-error">0</span></button>
-          <button class="chip" data-level="warn" aria-pressed="false">Warnings <span class="n" id="n-warn">0</span></button>
-          <button class="chip" data-level="debug" aria-pressed="false">Debug <span class="n" id="n-debug">0</span></button>
+      <div class="log-toolbar" role="region" aria-label="Log controls">
+        <div class="chips" id="log-tabs" role="group" aria-label="Log source">
+          <button class="chip active" data-src="" aria-pressed="true">Combined</button>
+          <button class="chip" data-src="proxy" aria-pressed="false">Router</button>
+          <button class="chip" data-src="upstream" aria-pressed="false">Upstream</button>
+          <button class="chip" data-src="mesh" aria-pressed="false">Mesh</button>
+          <select class="chip" id="log-model" aria-label="Model log"><option value="">Model…</option></select>
         </div>
         <input class="log-search" id="log-search" type="search" placeholder="Filter lines…" aria-label="Filter log lines by text" autocomplete="off">
-        <label class="pause-toggle"><input type="checkbox" id="log-pause"> Pause refresh</label>
-        <span class="subtle mono" id="log-updated">—</span>
+        <label class="pause-toggle"><input type="checkbox" id="log-pause"> Pause</label>
+        <span class="subtle mono" id="log-state" role="status">—</span>
+        <a class="subtle" href="/metrics" target="_blank" rel="noopener">Raw metrics</a>
       </div>
-
-      <div class="grid">
-        <section class="panel"><div class="panel-header"><div><h2>Router metrics</h2><p>This process: request counters, latency histograms, GPU gauges, peer freshness.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-metrics">—</span><button class="ghost copy-btn" data-copy="metrics">Copy</button></div></div><div class="metric-summary" id="metrics-summary"></div><div id="metrics" class="output metric-output">Loading metrics…</div></section>
-        <section class="panel"><div class="panel-header"><div><h2>Upstream metrics</h2><p>Scraped from each running backend's <code>/metrics</code>.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-upstream-metrics">—</span></div></div><div id="upstream-metrics" class="output metric-output">Loading upstream metrics…</div></section>
-        <section class="panel"><div class="panel-header"><div><h2>Router events</h2><p>Admission, spawn, preload, evictions, errors.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-logs-output">—</span></div></div><div id="logs-output" class="logs">Loading logs…</div></section>
-        <section class="panel"><div class="panel-header"><div><h2>Upstream logs</h2><p>Backend stdout/stderr.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-upstream-logs">—</span></div></div><div id="upstream-logs" class="logs">Loading upstream logs…</div></section>
-        <section class="panel"><div class="panel-header"><div><h2>Mesh logs</h2><p>Peer telemetry and forwarded requests.</p></div><div class="panel-head-tools"><span class="count-badge" id="count-mesh-logs">—</span></div></div><div id="mesh-logs" class="logs">Loading mesh logs…</div></section>
-      </div>
+      <div id="log-output" class="log-view" role="log" aria-live="off" aria-label="Log lines" tabindex="0"></div>
     </main>
   </div>
 </div>
