@@ -26,6 +26,16 @@ code,.mono{font:12px/1.5 "SFMono-Regular",Consolas,"Liberation Mono",monospace}
 .meter-fill.hot{background:linear-gradient(90deg,var(--amber),var(--red))}
 .perf-kv{display:flex;align-items:center;gap:8px;min-width:110px}.perf-kv .meter{flex:1}
 #performance a{color:var(--cyan)}
+/* Playground */
+.tabs{margin:0 0 14px}
+.vector-row,.rank-row{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:12px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)}
+.vector-row:last-child,.rank-row:last-child{border-bottom:0}
+.doc-cell{min-width:0;overflow-wrap:anywhere}
+.output audio{width:100%;margin:4px 0}
+.load-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:14px}
+.load-summary div{display:grid;gap:3px}
+.load-summary small{color:var(--muted);font-size:11px}
+.load-summary .mono{font-size:21px;font-weight:750}
 /* Logs view */
 .stat-card{display:flex;flex-direction:column}
 .log-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}

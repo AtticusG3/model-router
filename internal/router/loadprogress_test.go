@@ -61,7 +61,7 @@ stanzas:
 	return NewHandler(r, NewLogger(io.Discard, false))
 }
 
-func chat(h http.Handler, stream bool) *httptest.ResponseRecorder {
+func postChat(h http.Handler, stream bool) *httptest.ResponseRecorder {
 	body := fmt.Sprintf(`{"model":"a","stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream)
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -71,14 +71,14 @@ func chat(h http.Handler, stream bool) *httptest.ResponseRecorder {
 }
 
 func TestLoadProgressFlagOffHoldsSilently(t *testing.T) {
-	rec := chat(progressRouter(t, false, 2), true)
+	rec := postChat(progressRouter(t, false, 2), true)
 	if rec.Code != http.StatusOK || rec.Body.String() != realStream {
 		t.Fatalf("status %d, body %q: want only the real stream", rec.Code, rec.Body.String())
 	}
 }
 
 func TestLoadProgressStreamsUpdatesThenRealTokens(t *testing.T) {
-	rec := chat(progressRouter(t, true, 2), true)
+	rec := postChat(progressRouter(t, true, 2), true)
 	got := rec.Body.String()
 	if !strings.HasSuffix(got, realStream) {
 		t.Fatalf("real stream must follow the loading chunks, got %q", got)
@@ -96,14 +96,14 @@ func TestLoadProgressStreamsUpdatesThenRealTokens(t *testing.T) {
 }
 
 func TestLoadProgressSkipsNonStreaming(t *testing.T) {
-	rec := chat(progressRouter(t, true, 2), false)
+	rec := postChat(progressRouter(t, true, 2), false)
 	if rec.Code != http.StatusOK || rec.Body.String() != realStream {
 		t.Fatalf("status %d, body %q: non-streaming must only get the real response", rec.Code, rec.Body.String())
 	}
 }
 
 func TestLoadProgressFailedStartEndsWithError(t *testing.T) {
-	rec := chat(progressRouter(t, true, -1), true)
+	rec := postChat(progressRouter(t, true, -1), true)
 	got := rec.Body.String()
 	if !strings.Contains(got, `"type":"load_failed"`) || !strings.HasSuffix(got, "data: [DONE]\n\n") {
 		t.Fatalf("want an error event then [DONE], got %q", got)

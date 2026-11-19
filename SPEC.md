@@ -479,15 +479,25 @@ the peer admits against its own budget.
 | `GET /health` | `OK`. |
 | `GET /metrics` | Prometheus: up, running models, GPU free and reclaimable, peer freshness. |
 
-`api_type` does not choose a route. The UI uses it to decide chat lab vs
-image lab. Routing is only the matcher plus the catalog.
+`api_type` does not choose a route. The UI uses it to filter the Playground's
+model selectors (chat, image, embedding, rerank). Routing is only the matcher
+plus the catalog.
 
 ## Operator UI
 
 `/ui/` is HTML, CSS, and script embedded in the binary. Catalog Load and
 Unload start and stop this node's stanzas only. Choosing a remote `model_id`
-in the chat or image lab is an ordinary `/v1/...` request, so this node
-spills or proxies. Activity keeps the last 200 proxied requests, with at
+on the Playground is an ordinary `/v1/...` request, so this node
+spills or proxies.
+
+Playground is one page whose tabs drive Chat, Image, Embeddings, Rerank,
+Speech, Transcription, Load test and Realtime. Chat and Image behave as
+before; the other tabs call `/v1/embeddings`, `/v1/rerank`, `/v1/audio/speech`,
+`/v1/audio/transcriptions` and `/v1/realtime`, or show a clear no-matching-model
+state. The tabs share the `/ui/` origin, so a public client's browser key
+prompt covers every request; no tab asks for a key on its own.
+
+Activity keeps the last 200 proxied requests, with at
 most 256 KB per body and 8 MB of captures, in memory only. It resets on
 restart. Authorization and cookie headers are not stored.
 

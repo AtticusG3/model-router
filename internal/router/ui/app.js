@@ -3,7 +3,7 @@
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
-  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],chat:['Operator tools','Chat lab','Test a streaming completion against any available route.'],image:['Operator tools','Image lab','Send an image request through the configured diffusion backend.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],performance:['Observability','Performance','Request rate, generation speed, GPU memory and peer freshness.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
+  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Chat, images, embeddings, speech and more, against any route the mesh can serve.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],performance:['Observability','Performance','Request rate, generation speed, GPU memory and peer freshness.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
   document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];perfSet(view==='performance');if(view!=='logs')logStop();else if(!wasLogs)logStart()});
   async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok)throw new Error(data.error||text||('HTTP '+r.status));return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
@@ -16,7 +16,11 @@
   function renderPeers(){const ps=status.peers||{};const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+m.gpu:'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');$('peers').innerHTML=cards||'<div class="panel empty">No fresh peer telemetry.</div>'}
   function sameOptions(sel,ids){return sel.options.length===ids.length&&ids.every((id,i)=>sel.options[i].value===id)}
   function fillSelect(sel,ids,html){const prev=sel.value;if(sameOptions(sel,ids))return;sel.innerHTML=html;if([...sel.options].some(o=>o.value===prev))sel.value=prev}
-  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''))}
+  function modelOptions(ms){return ms.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join('')}
+  // fillModelSelect keeps the current choice across polls (via fillSelect) and
+  // shows one disabled-looking placeholder option when the mesh has none.
+  function fillModelSelect(id,ms,placeholder){const ids=ms.map(m=>m.id);fillSelect($(id),ids.length?ids:[''],ids.length?modelOptions(ms):'<option value="">'+placeholder+'</option>')}
+  function fillSelectors(){const all=status.models||[];const local=all.filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=all.filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?modelOptions(models):'<option value="">No models available</option>');const imgs=all.filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+modelOptions(imgs));fillModelSelect('embed-model',all.filter(m=>m.api_type==='embedding'),'No embedding model available');fillModelSelect('rerank-model',all.filter(m=>m.api_type==='rerank'),'No rerank model available');fillModelSelect('speech-model',all,'No models available');fillModelSelect('transcribe-model',all,'No models available');fillModelSelect('load-model',models,'No models available');fillModelSelect('realtime-model',all,'No models available')}
   window.loadModel=async function(id){try{await json('/_router/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Load failed: '+e.message)}};
   window.unloadModel=async function(id){try{await json('/_router/unload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Unload failed: '+e.message)}};
   $('models').onclick=e=>{const b=e.target.closest('[data-act]');if(!b)return;if(b.dataset.act==='load')loadModel(b.dataset.id);else if(b.dataset.act==='unload')unloadModel(b.dataset.id)};
@@ -211,6 +215,143 @@
   };
   window.generateImage=async function(){const out=$('image-output');out.className='image-result';out.textContent='Generating…';const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,width:Number($('image-width').value),height:Number($('image-height').value),steps:Number($('image-steps').value),seed:Number($('image-seed').value)};if($('image-model').value)body.model=$('image-model').value;try{const d=await json('/sdapi/v1/txt2img',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const imgs=d.images||[];out.innerHTML=imgs.length?imgs.map(x=>'<img alt="Generated image" src="data:image/png;base64,'+x+'">').join(''):'<span class="muted">No images returned.</span>'}catch(e){out.className='image-result error';out.textContent=e.message}};
 
+  // Playground tabs only toggle visibility, so a stream or a result survives a
+  // switch between them.
+  const pgTabs=$('playground').querySelector('[role=tablist]');
+  function pgSelect(t){
+    pgTabs.querySelectorAll('[data-tab]').forEach(x=>{
+      const on=x===t;
+      x.classList.toggle('active',on);
+      x.setAttribute('aria-selected',on);
+      x.tabIndex=on?0:-1;
+      $(x.getAttribute('aria-controls')).hidden=!on;
+    });
+  }
+  pgTabs.addEventListener('click',ev=>{const t=ev.target.closest('[data-tab]');if(t)pgSelect(t)});
+  pgTabs.addEventListener('keydown',ev=>{
+    if(ev.key!=='ArrowLeft'&&ev.key!=='ArrowRight')return;
+    const tabs=[...pgTabs.querySelectorAll('[data-tab]')];
+    const next=tabs[(tabs.indexOf(document.activeElement)+(ev.key==='ArrowRight'?1:tabs.length-1))%tabs.length];
+    next.focus();next.click();
+  });
+
+  // Each non-chat tab reads its own model selector. An empty value is the
+  // "no matching model" state, told plainly instead of firing a request that
+  // cannot resolve.
+  function tabOutput(id,message,placeholder){const out=$(id);out.className='output'+(message?' error':'');out.textContent=message||placeholder;return out}
+  function tabModel(selId,outId,missing){const model=$(selId).value;if(!model){tabOutput(outId,missing);return ''}return model}
+
+  window.runEmbeddings=async function(){
+    const model=tabModel('embed-model','embed-output','No embedding model available. Add a stanza with api_type: embedding.');
+    if(!model)return;
+    const out=tabOutput('embed-output','','Creating…');
+    try{
+      const d=await json('/v1/embeddings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,input:$('embed-input').value})});
+      const rows=(d.data||[]).map((e,i)=>{const v=e.embedding||[];const head=v.slice(0,8).map(x=>Number(x).toFixed(4)).join(', ');return '<div class="vector-row"><span class="mono">['+i+']</span><span class="mono">'+v.length+' dims</span><span class="doc-cell mono">'+esc(head)+(v.length>8?' …':'')+'</span></div>'});
+      out.className='output';
+      out.innerHTML=rows.length?rows.join(''):'<span class="muted">No vectors returned.</span>';
+    }catch(e){out.className='output error';out.textContent=e.message}
+  };
+
+  window.runRerank=async function(){
+    const model=tabModel('rerank-model','rerank-output','No rerank model available. Add a stanza with api_type: rerank.');
+    if(!model)return;
+    const out=tabOutput('rerank-output','','Scoring…');
+    const docs=$('rerank-docs').value.split('\n').map(s=>s.trim()).filter(Boolean);
+    if(!docs.length){out.className='output error';out.textContent='Add at least one document.';return}
+    try{
+      const d=await json('/v1/rerank',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,query:$('rerank-query').value,documents:docs})});
+      const results=d.results||d.data||[];
+      const rows=results.map(r=>{const i=Number(r.index);const score=r.relevance_score??r.score;return '<div class="rank-row"><span class="mono">#'+(i+1)+'</span><span class="mono">'+(score==null?'—':Number(score).toFixed(4))+'</span><span class="doc-cell">'+esc(docs[i]??'')+'</span></div>'});
+      out.className='output';
+      out.innerHTML=rows.length?rows.join(''):'<span class="muted">No results returned.</span>';
+    }catch(e){out.className='output error';out.textContent=e.message}
+  };
+
+  let speechURL='';
+  window.runSpeech=async function(){
+    const model=tabModel('speech-model','speech-output','No models available.');
+    if(!model)return;
+    const out=tabOutput('speech-output','','Synthesizing…');
+    try{
+      const r=await fetch('/v1/audio/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,input:$('speech-input').value,voice:$('speech-voice').value||'alloy'})});
+      if(!r.ok)throw new Error(await r.text());
+      const blob=await r.blob();
+      if(speechURL)URL.revokeObjectURL(speechURL);
+      speechURL=URL.createObjectURL(blob);
+      out.className='output';
+      out.innerHTML='<audio controls src="'+speechURL+'" aria-label="Synthesized speech"></audio><div class="subtle">'+esc(blob.type||'audio')+' · '+Math.round(blob.size/1024)+' KB</div>';
+    }catch(e){out.className='output error';out.textContent=e.message}
+  };
+
+  window.runTranscription=async function(){
+    const model=tabModel('transcribe-model','transcribe-output','No models available.');
+    if(!model)return;
+    const out=tabOutput('transcribe-output','','Transcribing…');
+    const file=$('transcribe-file').files[0];
+    if(!file){out.className='output error';out.textContent='Choose an audio file.';return}
+    try{
+      const fd=new FormData();
+      fd.append('model',model);fd.append('file',file);
+      const r=await fetch('/v1/audio/transcriptions',{method:'POST',body:fd});
+      if(!r.ok)throw new Error(await r.text());
+      const text=await r.text();
+      let shown=text;try{const j=JSON.parse(text);if(j&&typeof j.text==='string')shown=j.text}catch(e){}
+      out.className='output';out.textContent=shown||'(empty transcript)';
+    }catch(e){out.className='output error';out.textContent=e.message}
+  };
+
+  // A load test fans out non-streaming chat completions and reports aggregate
+  // throughput; usage comes back in the JSON body, so no SSE parsing is needed.
+  window.runLoadTest=async function(){
+    const model=tabModel('load-model','load-output','No models available.');
+    if(!model)return;
+    const out=tabOutput('load-output','','');
+    const count=Math.max(1,Math.min(200,Number($('load-count').value)||8));
+    const conc=Math.max(1,Math.min(64,Number($('load-concurrency').value)||4));
+    const maxTokens=Math.max(1,Number($('load-tokens').value)||64);
+    const body=JSON.stringify({model,messages:[{role:'user',content:$('load-prompt').value}],max_tokens:maxTokens,temperature:0});
+    let next=0,done=0,failed=0,tokens=0;
+    const started=performance.now();
+    out.className='output';out.textContent='0 / '+count+' complete…';
+    const worker=async()=>{
+      while(next<count){
+        next++;
+        try{
+          const r=await fetch('/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body});
+          if(!r.ok)throw new Error(await r.text());
+          const d=await r.json();
+          tokens+=Number(d.usage&&d.usage.completion_tokens)||0;
+          done++;
+        }catch(e){failed++}
+        out.textContent=done+' / '+count+' complete · '+failed+' failed';
+      }
+    };
+    await Promise.all(Array.from({length:Math.min(conc,count)},worker));
+    const secs=(performance.now()-started)/1000;
+    const rate=v=>secs>0?v/secs:0;
+    out.innerHTML='<div class="load-summary"><div><span class="mono">'+done+'</span><small>completed</small></div><div><span class="mono">'+failed+'</span><small>failed</small></div><div><span class="mono">'+rate(done).toFixed(2)+'</span><small>requests/s</small></div><div><span class="mono">'+rate(tokens).toFixed(1)+'</span><small>tokens/s</small></div><div><span class="mono">'+secs.toFixed(2)+' s</span><small>elapsed</small></div></div>';
+  };
+
+  let realtimeWS=null;
+  window.toggleRealtime=function(){
+    const out=$('realtime-output');
+    if(realtimeWS){realtimeWS.close();return}
+    const model=tabModel('realtime-model','realtime-output','No models available.');
+    if(!model)return;
+    const proto=location.protocol==='https:'?'wss':'ws';
+    let ws;
+    try{ws=new WebSocket(proto+'://'+location.host+'/v1/realtime?model='+encodeURIComponent(model))}
+    catch(e){out.className='output error';out.textContent='Realtime connection failed: '+e.message;return}
+    realtimeWS=ws;
+    out.className='output';out.textContent='Connecting to '+model+'…';
+    const log=line=>{out.textContent+='\n'+line};
+    ws.onopen=()=>{$('realtime-connect').textContent='Disconnect';log('Connected.')};
+    ws.onmessage=ev=>log(String(ev.data).slice(0,1000));
+    ws.onerror=()=>log('Connection error.');
+    ws.onclose=ev=>{realtimeWS=null;$('realtime-connect').textContent='Connect';log('Closed'+(ev.reason?' ('+ev.reason+')':'')+'.')};
+  };
+
   function fmtDur(ms){ms=Number(ms)||0;if(ms<1000)return ms+' ms';if(ms<60000)return (ms/1000).toFixed(2)+' s';return Math.floor(ms/60000)+'m '+((ms/1000)%60).toFixed(0)+'s'}
   function fmtSpeed(v){v=Number(v);return v>0?v.toFixed(v>=100?0:1)+' t/s':'—'}
   function fmtTok(v){v=Number(v)||0;return v>0?v.toLocaleString():'—'}
@@ -263,7 +404,7 @@
         const tok=e.tokens||{};
         const bad=e.status>=400;
         return '<tr tabindex="0" data-id="'+e.id+'"'+(e.has_capture?'':' data-empty="1"')+'><td class="mono">'+esc(fmtTime(e.timestamp))+'</td><td><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></td><td class="mono">'+esc(e.method||'')+' '+esc(e.path||'')+'</td><td class="'+(bad?'status-bad':'status-ok')+'">'+esc(e.status)+'</td><td class="mono">'+fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')+'</td><td class="mono">'+fmtTok(tok.completion_tokens)+'</td><td class="mono">'+esc(fmtSpeed(tok.prompt_per_second))+'</td><td class="mono">'+esc(fmtSpeed(tok.tokens_per_second))+'</td><td class="mono">'+esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')+'</td><td class="mono">'+esc(fmtDur(e.duration_ms))+'</td></tr>';
-      }).join('')||'<tr><td colspan="10" class="empty">No generation requests yet. Send one from Chat lab or any client.</td></tr>';
+      }).join('')||'<tr><td colspan="10" class="empty">No generation requests yet. Send one from the Playground or any client.</td></tr>';
     }catch(e){
       $('activity-rows').innerHTML='<tr><td colspan="10" class="empty">'+esc(e.message)+'</td></tr>';
     }

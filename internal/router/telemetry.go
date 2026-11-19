@@ -209,7 +209,7 @@ func (c *PeerCache) Snapshot() map[string]*Telemetry {
 // PeerSyncer periodically pulls telemetry from router-kind peers.
 type PeerSyncer struct {
 	cfg    func() *config.Config // the live config, so a reload changes the peer list
-	cache *PeerCache
+	cache  *PeerCache
 	every  time.Duration
 	client *http.Client
 	logger *Logger

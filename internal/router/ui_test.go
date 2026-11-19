@@ -26,9 +26,35 @@ func TestEmbeddedUILogsPage(t *testing.T) {
 		}
 	}
 	// Every nav button needs a name that survives the label being hidden.
-	for _, v := range []string{"dashboard", "chat", "image", "activity", "performance", "logs"} {
+	for _, v := range []string{"dashboard", "playground", "activity", "performance", "logs"} {
 		if !strings.Contains(webUIHTML, `data-view="`+v+`" aria-label="`) {
 			t.Errorf("nav button %q has no aria-label", v)
+		}
+	}
+}
+
+// Chat and Image share one Playground nav item, with a tab and a panel for
+// every route the playground can drive.
+func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
+	for _, gone := range []string{"Chat lab", "Image lab", `data-view="chat"`, `data-view="image"`} {
+		if strings.Contains(webUIHTML, gone) {
+			t.Errorf("embedded UI still contains %q", gone)
+		}
+	}
+	for _, want := range []string{
+		`data-view="playground" aria-label="Playground"`, `role="tablist"`, `role="tabpanel"`,
+		`id="pg-tab-chat"`, `id="pg-tab-image"`, `id="pg-tab-embeddings"`, `id="pg-tab-rerank"`,
+		`id="pg-tab-speech"`, `id="pg-tab-transcription"`, `id="pg-tab-loadtest"`, `id="pg-tab-realtime"`,
+		`id="pg-chat"`, `id="pg-image"`, `id="pg-embeddings"`, `id="pg-rerank"`,
+		`id="pg-speech"`, `id="pg-transcription"`, `id="pg-loadtest"`, `id="pg-realtime"`,
+		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
+		"window.runEmbeddings", "window.runRerank", "window.runSpeech",
+		"window.runTranscription", "window.runLoadTest", "window.toggleRealtime",
+		"/v1/embeddings", "/v1/rerank", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/realtime",
+		"api_type: embedding", "api_type: rerank",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
 		}
 	}
 }
