@@ -1734,11 +1734,18 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			}
 		}
 		slots := 1
+		var gpus []int
+		if gpu >= 0 {
+			gpus = []int{gpu}
+		}
 		if s := r.stanzaOf(item.id); s != nil {
 			slots = s.SlotCount()
+			if splitPlacement(s) {
+				gpus = stanzaGPUs(s)
+			}
 		}
 		lm := LoadedModel{
-			ID: instanceModel(item.id), Freshness: freshness, VramMB: vram, GPU: gpu,
+			ID: instanceModel(item.id), Freshness: freshness, VramMB: vram, GPU: gpu, GPUs: gpus,
 			Slots: slots, InFlight: item.inFlight,
 		}
 		if lm.ID != item.id {
