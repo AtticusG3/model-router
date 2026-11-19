@@ -69,12 +69,10 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/sdapi/v1/*` | sd.cpp/A1111 passthrough |
 | `/v1/models` | unique mesh models (local + reachable remotes, no selectors) |
 | `/_router/load`, `/_router/unload` | local-only control (this node's admission; peers call these) |
-| `POST /_router/reload` | re-read the config file now (same path as the file watch and `SIGHUP`); `200` applied, `422` rejected with the error, running config unchanged. Public clients need an API key |
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
-| `/_router/backend-metrics` | per-backend generation speed and KV cache, summarised from each running backend's `/metrics` (feeds Performance) |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/activity`, `/_router/activity/{id}` | in-memory generation request log and request/response captures |
-| `/ui/` | embedded operator WebUI (Overview, Playground, Activity, Performance, Logs) |
+| `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
 
 ## API keys for public clients
@@ -109,17 +107,11 @@ private or Tailscale address.
 
 Catalog **Load** / **Unload** only start and stop **this node's** stanzas.
 Remote rows are Mesh routed: the router picks a peer when a request names
-that `model_id`. Choosing a remote id on the Playground **Chat** tab and
-sending is an ordinary `/v1/chat/completions` request, so this node `POST`s
-`/_router/load` on a fresh peer and streams the reply.
-
-**Playground** is one page with a tab per route: Chat, Image, Embeddings,
-Rerank, Speech, Transcription, Load test, Realtime. Chat and Image behave as
-before; the rest call their matching route (`/v1/embeddings`, `/v1/rerank`,
-`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/realtime`) or, when the
-mesh has no model to serve them, say so instead of sending. The tabs use the
-same origin as `/ui/`, so a public client's browser key prompt (below) covers
-every request without a per-tab key.
+that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
+`qwen3.8-27b`), choose the id in the **Playground** Chat tab and send — that is a normal
+`/v1/chat/completions` request, so the node `POST`s `/_router/load` on a
+fresh peer and streams the reply. The Image tab is the same for `api_type:
+image` (or Path default for the configured sd.cpp route).
 
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
@@ -127,30 +119,10 @@ click a row for request/response). Captures live in memory only (256 KB per
 body, 8 MB total) and reset on restart. Hard-refresh `/ui/` after deploying a
 new binary.
 
-**Performance** shows request rate, generation speed, GPU memory, KV cache and
-peer freshness as gauges and charts. `/metrics` stays the Prometheus scrape
-endpoint; the UI only links to it.
-
-**Logs** is one live stream: Combined, Router, Upstream, Mesh, or one model
-(every copy of it). Filter and Pause work on the last 2000 lines in the
-browser. The view follows the tail while you are at the bottom; scroll up to
-stop, scroll back down to resume. The same streams work from a shell:
-
-```bash
-curl -s  http://<router>/logs                         # buffered history, then exit
-curl -Ns http://<router>/logs/stream                  # combined, history first
-curl -Ns 'http://<router>/logs/stream?no-history'     # new lines only
-curl -Ns http://<router>/logs/stream/proxy            # router only
-curl -Ns http://<router>/logs/stream/upstream         # every backend
-curl -Ns http://<router>/logs/stream/mesh             # spills, pool fallbacks, peer state
-curl -Ns http://<router>/logs/stream/<model_id>       # one model
-curl -Ns http://<router>/logs/stream | grep -i error  # filter with a pipe
-```
-
 ## Config
 
 Per-node YAML with `stanzas` (SPEC schema + `device`, `aliases`, `env`,
-`port`, optional `filters` to strip or set body parameters), optional `pools` (compat spillover ids such as `coding-pool`; not
+`port`), optional `pools` (compat spillover ids such as `coding-pool`; not
 listed), `peers` (`kind: router` for fleet nodes, `kind: openai` for
 proxy-only upstreams like openrouter), `preload`, and `telemetry` tuning.
 Staged fleet configs are in `configs/` (plus
