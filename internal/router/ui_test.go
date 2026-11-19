@@ -51,6 +51,8 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		"window.sendSpeech", "/v1/audio/speech", "api_type==='speech'",
 		`id="pg-tab-transcription"`, `id="pg-transcription"`, `id="transcribe-model"`, `id="transcribe-output"`,
 		"window.sendTranscription", "/v1/audio/transcriptions", "api_type==='transcription'",
+		`id="pg-tab-load"`, `id="pg-load"`, `id="load-model"`, `id="load-output"`, `id="load-cancel"`,
+		"window.startLoad", "window.cancelLoad", "AbortController",
 		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
 	} {
 		if !strings.Contains(webUIHTML, want) {
