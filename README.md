@@ -113,6 +113,11 @@ that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
 fresh peer and streams the reply. The Image tab is the same for `api_type:
 image` (or Path default for the configured sd.cpp route).
 
+The Realtime tab opens a websocket session on `/v1/realtime?model=<id>` for an
+`api_type: realtime` entry and streams text replies. The router only passes the
+upgrade through to the backend or peer that serves the model; it adds no
+protocol of its own. A browser sends its UI sign-in key on the handshake.
+
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
 click a row for request/response). Captures live in memory only (256 KB per
