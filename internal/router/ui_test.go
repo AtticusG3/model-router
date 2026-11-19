@@ -43,6 +43,8 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 	for _, want := range []string{
 		`data-view="playground" aria-label="Playground"`, `role="tablist"`,
 		`id="pg-tab-chat"`, `id="pg-tab-image"`, `id="pg-chat"`, `id="pg-image"`,
+		`id="pg-tab-embeddings"`, `id="pg-embeddings"`, `id="embed-model"`, `id="embed-output"`,
+		"window.sendEmbedding", "/v1/embeddings", "api_type==='embedding'",
 		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
 	} {
 		if !strings.Contains(webUIHTML, want) {
