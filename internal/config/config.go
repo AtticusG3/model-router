@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -325,6 +326,10 @@ type Config struct {
 	// HeadroomMB is memory left unbooked on every GPU. Admission and every
 	// published free figure subtract it; vram_mb is unchanged. Default 0.
 	HeadroomMB int64 `yaml:"headroom_mb"`
+	// AdmitTimeoutSeconds caps how long a request waits for local GPU room
+	// (re-trying peers meanwhile) before it gets 503 with Retry-After.
+	// Default 60.
+	AdmitTimeoutSeconds int `yaml:"admit_timeout_seconds"`
 	// StreamLoadProgress writes loading updates into a streaming chat response
 	// while the chosen local backend spins up. Default false.
 	StreamLoadProgress bool `yaml:"stream_load_progress"`
@@ -358,6 +363,17 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("read config %s: %w", path, err)
 	}
 	return Parse(raw)
+}
+
+// DefaultAdmitTimeout applies when admit_timeout_seconds is unset.
+const DefaultAdmitTimeout = 60 * time.Second
+
+// AdmitTimeout is AdmitTimeoutSeconds, or DefaultAdmitTimeout when unset.
+func (c *Config) AdmitTimeout() time.Duration {
+	if c.AdmitTimeoutSeconds <= 0 {
+		return DefaultAdmitTimeout
+	}
+	return time.Duration(c.AdmitTimeoutSeconds) * time.Second
 }
 
 // Parse parses config bytes and applies defaults/derivation.

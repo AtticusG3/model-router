@@ -751,3 +751,38 @@ func TestLoadEvictsIdleDespiteLowLiveFree(t *testing.T) {
 		t.Fatal("idle a should have been evicted")
 	}
 }
+
+// A pinned model reserved on a card but still mid-load (admitted, not running)
+// must count at its reserved size: nvidia-smi still shows the card empty, but
+// the room is already spoken for.
+func TestPinnedMBCountsAdmittedButNotRunningReservation(t *testing.T) {
+	r := loadTestRouter(t)
+	r.ledger.SetGPUs([]*GPUState{gpu(0, 32000)})
+	a := r.cfg().Stanza("a")
+	a.Pin = true
+	a.Device = "0"
+	a.VramMB = 28000
+	if _, ok := r.ledger.Reserve("a", a); !ok {
+		t.Fatal("reserve a")
+	}
+	b := r.cfg().Stanza("b")
+	b.Device = "0"
+	b.VramMB = 8000
+
+	if got := r.ledger.reservationUsed("a")[0]; got != 28000 {
+		t.Fatalf("admitted-but-not-running reservation = %d, want the reserved 28000", got)
+	}
+	if got := r.pinnedMB(0, b); got != 28000 {
+		t.Fatalf("pinnedMB = %d, want 28000", got)
+	}
+	// Card 0 has 32000 - 28000 = 4000 left: b must not be admitted there.
+	if r.canEventuallyAdmit(b) {
+		t.Fatal("b must not be admitted on room a's reservation already holds")
+	}
+
+	// Control: the same reservation, unpinned, is room b may reclaim.
+	a.Pin = false
+	if !r.canEventuallyAdmit(b) {
+		t.Fatal("an unpinned holder can be evicted, so b can be admitted")
+	}
+}

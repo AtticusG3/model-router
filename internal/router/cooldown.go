@@ -81,12 +81,25 @@ func (r *Router) startHealthy(model string) {
 	r.coolMu.Unlock()
 }
 
+// admitRetryAfter is the Retry-After (seconds) sent when a request found no
+// room to run.
+const admitRetryAfter = 15
+
+// admitError is a request that found no GPU room (pinned models hold it, or
+// the wait ran out). The HTTP layer turns it into 503 with Retry-After.
+type admitError struct{ msg string }
+
+func (e *admitError) Error() string { return e.msg }
+
 // loadFailed answers a failed load: 503, with Retry-After when a start
-// cooldown is behind it.
+// cooldown or a lack of room is behind it.
 func loadFailed(w http.ResponseWriter, err error) {
 	var cd *startCooldownError
+	var ae *admitError
 	if errors.As(err, &cd) {
 		w.Header().Set("Retry-After", strconv.Itoa(cd.retryAfter()))
+	} else if errors.As(err, &ae) {
+		w.Header().Set("Retry-After", strconv.Itoa(admitRetryAfter))
 	}
 	http.Error(w, err.Error(), http.StatusServiceUnavailable)
 }

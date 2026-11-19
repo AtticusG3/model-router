@@ -134,6 +134,10 @@ Staged fleet configs are in `configs/` (plus
 `qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
 stanzas). The swap procedure is in `deploy/swap-over.md`.
 
+`admit_timeout_seconds` (top level, default 60) is the longest a request waits for
+local GPU room while peers are re-tried. After that it gets `503` with
+`Retry-After`. A model that pinned models leave no room for fails at once.
+
 `stream_load_progress: true` (top level, default off) writes "loading model… N%"
 chunks into the reasoning stream of a `stream: true` chat completion while its
 model starts, so chat UIs do not look hung. See the Supervisor section of

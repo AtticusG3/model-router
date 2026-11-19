@@ -195,6 +195,13 @@ keys (`model#2`). Instance 0 keeps the bare id.
      anything. Otherwise slot-spill to a peer that has a free slot or can
      admit a fresh load. If nothing can take it, queue on the least-loaded
      local instance.
+   - While the model cannot be placed here (for example pinned models hold
+     every card it may use), the spill is retried every few seconds. A model
+     that can never fit because pinned models hold the room fails at once.
+     `admit_timeout_seconds` (top level, default 60) caps the wait for local
+     room; when it runs out the client gets `503` with `Retry-After`. The
+     journal's mesh stream says why no peer was chosen (cooling, stale
+     telemetry, not advertising).
    - Load if needed (admission, below), wait until `health_check` returns
      200, then stream the reverse proxy. The client connection is held for
      the generation. `X-Accel-Buffering: no`.
