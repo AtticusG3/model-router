@@ -62,3 +62,27 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		}
 	}
 }
+
+// Brand tokens, motion and the live activity table are part of the embedded shell.
+func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
+	for _, want := range []string{
+		`<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,`, `<meta name="theme-color" content="#58d6e6">`,
+		"--accent:#58d6e6", "--elev-1:", "--elev-2:", "--elev-3:", "--surface-1:",
+		"@media(prefers-reduced-motion:reduce)", "animation:none!important", "transition:none!important",
+		".spark-line{transition:d", ".thumb{", "width:44px",
+		// Activity rows are reconciled by id, not rebuilt.
+		"function syncRows", "tr.classList.add('leaving')", "row-in", "IntersectionObserver", "IMG_PATH",
+		// The dialog has a parsed view, a raw fallback and collapsible headers.
+		`id="capture-parsed"`, `id="capture-raw"`, `id="capture-toggle"`, `<details class="capture-headers" open>`,
+		"function capParsed", "function chatReply", "function imgSrcs",
+		// A model shows on every GPU it occupies.
+		"m.gpus&&m.gpus.length?m.gpus:[m.gpu]",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if strings.Contains(webUIHTML, "$('activity-rows').innerHTML=") {
+		t.Error("activity rows are rebuilt with innerHTML again")
+	}
+}
