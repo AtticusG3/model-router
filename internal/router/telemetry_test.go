@@ -108,6 +108,28 @@ func TestTelemetrySnapshotIdleReclaimSkipsInFlight(t *testing.T) {
 	}
 }
 
+func TestTelemetrySnapshotListsEveryGPUOfASplitModel(t *testing.T) {
+	r := loadTestRouter(t)
+	r.ledger.SetGPUs([]*GPUState{gpu(0, 10000), gpu(1, 10000), gpu(2, 10000)})
+	r.cfg().Stanza("a").Device = "1,2"
+	r.cfg().Stanza("b").Device = "0"
+	for _, id := range []string{"a", "b"} {
+		if _, err := r.Load(id); err != nil {
+			t.Fatalf("Load %s: %v", id, err)
+		}
+	}
+	got := map[string][]int{}
+	for _, lm := range r.TelemetrySnapshot().LoadedModels {
+		got[lm.ID] = lm.GPUs
+	}
+	if len(got["a"]) != 2 || got["a"][0] != 1 || got["a"][1] != 2 {
+		t.Fatalf("split model gpus = %v, want [1 2]", got["a"])
+	}
+	if len(got["b"]) != 1 || got["b"][0] != 0 {
+		t.Fatalf("single-GPU model gpus = %v, want [0]", got["b"])
+	}
+}
+
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }

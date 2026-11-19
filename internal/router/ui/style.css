@@ -2,7 +2,11 @@
   color-scheme:dark;
   --bg:#0b1018;--bg-raised:#101722;--panel:#141d29;--panel-hover:#192333;
   --line:#253244;--line-strong:#34445a;--text:#edf3fb;--muted:#8c9aab;
-  --faint:#5d6c7f;--cyan:#58d6e6;--cyan-soft:rgba(88,214,230,.12);
+  --faint:#5d6c7f;--accent:#58d6e6;--accent-soft:rgba(88,214,230,.12);--accent-ink:#082027;
+  --surface-0:#0b1018;--surface-1:#141d29;--surface-2:#192333;
+  --elev-1:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.14);--elev-2:0 10px 30px rgba(0,0,0,.3);--elev-3:0 28px 70px rgba(0,0,0,.5);
+  --ease:cubic-bezier(.2,.7,.2,1);
+  --cyan:var(--accent);--cyan-soft:var(--accent-soft);
   --green:#63dda1;--green-soft:rgba(99,221,161,.12);--amber:#f1bb62;
   --amber-soft:rgba(241,187,98,.12);--red:#ff7e83;--red-soft:rgba(255,126,131,.12);
   --blue:#8db8ff;--radius:12px;--shadow:0 18px 50px rgba(0,0,0,.22)
@@ -47,4 +51,62 @@ code,.mono{font:12px/1.5 "SFMono-Regular",Consolas,"Liberation Mono",monospace}
 .log-line mark{background:rgba(88,214,230,.3);color:inherit;border-radius:2px;padding:0 1px}
 @media(max-width:1050px){.shell{grid-template-columns:205px}.overview,.activity-charts{grid-template-columns:repeat(2,minmax(0,1fr))}.content{padding-left:25px;padding-right:25px}.capture-grid{grid-template-columns:1fr}}
 @media(max-width:740px){.shell{display:block}.sidebar{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:15px 16px}.brand{margin:0 0 15px;padding:0 2px}.sidebar-bottom{display:none}.nav-label{display:none}.nav{display:flex;overflow-x:auto;margin:0 -4px;padding:0 4px}.nav button{width:auto;flex:0 0 auto;padding:8px 10px}.nav button span{display:none}.nav svg{width:18px;height:18px}.content{padding:23px 16px 36px}.topbar{display:block;margin-bottom:25px}.top-actions{justify-content:space-between;margin-top:16px}.page-subtitle{max-width:32rem}.connection{flex:1}.top-actions>button{flex:0 0 auto}.overview{gap:9px}.stat-card{padding:13px;min-height:94px}.stat-value{font-size:23px;margin-top:9px}.stat-icon{width:25px;height:25px}.gpu-grid,.peer-grid,.grid,.activity-charts{grid-template-columns:1fr}.playground{grid-template-columns:1fr}.section-heading{align-items:flex-start;flex-direction:column;gap:9px}.section-heading .right{width:100%;justify-content:space-between}.table th,.table td{padding:11px 12px}.panel-header{padding:15px 15px 0}.form{padding:15px}.output,.image-result{margin:15px}.log-view{height:70vh}}
-@media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;transition:none!important}}
+/* Brand: the accent runs through the header rule, the active nav item and primary buttons. */
+.topbar{position:relative;padding-bottom:19px}
+.topbar:after{content:"";position:absolute;left:0;bottom:0;width:56px;height:3px;border-radius:3px;background:var(--accent)}
+.brand-mark{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);box-shadow:var(--elev-1)}
+.nav button.active{box-shadow:inset 3px 0 0 var(--accent)}
+button.primary{box-shadow:var(--elev-1)}
+button.primary:hover:not(:disabled){box-shadow:var(--elev-2);transform:translateY(-1px)}
+button.primary:active:not(:disabled){transform:none;box-shadow:var(--elev-1)}
+/* Elevation: 1 resting, 2 raised on hover, 3 overlays. */
+.stat-card,.panel{box-shadow:var(--elev-1);transition:box-shadow .2s var(--ease),border-color .2s var(--ease),transform .2s var(--ease)}
+.gpu-card:hover,.peer-card:hover,.chart-card:hover,.stat-card:hover{box-shadow:var(--elev-2);border-color:var(--line-strong)}
+.capture-dialog{box-shadow:var(--elev-3)}
+.nav button,.chip,.table tbody tr{transition:background .16s ease,color .16s ease,border-color .16s ease,box-shadow .16s ease}
+.activity-table tbody tr:hover{background:var(--surface-2)}
+/* Motion: one entrance when a view opens, one for the dialog, and row changes as they happen. */
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes row-in{from{opacity:0;transform:translateY(-10px);background:var(--accent-soft)}to{opacity:1;transform:none}}
+.view.active{animation:rise .28s var(--ease)}
+.capture-dialog[open]{animation:pop .22s var(--ease)}
+.capture-dialog[open]::backdrop{animation:fade .22s ease}
+.activity-table tbody tr.row-in{animation:row-in .45s var(--ease)}
+.activity-table tbody tr{transition:opacity .22s ease,background .16s ease}
+.activity-table tbody tr.leaving{opacity:0;pointer-events:none}
+/* Sparklines: the line and its end dot glide to the new points. */
+.spark-line{transition:d .5s var(--ease)}
+.spark-dot{transition:cx .5s var(--ease),cy .5s var(--ease)}
+/* GPU cards list every model they host. */
+.gpu-models{list-style:none;margin:10px 0 0;padding:10px 0 0;border-top:1px solid var(--line);display:grid;gap:6px}
+.gpu-models li{display:flex;justify-content:space-between;gap:10px;align-items:baseline;min-width:0}
+.gpu-models li .mono{overflow-wrap:anywhere}
+/* Activity thumbnails: a neutral box until the image loads. */
+.model-line{display:flex;align-items:center;gap:10px}
+.thumb{flex:0 0 auto;width:44px;height:44px;border-radius:8px;overflow:hidden;background:#0e1622;border:1px solid var(--line)}
+.thumb[data-state=none]{opacity:.5}
+.thumb img{display:block;width:100%;height:100%;object-fit:cover}
+/* Activity dialog */
+.capture-dialog [hidden]{display:none!important}
+.capture-bar{position:sticky;top:0;z-index:1;background:var(--panel)}
+.capture-actions{display:flex;gap:8px;flex:0 0 auto}
+.capture-parsed{padding:6px 18px 16px}
+.cap-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 18px;margin:12px 0 0}
+.cap-stat{min-width:0}
+.cap-stat dt{color:var(--faint);font-size:11px;font-weight:650}
+.cap-stat dd{margin:2px 0 0;font:12px/1.5 "SFMono-Regular",Consolas,"Liberation Mono",monospace;overflow-wrap:anywhere}
+.cap-block{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}
+.cap-block h3,.capture-headers summary{margin:0 0 4px;color:var(--muted);font-size:12px;font-weight:700}
+.cap-msg{margin:8px 0;padding:2px 0 2px 12px;border-left:2px solid var(--line-strong)}
+.cap-role{color:var(--accent);font-size:11px;font-weight:700}
+.cap-text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}
+.cap-img{display:block;max-width:100%;max-height:60vh;margin:8px 0;border-radius:10px;border:1px solid var(--line)}
+.cap-think{margin:6px 0;color:var(--muted)}
+.capture-headers{border-top:1px solid var(--line)}
+.capture-headers summary{padding:12px 18px;cursor:pointer;margin:0}
+.capture-headers summary:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.capture-dialog .capture-grid{max-height:none}
+.capture-dialog .capture-body{min-height:120px;max-height:45vh}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

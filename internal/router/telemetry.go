@@ -30,8 +30,11 @@ type LoadedModel struct {
 	Freshness string `json:"freshness"` // fresh | stale
 	VramMB    int64  `json:"vram_mb,omitempty"`
 	GPU       int    `json:"gpu"`
-	Slots     int    `json:"slots"`
-	InFlight  int    `json:"in_flight"`
+	// GPUs is every GPU the model occupies (a split model spans several);
+	// GPU stays as its first for older readers.
+	GPUs     []int `json:"gpus,omitempty"`
+	Slots    int   `json:"slots"`
+	InFlight int   `json:"in_flight"`
 }
 
 // GPUPoller runs nvidia-smi on an interval and feeds the ledger.

@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#0b1018">
+<meta name="theme-color" content="#58d6e6">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2358d6e6'/%3E%3Cpath d='M16 6.5 24 11v10l-8 4.5L8 21V11Z' fill='none' stroke='%23082027' stroke-width='2.2' stroke-linejoin='round'/%3E%3Cpath d='m11.5 13.5 4.5 2.6 4.5-2.6M16 16.1V21' fill='none' stroke='%23082027' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <title>model-router · control room</title>
 <style>
 __EMBED_CSS__
@@ -88,11 +89,19 @@ A cat sat on the mat.</textarea></label><button class="primary" id="rerank-submi
       </section>
     </main>
     <dialog id="activity-dialog" class="capture-dialog" aria-labelledby="capture-title">
-      <div class="capture-bar"><div><h2 id="capture-title">Request capture</h2><p class="subtle" id="capture-meta"></p></div><button class="ghost" type="button" id="capture-close" aria-label="Close capture">Close</button></div>
-      <div class="capture-grid">
-        <section><h3>Request</h3><pre class="capture-body" id="capture-req"></pre></section>
-        <section><h3>Response</h3><pre class="capture-body" id="capture-resp"></pre></section>
+      <div class="capture-bar"><div><h2 id="capture-title">Request capture</h2><p class="subtle" id="capture-meta"></p></div><div class="capture-actions"><button class="ghost" type="button" id="capture-toggle" disabled>Show raw</button><button class="ghost" type="button" id="capture-close" aria-label="Close capture">Close</button></div></div>
+      <div id="capture-parsed" class="capture-parsed" hidden></div>
+      <div id="capture-raw" class="capture-grid">
+        <section><h3>Request body</h3><pre class="capture-body" id="capture-req"></pre></section>
+        <section><h3>Response body</h3><pre class="capture-body" id="capture-resp"></pre></section>
       </div>
+      <details class="capture-headers" open>
+        <summary>Headers</summary>
+        <div class="capture-grid">
+          <section><h3>Request headers</h3><pre class="capture-body" id="capture-req-h"></pre></section>
+          <section><h3>Response headers</h3><pre class="capture-body" id="capture-resp-h"></pre></section>
+        </div>
+      </details>
     </dialog>
     <main id="logs" class="view">
       <div class="log-toolbar" role="region" aria-label="Log controls">

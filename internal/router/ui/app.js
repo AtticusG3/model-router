@@ -2,6 +2,8 @@
   let status={models:[],telemetry:{},peers:{}};
   const $=id=>document.getElementById(id);
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  // Skips the write when the markup is unchanged, so a poll does not rebuild nodes (flicker, lost hover, lost selection).
+  const setHTML=(el,html)=>{if(el._h!==html){el._h=html;el.innerHTML=html}};
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
   const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Try a streaming chat, an image, an embeddings, a rerank, a speech, a transcription request or a load test against this router.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
   document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart()});
@@ -9,9 +11,9 @@
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
   window.refresh=async function(){try{status=await json('/_router/status');const node=status.node||'unknown';const now=new Date();$('side-node').textContent=node;$('updated').textContent='Updated '+now.toLocaleTimeString();setHealth(true,'Router healthy');renderSummary();renderGPUs();renderModels();renderPeers();fillSelectors()}catch(e){setHealth(false,e.message);$('updated').textContent='Snapshot unavailable'}};
   function renderSummary(){const gs=status.telemetry&&status.telemetry.gpus||[];const models=status.models||[];const running=models.filter(m=>m.state==='running').length;const peers=status.peers||{};$('stat-gpus').textContent=gs.length;$('stat-running').textContent=running;$('stat-models').textContent=models.length;$('stat-peers').textContent=Object.keys(peers).length;$('model-summary').textContent=models.length+' entries · '+running+' online'}
-  function renderGPUs(){const gs=status.telemetry&&status.telemetry.gpus||[];const lm=status.telemetry&&status.telemetry.loaded_models||[];$('gpu-cards').innerHTML=gs.map(g=>{const on=lm.filter(m=>m.gpu===g.index).map(m=>(m.instance||m.id)+(m.slots?' '+m.in_flight+'/'+m.slots:''));const total=Number(g.total_mb)||0,free=Number(g.free_mb)||0,stale=Number(g.free_if_stale_evicted_mb)||free,idle=Number(g.free_if_idle_evicted_mb)||stale;const used=total?Math.max(0,Math.min(100,((total-free)/total)*100)):0;return '<article class="panel gpu-card"><div class="gpu-title"><span class="gpu-name">'+esc(g.name||'GPU '+g.index)+'</span><span class="gpu-index">GPU '+esc(g.index)+'</span></div><div class="gpu-memory"><span class="gpu-free">'+esc(free)+'</span><span class="gpu-unit">MB free</span></div><div class="meter" role="progressbar" aria-label="GPU memory used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(used)+'"><div class="meter-fill" style="width:'+used+'%"></div></div><div class="gpu-footer"><span>'+esc(total)+' MB total</span><span>'+esc(idle)+' MB if idle evicted</span></div><div class="gpu-footer"><span class="mono">'+esc(on.join(', ')||'No models')+'</span></div></article>'}).join('')||'<div class="panel empty">No GPU telemetry available yet.</div>'}
-  function renderModels(){const rows=(status.models||[]).map(m=>{const origin=m.origin||'local';const freshness=m.freshness||'';const state=freshness||m.state||(origin==='remote'?'available':'stopped');const can=origin==='local';return '<tr><td><div class="model-cell"><span class="model-glyph">'+icon(origin==='remote'?'peer':'model')+'</span><div><span class="model-id">'+esc(m.id)+'</span>'+(m.name?'<span class="model-name">'+esc(m.name)+'</span>':'')+'</div></div></td><td><span class="state '+esc(origin)+'">'+esc(origin==='remote'?'remote':'local')+'</span></td><td><span class="state '+esc(state)+'">'+esc(state)+'</span></td><td class="mono">'+(m.vram_mb?esc(m.vram_mb)+' MB':'—')+'</td><td>'+(can?'<div class="actions"><a class="ghost" href="/upstream/'+encodeURIComponent(m.id)+'/" target="_blank" rel="noopener">Open UI</a><button data-act="load" data-id="'+esc(m.id)+'">Load</button><button class="danger" data-act="unload" data-id="'+esc(m.id)+'">Unload</button></div>':'<span class="subtle">Mesh routed</span>')+'</td></tr>'}).join('');$('models').innerHTML=rows||'<tr><td colspan="5" class="empty">No models in the catalog.</td></tr>'}
-  function renderPeers(){const ps=status.peers||{};const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+m.gpu:'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');$('peers').innerHTML=cards||'<div class="panel empty">No fresh peer telemetry.</div>'}
+  function renderGPUs(){const gs=status.telemetry&&status.telemetry.gpus||[];const lm=status.telemetry&&status.telemetry.loaded_models||[];setHTML($('gpu-cards'),gs.map(g=>{const on=lm.filter(m=>(m.gpus&&m.gpus.length?m.gpus:[m.gpu]).includes(g.index)).map(m=>'<li><span class="mono">'+esc(m.instance||m.id)+'</span>'+(m.slots?'<span class="subtle">'+esc(m.in_flight)+' in flight, '+esc(m.slots)+' slots</span>':'')+'</li>');const total=Number(g.total_mb)||0,free=Number(g.free_mb)||0,stale=Number(g.free_if_stale_evicted_mb)||free,idle=Number(g.free_if_idle_evicted_mb)||stale;const used=total?Math.max(0,Math.min(100,((total-free)/total)*100)):0;return '<article class="panel gpu-card"><div class="gpu-title"><span class="gpu-name">'+esc(g.name||'GPU '+g.index)+'</span><span class="gpu-index">GPU '+esc(g.index)+'</span></div><div class="gpu-memory"><span class="gpu-free">'+esc(free)+'</span><span class="gpu-unit">MB free</span></div><div class="meter" role="progressbar" aria-label="GPU memory used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+Math.round(used)+'"><div class="meter-fill" style="width:'+used+'%"></div></div><div class="gpu-footer"><span>'+esc(total)+' MB total</span><span>'+esc(idle)+' MB if idle evicted</span></div><ul class="gpu-models" aria-label="Models on this GPU">'+(on.join('')||'<li class="subtle">No models</li>')+'</ul></article>'}).join('')||'<div class="panel empty">No GPU telemetry available yet.</div>')}
+  function renderModels(){const rows=(status.models||[]).map(m=>{const origin=m.origin||'local';const freshness=m.freshness||'';const state=freshness||m.state||(origin==='remote'?'available':'stopped');const can=origin==='local';return '<tr><td><div class="model-cell"><span class="model-glyph">'+icon(origin==='remote'?'peer':'model')+'</span><div><span class="model-id">'+esc(m.id)+'</span>'+(m.name?'<span class="model-name">'+esc(m.name)+'</span>':'')+'</div></div></td><td><span class="state '+esc(origin)+'">'+esc(origin==='remote'?'remote':'local')+'</span></td><td><span class="state '+esc(state)+'">'+esc(state)+'</span></td><td class="mono">'+(m.vram_mb?esc(m.vram_mb)+' MB':'—')+'</td><td>'+(can?'<div class="actions"><a class="ghost" href="/upstream/'+encodeURIComponent(m.id)+'/" target="_blank" rel="noopener">Open UI</a><button data-act="load" data-id="'+esc(m.id)+'">Load</button><button class="danger" data-act="unload" data-id="'+esc(m.id)+'">Unload</button></div>':'<span class="subtle">Mesh routed</span>')+'</td></tr>'}).join('');setHTML($('models'),rows||'<tr><td colspan="5" class="empty">No models in the catalog.</td></tr>')}
+  function renderPeers(){const ps=status.peers||{};const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+(m.gpus&&m.gpus.length?m.gpus.join(','):m.gpu):'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');setHTML($('peers'),cards||'<div class="panel empty">No fresh peer telemetry.</div>')}
   function sameOptions(sel,ids){return sel.options.length===ids.length&&ids.every((id,i)=>sel.options[i].value===id)}
   function fillSelect(sel,ids,html){const prev=sel.value;if(sameOptions(sel,ids))return;sel.innerHTML=html;if([...sel.options].some(o=>o.value===prev))sel.value=prev}
   function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''))}
@@ -411,21 +413,35 @@
     Object.keys(h||{}).sort().forEach(k=>(h[k]||[]).forEach(v=>lines.push(k+': '+v)));
     return lines.join('\n');
   }
+  // The svg children are built once and then only have attributes changed, so a poll morphs the line
+  // (CSS transition on the path's d) instead of replacing it. A change in sample count snaps, because
+  // paths with different segment counts cannot interpolate; browsers without CSS d just snap too.
   function spark(el, values, color){
     const w=320,h=96,pad=8;
-    if(!values.length){
-      el.innerHTML='<text x="160" y="52" text-anchor="middle" fill="#5d6c7f" font-size="11">No samples yet</text>';
-      return;
+    let s=el._s;
+    if(!s){
+      el.innerHTML='<text class="spark-none" x="160" y="52" text-anchor="middle" fill="#5d6c7f" font-size="11">No samples yet</text><path class="spark-line" fill="none" stroke-width="2" stroke-linejoin="round"/><circle class="spark-dot" r="3"/><text class="spark-last" x="'+(w-pad)+'" y="14" text-anchor="end" font-size="11"></text>';
+      const c=el.children;
+      s=el._s={none:c[0],line:c[1],dot:c[2],last:c[3],n:-1};
     }
+    const has=values.length>0;
+    s.none.style.display=has?'none':'';
+    [s.line,s.dot,s.last].forEach(n=>{n.style.display=has?'':'none'});
+    if(!has){s.n=-1;return}
     const min=Math.min(...values), max=Math.max(...values);
     const span=max-min||1;
-    const pts=values.map((v,i)=>{
-      const x=pad+(i/(Math.max(values.length-1,1)))*(w-pad*2);
-      const y=h-pad-((v-min)/span)*(h-pad*2);
-      return x.toFixed(1)+','+y.toFixed(1);
-    }).join(' ');
-    const last=values[values.length-1];
-    el.innerHTML='<polyline fill="none" stroke="'+color+'" stroke-width="2" points="'+pts+'"/><circle cx="'+pts.split(' ').pop().split(',')[0]+'" cy="'+pts.split(' ').pop().split(',')[1]+'" r="3" fill="'+color+'"/><text x="'+(w-pad)+'" y="14" text-anchor="end" fill="'+color+'" font-size="11">'+last.toFixed(last>=100?0:1)+'</text>';
+    const pts=values.map((v,i)=>[pad+(i/Math.max(values.length-1,1))*(w-pad*2),h-pad-((v-min)/span)*(h-pad*2)]);
+    const d='M'+pts.map(p=>p[0].toFixed(1)+' '+p[1].toFixed(1)).join(' L');
+    const tip=pts[pts.length-1],last=values[values.length-1];
+    s.line.setAttribute('stroke',color);s.dot.setAttribute('fill',color);s.last.setAttribute('fill',color);
+    const snap=s.n!==values.length;
+    if(snap)[s.line,s.dot].forEach(n=>{n.style.transition='none'});
+    s.line.setAttribute('d',d);s.line.style.d='path("'+d+'")';
+    s.dot.style.cx=tip[0].toFixed(1)+'px';s.dot.style.cy=tip[1].toFixed(1)+'px';
+    s.dot.setAttribute('cx',tip[0].toFixed(1));s.dot.setAttribute('cy',tip[1].toFixed(1));
+    s.last.textContent=last.toFixed(last>=100?0:1);
+    if(snap){s.line.getBoundingClientRect();[s.line,s.dot].forEach(n=>{n.style.transition=''})}
+    s.n=values.length;
   }
   async function activity(){
     try{
@@ -444,32 +460,180 @@
       spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
       spark($('chart-ttft'), chrono.map(e=>Number(e.ttft_ms)||0).filter(v=>v>0), '#f1bb62');
       $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
-      $('activity-rows').innerHTML=rows.map(e=>{
-        const tok=e.tokens||{};
-        const bad=e.status>=400;
-        return '<tr tabindex="0" data-id="'+e.id+'"'+(e.has_capture?'':' data-empty="1"')+'><td class="mono">'+esc(fmtTime(e.timestamp))+'</td><td><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></td><td class="mono">'+esc(e.method||'')+' '+esc(e.path||'')+'</td><td class="'+(bad?'status-bad':'status-ok')+'">'+esc(e.status)+'</td><td class="mono">'+fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')+'</td><td class="mono">'+fmtTok(tok.completion_tokens)+'</td><td class="mono">'+esc(fmtSpeed(tok.prompt_per_second))+'</td><td class="mono">'+esc(fmtSpeed(tok.tokens_per_second))+'</td><td class="mono">'+esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')+'</td><td class="mono">'+esc(fmtDur(e.duration_ms))+'</td></tr>';
-      }).join('')||'<tr><td colspan="10" class="empty">No generation requests yet. Send one from the Playground or any client.</td></tr>';
+      acts=new Map(rows.map(e=>[String(e.id),e]));
+      thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
+      // Rows only animate in once the first paint is done and the tab is showing.
+      syncRows(rows,!actFirst&&$('activity').classList.contains('active'));
+      actFirst=false;
+      $('activity-hint').textContent='In-memory on this node';
     }catch(e){
-      $('activity-rows').innerHTML='<tr><td colspan="10" class="empty">'+esc(e.message)+'</td></tr>';
+      // Keep the rows already on screen; a failed poll should not wipe the table.
+      $('activity-hint').textContent=e.message;
+      if(!$('activity-rows').querySelector('tr[data-id]'))setNote(e.message);
     }
   }
+  let actFirst=true,acts=new Map();
+
+  // Rows are matched by id and updated in place; see syncRows.
+  const IMG_PATH=/\/(images\/(generations|edits|variations)|txt2img|img2img)$/;
+  const ACT_NOTE='No generation requests yet. Send one from the Playground or any client.';
+  function setNote(text){$('activity-rows').querySelectorAll('.act-note').forEach(n=>n.remove());$('activity-rows').insertAdjacentHTML('beforeend','<tr class="act-note"><td colspan="10" class="empty">'+esc(text)+'</td></tr>')}
+  function actCells(e){
+    const tok=e.tokens||{};
+    const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"></span>':'';
+    return [
+      ['mono',esc(fmtTime(e.timestamp))],
+      ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></div></div>'],
+      ['mono',esc(e.method||'')+' '+esc(e.path||'')],
+      [e.status>=400?'status-bad':'status-ok',esc(e.status)],
+      ['mono',fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')],
+      ['mono',fmtTok(tok.completion_tokens)],
+      ['mono',esc(fmtSpeed(tok.prompt_per_second))],
+      ['mono',esc(fmtSpeed(tok.tokens_per_second))],
+      ['mono',esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')],
+      ['mono',esc(fmtDur(e.duration_ms))]
+    ];
+  }
+  function paintRow(tr,e){
+    tr.toggleAttribute('data-empty',!e.has_capture);
+    actCells(e).forEach((c,i)=>{
+      const td=tr.cells[i];
+      if(td.className!==c[0])td.className=c[0];
+      if(tr._c[i]!==c[1]){tr._c[i]=c[1];td.innerHTML=c[1]}
+    });
+    tr.querySelectorAll('.thumb[data-state=wait]').forEach(hydrateThumb);
+  }
+  const liveRow=n=>{while(n&&n.classList.contains('leaving'))n=n.nextElementSibling;return n};
+  function syncRows(entries,animate){
+    const tb=$('activity-rows'),have=new Map(),keep=new Set(entries.map(e=>String(e.id)));
+    tb.querySelectorAll('.act-note').forEach(n=>n.remove());
+    [...tb.children].forEach(tr=>{if(tr.dataset.id&&!tr.classList.contains('leaving'))have.set(tr.dataset.id,tr)});
+    have.forEach((tr,id)=>{
+      if(keep.has(id))return;
+      tr.classList.add('leaving');tr.removeAttribute('data-id');tr.removeAttribute('tabindex');
+      setTimeout(()=>tr.remove(),240);
+    });
+    let ref=liveRow(tb.firstElementChild);
+    entries.forEach(e=>{
+      const id=String(e.id);
+      let tr=have.get(id);
+      if(!tr){
+        tr=document.createElement('tr');tr.tabIndex=0;tr.dataset.id=id;tr._c=[];
+        for(let i=0;i<10;i++)tr.appendChild(document.createElement('td'));
+        if(animate)tr.classList.add('row-in');
+      }
+      paintRow(tr,e);
+      if(tr===ref)ref=liveRow(ref.nextElementSibling);else tb.insertBefore(tr,ref);
+    });
+    if(!entries.length)setNote(ACT_NOTE);
+  }
+
+  // Thumbnails: image rows get a placeholder at once; the image is fetched from the capture only when the
+  // row scrolls into view. The captured image is shown at thumbnail size by CSS, it is not downscaled.
+  // shortcut: a response body clipped at the capture limit has no whole image, so that row keeps the
+  // placeholder, upgrade when the capture API serves a thumbnail.
+  const thumbs=new Map();
+  const thumbIO=window.IntersectionObserver&&new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){thumbIO.unobserve(x.target);loadThumb(x.target)}}),{rootMargin:'160px'});
+  function hydrateThumb(el){if(thumbIO&&!thumbs.has(el.dataset.id))thumbIO.observe(el);else loadThumb(el)}
+  function loadThumb(el){
+    const id=el.dataset.id;
+    if(!thumbs.has(id))thumbs.set(id,json('/_router/activity/'+id).then(c=>imgSrcs(parseJSON(c.resp_body))[0]||'').catch(()=>{thumbs.delete(id);return ''}));
+    thumbs.get(id).then(src=>{
+      if(!src){el.dataset.state='none';return}
+      const im=new Image();im.alt='';im.decoding='async';im.src=src;
+      el.replaceChildren(im);el.dataset.state='done';
+    });
+  }
+
+  const parseJSON=s=>{try{return JSON.parse(s)}catch(e){return null}};
+  // imgSrcs reads image data from an OpenAI-style (data[]) or sd.cpp-style (images[]) response.
+  function imgSrcs(d){
+    const list=d&&(Array.isArray(d.data)?d.data:Array.isArray(d.images)?d.images:[])||[];
+    return list.map(x=>{
+      const v=typeof x==='string'?x:(x&&(x.b64_json||x.url))||'';
+      if(!v)return '';
+      if(/^(https?:|data:image\/)/i.test(v))return v;
+      return 'data:image/'+(v.startsWith('/9j/')?'jpeg':v.startsWith('UklG')?'webp':'png')+';base64,'+v;
+    }).filter(Boolean);
+  }
+  // chatReply reads a chat completion, whole or streamed as SSE. It returns null when the body is neither.
+  function chatReply(body){
+    const out={text:'',think:'',finish:''};
+    const take=d=>{
+      const c=d&&Array.isArray(d.choices)&&d.choices[0];
+      if(!c)return false;
+      const m=c.message||c.delta||{};
+      if(typeof m.content==='string')out.text+=m.content;
+      if(typeof m.reasoning_content==='string')out.think+=m.reasoning_content;
+      if(c.finish_reason)out.finish=c.finish_reason;
+      return true;
+    };
+    const s=String(body||'');
+    const whole=parseJSON(s);
+    if(whole)return take(whole)?out:null;
+    let ok=false;
+    s.split('\n').forEach(l=>{if(l.startsWith('data:')){const d=parseJSON(l.slice(5).trim());if(d&&take(d))ok=true}});
+    return ok?out:null;
+  }
+  const msgText=c=>typeof c==='string'?c:Array.isArray(c)?c.map(p=>p&&p.type==='text'?p.text:'['+((p&&p.type)||'part')+']').join('\n'):c==null?'':JSON.stringify(c);
+  const capBlock=(title,inner)=>'<section class="cap-block"><h3>'+title+'</h3>'+inner+'</section>';
+  const capStat=(k,v)=>'<div class="cap-stat"><dt>'+esc(k)+'</dt><dd>'+esc(v)+'</dd></div>';
+  const capText=t=>'<div class="cap-text">'+esc(t)+'</div>';
+  // capParsed builds the parsed dialog view. ok is false when the bodies were not recognised, and the
+  // dialog then opens on the raw view.
+  function capParsed(e,cap){
+    const tok=e.tokens||{},req=parseJSON(cap.req_body);
+    let html='<dl class="cap-summary">'+capStat('Model',e.model||'—')+capStat('Target',e.target||'—')+capStat('Request',(e.method||'')+' '+(e.path||''))+capStat('Status',e.status)+capStat('Duration',fmtDur(e.duration_ms))+capStat('Time to first token',e.ttft_ms?fmtDur(e.ttft_ms):'—')+capStat('Tokens',fmtTok(tok.prompt_tokens)+' in, '+fmtTok(tok.completion_tokens)+' out'+(tok.cached_tokens?', '+fmtTok(tok.cached_tokens)+' cached':''))+capStat('Speed',fmtSpeed(tok.prompt_per_second)+' prompt, '+fmtSpeed(tok.tokens_per_second)+' generation')+'</dl>';
+    let ok=false;
+    if(IMG_PATH.test(e.path||'')){
+      const resp=parseJSON(cap.resp_body),imgs=imgSrcs(resp),r=req||{};
+      ok=!!(req||imgs.length);
+      const size=r.size||(r.width&&r.height?r.width+'×'+r.height:'—');
+      html+=capBlock('Image request','<dl class="cap-summary">'+capStat('Prompt',r.prompt||'—')+capStat('Size',size)+capStat('Count',r.n||imgs.length||'—')+'</dl>');
+      html+=capBlock('Result',imgs.length?imgs.map(s=>'<img class="cap-img" alt="Generated image" src="'+esc(s)+'">').join(''):'<p class="subtle">No image in the response body. It may be clipped or not JSON; the raw view has the bytes.</p>');
+    }else if(req&&Array.isArray(req.messages)){
+      const reply=chatReply(cap.resp_body);
+      ok=true;
+      const stop=req.stop==null?'—':Array.isArray(req.stop)?req.stop.join(', '):String(req.stop);
+      html+=capBlock('Parameters','<dl class="cap-summary">'+capStat('Temperature',req.temperature??'—')+capStat('Max tokens',req.max_tokens??req.max_completion_tokens??'—')+capStat('Stream',req.stream??'—')+capStat('Stop',stop)+'</dl>');
+      html+=capBlock('Messages',req.messages.map(m=>'<div class="cap-msg"><div class="cap-role">'+esc((m&&m.role)||'?')+'</div>'+capText(msgText(m&&m.content))+'</div>').join('')||'<p class="subtle">No messages.</p>');
+      html+=capBlock('Response',reply?(reply.think?'<details class="cap-think"><summary>Reasoning</summary>'+capText(reply.think)+'</details>':'')+(reply.text?capText(reply.text):'<p class="subtle">No text in the response.</p>')+'<p class="subtle">Finish reason: '+esc(reply.finish||'—')+'</p>':'<p class="subtle">The response is not a chat completion; the raw view has the body.</p>');
+    }
+    return {html,ok};
+  }
+
+  let capView='parsed';
+  function setCapView(v){
+    capView=v;
+    $('capture-parsed').hidden=v!=='parsed';
+    $('capture-raw').hidden=v!=='raw';
+    $('capture-toggle').textContent=v==='parsed'?'Show raw':'Show parsed';
+  }
+  $('capture-toggle').onclick=()=>setCapView(capView==='parsed'?'raw':'parsed');
   async function openCapture(id, row){
-    const dlg=$('activity-dialog');
+    const dlg=$('activity-dialog'),e=acts.get(String(id))||{};
     $('capture-title').textContent='Request '+id;
     $('capture-meta').textContent='Loading capture…';
-    $('capture-req').textContent='';
-    $('capture-resp').textContent='';
+    $('capture-parsed').innerHTML='';
+    ['capture-req','capture-resp','capture-req-h','capture-resp-h'].forEach(k=>{$(k).textContent=''});
+    $('capture-toggle').disabled=true;
+    setCapView('raw');
     if(row)row.setAttribute('aria-busy','true');
-    dlg.showModal();
+    if(!dlg.open)dlg.showModal();
     try{
       const cap=await json('/_router/activity/'+id);
-      $('capture-meta').textContent=(cap.truncated?'Bodies truncated to 256 KB. ':'')+'Click Close or press Escape.';
-      $('capture-req').textContent=prettyHeaders(cap.req_headers)+'\n\n'+prettyBody(cap.req_body);
-      $('capture-resp').textContent=prettyHeaders(cap.resp_headers)+'\n\n'+prettyBody(cap.resp_body);
-    }catch(e){
+      const p=capParsed(e,cap);
+      $('capture-meta').textContent=(cap.truncated?'Bodies truncated to 256 KB. ':'')+(p.ok?'':'Not a recognised chat or image body, showing the raw view. ');
+      $('capture-parsed').innerHTML=p.html;
+      $('capture-req').textContent=prettyBody(cap.req_body);
+      $('capture-resp').textContent=prettyBody(cap.resp_body);
+      $('capture-req-h').textContent=prettyHeaders(cap.req_headers);
+      $('capture-resp-h').textContent=prettyHeaders(cap.resp_headers);
+      $('capture-toggle').disabled=false;
+      setCapView(p.ok?'parsed':'raw');
+    }catch(err){
       $('capture-meta').textContent='Capture unavailable';
-      $('capture-req').textContent=e.message;
-      $('capture-resp').textContent='';
+      $('capture-req').textContent=err.message;
     }finally{
       if(row)row.removeAttribute('aria-busy');
     }
