@@ -728,14 +728,51 @@
     if(logRaf)cancelAnimationFrame(logRaf);
     logRaf=0;
   }
+  // Some proxies hold a chunked text/plain response until it ends, so the
+  // stream never answers. When no headers arrive in time, poll the JSON
+  // snapshot (which such proxies do pass) instead of sitting on "Connecting…".
+  const LOG_STREAM_WAIT=5000,LOG_POLL_MS=2000;
+  async function logPoll(ac){
+    if(logSrc&&!['proxy','upstream','mesh'].includes(logSrc)){
+      logStatus('Stream blocked · model logs need a direct connection');
+      return;
+    }
+    let prev=new Map();
+    const tick=async()=>{
+      try{
+        const r=await fetch('/_router/logs',{signal:ac.signal});
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        const j=await r.json();
+        const key={proxy:'entries',upstream:'upstream',mesh:'mesh'}[logSrc];
+        // shortcut: the combined view orders by the HH:MM:SS prefix, so lines either side of midnight can swap, upgrade if the snapshot carries a sequence number.
+        const lines=key?(j[key]||[]):[...(j.entries||[]),...(j.upstream||[]),...(j.mesh||[])].sort((a,b)=>a.slice(0,12)<b.slice(0,12)?-1:a.slice(0,12)>b.slice(0,12)?1:0);
+        const seen=new Map();
+        lines.forEach(l=>{
+          const n=(seen.get(l)||0)+1;
+          seen.set(l,n);
+          if(n>(prev.get(l)||0))logPush(l);
+        });
+        prev=seen;
+        logStatus('Polling every 2 s · live stream blocked');
+      }catch(e){
+        if(ac.signal.aborted)return;
+        logStatus('Polling failed · retrying');
+      }
+      logTimer=setTimeout(tick,LOG_POLL_MS);
+    };
+    tick();
+  }
   async function logStart(){
     logStop();
     logLines=[];logPending=[];logOut.innerHTML='';
     const ac=logAbort=new AbortController();
     logStatus('Connecting…');
+    let slow=false;
+    const wait=setTimeout(()=>{slow=true;ac.abort()},LOG_STREAM_WAIT);
     try{
       const url='/logs/stream'+(logSrc?'/'+logSrc.split('/').map(encodeURIComponent).join('/'):'');
       const r=await fetch(url,{signal:ac.signal});
+      clearTimeout(wait);
       if(!r.ok){logStatus((await r.text()).trim()||'HTTP '+r.status);return}
       logStatus('Live');
       const reader=r.body.getReader(),dec=new TextDecoder();
@@ -750,6 +787,12 @@
       }
       throw new Error('stream closed');
     }catch(e){
+      clearTimeout(wait);
+      if(slow&&logAbort===ac){
+        const next=logAbort=new AbortController();
+        logPoll(next);
+        return;
+      }
       if(ac.signal.aborted)return;
       logStatus('Disconnected · retrying');
       logTimer=setTimeout(logStart,2000);

@@ -1,17 +1,20 @@
 package router
 
 import (
+	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
 
 // The Logs page is one streamed transcript. The old five-card page and its
-// poll must not come back.
+// interval poll must not come back. The JSON snapshot endpoint stays allowed:
+// when a proxy holds the stream open, the page polls it as a fallback.
 func TestEmbeddedUILogsPage(t *testing.T) {
 	for _, gone := range []string{
 		"Logs &amp; metrics", "Logs & metrics",
 		"Router metrics", "Upstream metrics", "Router events", "Upstream logs", "Mesh logs",
-		"/_router/logs", "setInterval(logs",
+		"setInterval(logs",
 	} {
 		if strings.Contains(webUIHTML, gone) {
 			t.Errorf("embedded UI still contains %q", gone)
@@ -84,5 +87,46 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 	}
 	if strings.Contains(webUIHTML, "$('activity-rows').innerHTML=") {
 		t.Error("activity rows are rebuilt with innerHTML again")
+	}
+}
+
+// Some proxies hold a text/plain stream until it ends. The Logs page must stop
+// waiting for headers and poll the JSON snapshot instead, and say so.
+func TestEmbeddedUILogsPollFallback(t *testing.T) {
+	for _, want := range []string{
+		"LOG_STREAM_WAIT", "slow=true;ac.abort()", "logPoll(next)",
+		"fetch('/_router/logs'", "Polling every 2 s", "Stream blocked",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
+
+// The fallback reads these keys, so the snapshot must keep them.
+func TestRouterLogsSnapshotFeedsUIFallback(t *testing.T) {
+	srv, logger := logTestServer(t)
+	seedLogs(logger)
+	resp, err := http.Get(srv.URL + "/_router/logs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string][]string{}
+	for _, k := range []string{"entries", "upstream", "mesh"} {
+		var v []string
+		if err := json.Unmarshal(raw[k], &v); err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+		got[k] = v
+	}
+	for k, want := range map[string]string{"entries": "proxy-one", "upstream": "up-a1", "mesh": "mesh-one"} {
+		if len(got[k]) == 0 || !strings.Contains(strings.Join(got[k], "\n"), want) {
+			t.Errorf("%s missing %q: %v", k, want, got[k])
+		}
 	}
 }
