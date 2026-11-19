@@ -74,6 +74,8 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 			fmt.Fprintln(w, "OK")
 		}},
 		{"/metrics", handleMetrics(r)},
+		// Alias for the UI link: a fronting proxy may own /metrics but passes /_router/* through.
+		{"/_router/metrics", handleMetrics(r)},
 		{"/v1/models", handleModels(r)},
 		// Prefixes cover OpenAI /v1, versionless /v, and sdapi. Exact natives
 		// still need their own entries because they are not under those trees.

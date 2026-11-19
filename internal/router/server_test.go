@@ -70,6 +70,17 @@ func TestHandlerRouteTable(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "model_router_up") || !strings.Contains(rec.Body.String(), "model_router_model_running") {
 		t.Fatalf("/metrics: status=%d body=%s", rec.Code, rec.Body.String())
 	}
+
+	// The UI's "Raw metrics" link uses the /_router alias, which a fronting
+	// proxy cannot shadow. Same exposition as /metrics (compare a stable line).
+	alias := httptest.NewRecorder()
+	h.ServeHTTP(alias, httptest.NewRequest("GET", "/_router/metrics", nil))
+	if alias.Code != http.StatusOK || !strings.Contains(alias.Body.String(), "model_router_up") || !strings.Contains(alias.Body.String(), "model_router_model_running") {
+		t.Fatalf("/_router/metrics: status=%d body=%s", alias.Code, alias.Body.String())
+	}
+	if !strings.Contains(webUIHTML, `href="/_router/metrics"`) || strings.Contains(webUIHTML, `href="/metrics"`) {
+		t.Fatalf("UI Raw metrics link does not point at /_router/metrics")
+	}
 }
 
 func TestHandlerUnloadCallsUnload(t *testing.T) {
