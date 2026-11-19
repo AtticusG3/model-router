@@ -106,7 +106,7 @@ type Stanza struct {
 	MaxInstances int `yaml:"max_instances"`
 	// SpinUpSeconds is how long to wait for health before declaring failure.
 	SpinUpSeconds int `yaml:"spin_up_seconds"`
-	// APIType is one of chat | embedding | image | rerank | speech | transcription.
+	// APIType is one of chat | embedding | image | realtime | rerank | speech | transcription.
 	APIType string `yaml:"api_type"`
 	Match   Match  `yaml:"match"`
 	// HealthCheck is the URL path polled for readiness. Default "/health".

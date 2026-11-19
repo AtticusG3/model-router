@@ -53,6 +53,8 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		"window.sendTranscription", "/v1/audio/transcriptions", "api_type==='transcription'",
 		`id="pg-tab-load"`, `id="pg-load"`, `id="load-model"`, `id="load-output"`, `id="load-cancel"`,
 		"window.startLoad", "window.cancelLoad", "AbortController",
+		`id="pg-tab-realtime"`, `id="pg-realtime"`, `id="rt-model"`, `id="rt-output"`, `id="rt-close"`,
+		"window.openRealtime", "window.sendRealtime", "/v1/realtime", "api_type==='realtime'",
 		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
 	} {
 		if !strings.Contains(webUIHTML, want) {
