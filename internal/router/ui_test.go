@@ -47,6 +47,10 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		"window.sendEmbedding", "/v1/embeddings", "api_type==='embedding'",
 		`id="pg-tab-rerank"`, `id="pg-rerank"`, `id="rerank-model"`, `id="rerank-output"`,
 		"window.sendRerank", "/v1/rerank", "api_type==='rerank'",
+		`id="pg-tab-speech"`, `id="pg-speech"`, `id="speech-model"`, `id="speech-output"`,
+		"window.sendSpeech", "/v1/audio/speech", "api_type==='speech'",
+		`id="pg-tab-transcription"`, `id="pg-transcription"`, `id="transcribe-model"`, `id="transcribe-output"`,
+		"window.sendTranscription", "/v1/audio/transcriptions", "api_type==='transcription'",
 		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
 	} {
 		if !strings.Contains(webUIHTML, want) {
