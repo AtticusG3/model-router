@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"crypto/sha256"
 	"os"
 	"os/signal"
 	"sync"
@@ -23,6 +24,8 @@ type Reloader struct {
 	apply func(*Config) error
 	log   Logger
 
+	baseline fileStamp // the file as loaded; the watch starts here, not whenever the goroutine first runs
+
 	run       sync.Mutex // the watcher, SIGHUP and POST /_router/reload apply one at a time
 	mu        sync.Mutex
 	current   *Config
@@ -34,7 +37,9 @@ type Reloader struct {
 // NewReloader returns a reloader for path. current is the running config;
 // apply receives each newly validated config; an error means it was not taken.
 func NewReloader(path string, current *Config, apply func(*Config) error, log Logger) *Reloader {
-	return &Reloader{path: path, current: current, apply: apply, log: log}
+	r := &Reloader{path: path, current: current, apply: apply, log: log}
+	r.baseline, _ = r.statOK()
+	return r
 }
 
 // Reload validates the file and hands a valid config to the apply hook. The
@@ -85,8 +90,8 @@ func (r *Reloader) LastReload() (time.Time, string) {
 	return r.lastAt, r.lastErr
 }
 
-// Watch reloads on SIGHUP and whenever the file's mtime or size changes, until ctx ends.
-// shortcut: polls os.Stat instead of fsnotify (no new dependency, survives editor rename-saves), upgrade if sub-second latency matters.
+// Watch reloads on SIGHUP and whenever the file's content changes, until ctx ends.
+// shortcut: polls the file instead of using fsnotify (no new dependency, survives editor rename-saves), upgrade if sub-second latency matters.
 func (r *Reloader) Watch(ctx context.Context, every time.Duration) {
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
@@ -95,7 +100,7 @@ func (r *Reloader) Watch(ctx context.Context, every time.Duration) {
 }
 
 func (r *Reloader) watch(ctx context.Context, every time.Duration, hup <-chan os.Signal) {
-	last := r.stamp()
+	last := r.baseline
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
@@ -119,6 +124,7 @@ func (r *Reloader) watch(ctx context.Context, every time.Duration, hup <-chan os
 type fileStamp struct {
 	mod  time.Time
 	size int64
+	sum  [sha256.Size]byte
 }
 
 func (r *Reloader) statOK() (fileStamp, bool) {
@@ -126,7 +132,14 @@ func (r *Reloader) statOK() (fileStamp, bool) {
 	if err != nil {
 		return fileStamp{}, false
 	}
-	return fileStamp{fi.ModTime(), fi.Size()}, true
+	// Hash the content too: mtime+size alone miss a same-size edit written
+	// within the filesystem clock's resolution (ext4 stamps from the coarse
+	// clock, so two quick writes can share a timestamp).
+	data, err := os.ReadFile(r.path)
+	if err != nil {
+		return fileStamp{}, false
+	}
+	return fileStamp{fi.ModTime(), fi.Size(), sha256.Sum256(data)}, true
 }
 
 func (r *Reloader) stamp() fileStamp {

@@ -34,6 +34,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 				"telemetry":   r.TelemetrySnapshot(),
 				"peers":       peers,
 				"peers_fresh": fresh,
+				"reload":      r.reloadStatus(),
 			})
 		}},
 		{"/_router/backend-metrics", func(w http.ResponseWriter, req *http.Request) {
