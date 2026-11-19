@@ -229,7 +229,31 @@
       out.textContent=e.message;
     }
   };
-  window.generateImage=async function(){const out=$('image-output');out.className='image-result';out.textContent='Generating…';const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,width:Number($('image-width').value),height:Number($('image-height').value),steps:Number($('image-steps').value),seed:Number($('image-seed').value)};if($('image-model').value)body.model=$('image-model').value;try{const d=await json('/sdapi/v1/txt2img',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const imgs=d.images||[];out.innerHTML=imgs.length?imgs.map(x=>'<img alt="Generated image" src="data:image/png;base64,'+x+'">').join(''):'<span class="muted">No images returned.</span>'}catch(e){out.className='image-result error';out.textContent=e.message}};
+  // shortcut: fixed 3 minute client timeout and no progress text, make it a field if slow image models need longer.
+  let imageCtl;
+  window.cancelImage=()=>{if(imageCtl)imageCtl.abort()};
+  window.generateImage=async function(){
+    if(imageCtl)return;
+    const out=$('image-output'),go=$('image-generate'),stop=$('image-cancel');
+    out.className='image-result';out.textContent='Generating…';
+    const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,width:Number($('image-width').value),height:Number($('image-height').value),steps:Number($('image-steps').value),seed:Number($('image-seed').value)};
+    if($('image-model').value)body.model=$('image-model').value;
+    const ctl=imageCtl=new AbortController();
+    let timedOut=false;
+    const timer=setTimeout(()=>{timedOut=true;ctl.abort()},180000);
+    go.disabled=true;stop.disabled=false;
+    try{
+      const r=await fetch('/sdapi/v1/txt2img',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctl.signal});
+      const text=await r.text();
+      if(!r.ok){const wait=r.headers.get('Retry-After');throw new Error('HTTP '+r.status+': '+(text.trim()||r.statusText)+(wait?' (retry in '+wait+' s)':''))}
+      let d;try{d=JSON.parse(text)}catch(e){throw new Error('The response was not JSON.')}
+      const imgs=d.images||[];
+      out.innerHTML=imgs.length?imgs.map(x=>'<img alt="Generated image" src="data:image/png;base64,'+x+'">').join(''):'<span class="muted">No images returned.</span>'
+    }catch(e){
+      out.className='image-result error';
+      out.textContent=ctl.signal.aborted?(timedOut?'Timed out after 3 minutes with no answer.':'Cancelled.'):e.message
+    }finally{clearTimeout(timer);imageCtl=null;go.disabled=false;stop.disabled=true}
+  };
 
   // shortcut: shows the first 8 values only and no copy button, add a full-vector download if operators ask.
   window.sendEmbedding=async function(){

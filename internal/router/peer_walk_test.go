@@ -20,13 +20,14 @@ type walkPeer struct {
 	loadStatus int
 	retryAfter string
 	chatStatus int
+	chatBody   atomic.Value // last chat request body, as a string
 }
 
 func newWalkPeer(t *testing.T, loadStatus int, retryAfter string) *walkPeer {
 	t.Helper()
 	p := &walkPeer{loadStatus: loadStatus, retryAfter: retryAfter, chatStatus: http.StatusOK}
 	p.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		_, _ = io.Copy(io.Discard, req.Body)
+		raw, _ := io.ReadAll(req.Body)
 		if req.URL.Path == "/_router/load" {
 			p.loads.Add(1)
 			if p.retryAfter != "" {
@@ -35,6 +36,7 @@ func newWalkPeer(t *testing.T, loadStatus int, retryAfter string) *walkPeer {
 			w.WriteHeader(p.loadStatus)
 			return
 		}
+		p.chatBody.Store(string(raw))
 		p.chats.Add(1)
 		w.WriteHeader(p.chatStatus)
 		_, _ = w.Write([]byte("served"))

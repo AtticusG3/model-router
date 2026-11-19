@@ -59,6 +59,7 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		`id="pg-tab-realtime"`, `id="pg-realtime"`, `id="rt-model"`, `id="rt-output"`, `id="rt-close"`,
 		"window.openRealtime", "window.sendRealtime", "/v1/realtime", "api_type==='realtime'",
 		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
+		`id="image-cancel"`, "window.cancelImage", "Retry-After",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)

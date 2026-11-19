@@ -116,8 +116,17 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 	}
 
 	loggedWait := false
+	var deadline time.Time
 	hardRetries := 0
 	var lastErr error
+	// waitCtx carries the request's admit deadline so waitAdmit unblocks when
+	// the budget ends, not just when its 200 ms tick fires.
+	waitCtx := ctx
+	if d, ok := ctx.Value(admitDeadlineKey{}).(time.Time); ok {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithDeadline(ctx, d)
+		defer cancel()
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			if lastErr != nil {
@@ -202,13 +211,26 @@ func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
 			if lastErr != nil {
 				return -1, lastErr
 			}
-			return -1, fmt.Errorf("no GPU has %d MB free for %s", s.VramMB, key)
+			return -1, &admitError{fmt.Sprintf("no GPU has %d MB free for %s", s.VramMB, key)}
 		}
 		if !loggedWait {
 			r.logger.Infof("waiting for %d MB for %s (GPU busy)", s.VramMB, key)
 			loggedWait = true
+			deadline = time.Now().Add(r.cfg().AdmitTimeout())
+			// A request that already waited on peers keeps one admit budget.
+			if d, ok := ctx.Value(admitDeadlineKey{}).(time.Time); ok && d.Before(deadline) {
+				deadline = d
+			}
 		}
-		if err := r.waitAdmit(ctx); err != nil {
+		if time.Now().After(deadline) {
+			r.logger.Warnf("gave up waiting for %d MB for %s (GPU busy)", s.VramMB, key)
+			return -1, &admitError{fmt.Sprintf("timed out waiting for %d MB for %s (GPU busy)", s.VramMB, key)}
+		}
+		if err := r.waitAdmit(waitCtx); err != nil {
+			if time.Now().After(deadline) {
+				r.logger.Warnf("gave up waiting for %d MB for %s (GPU busy)", s.VramMB, key)
+				return -1, &admitError{fmt.Sprintf("timed out waiting for %d MB for %s (GPU busy)", s.VramMB, key)}
+			}
 			return -1, err
 		}
 	}
@@ -222,9 +244,22 @@ func stanzaGPUs(s *config.Stanza) []int {
 	return idxs
 }
 
+// pinnedMB is the VRAM pinned models other than s hold on gpu. A pinned
+// stanza is never evicted, so that room never comes back.
+func (r *Router) pinnedMB(gpu int, s *config.Stanza) int64 {
+	var mb int64
+	for _, id := range r.ledger.occupantsOnGPU(gpu, "") {
+		if o := r.stanzaOf(id); o != nil && o.Pin && o.ModelID != s.ModelID {
+			mb += r.ledger.reservationUsed(id)[gpu]
+		}
+	}
+	return mb
+}
+
 // canEventuallyAdmit is true unless we know the pinned (or every) card is
-// smaller than s after headroom. Missing telemetry and a missing pinned GPU
-// wait rather than 503: occupied VRAM can free after idle eviction.
+// smaller than s after headroom and the VRAM pinned models hold. Missing
+// telemetry and a missing pinned GPU wait rather than 503: other occupied VRAM
+// can free after idle eviction.
 func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 	idxs := deviceIndexes(s.Device)
 	gpus := r.ledger.GPUs()
@@ -257,7 +292,7 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 				need = s.VramMB * totals[idx] / capSum
 				assigned += need
 			}
-			if usable(totals[idx]) < need {
+			if usable(totals[idx])-r.pinnedMB(idx, s) < need {
 				return false
 			}
 		}
@@ -276,7 +311,7 @@ func (r *Router) canEventuallyAdmit(s *config.Stanza) bool {
 			continue
 		}
 		saw = true
-		if total <= 0 || usable(total) >= s.VramMB {
+		if total <= 0 || usable(total)-r.pinnedMB(idx, s) >= s.VramMB {
 			return true
 		}
 	}
@@ -879,6 +914,9 @@ func (r *Router) localCanServe(s *config.Stanza) bool {
 				continue
 			}
 			seen[id] = true
+			if o := r.stanzaOf(id); o != nil && o.Pin {
+				continue // never evicted; canEventuallyAdmit counts its room as gone
+			}
 			if r.protected(id) {
 				blocked = true
 				continue
@@ -1119,10 +1157,8 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
 	// If this GPU cannot admit now, try an idle peer before waiting locally.
 	if !incomingPeer {
-		if s := r.cfg().Stanza(modelID); s != nil && !r.localCanServe(s) {
-			if r.serveSpill(w, req, modelID) {
-				return
-			}
+		if s := r.cfg().Stanza(modelID); s != nil && !r.localCanServe(s) && r.spillWhileBlocked(w, req, s) {
+			return
 		}
 	}
 	// A free slot on a running instance, or a new instance on a free GPU,
@@ -1152,6 +1188,60 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 			return
 		}
 		loadFailed(w, err)
+	}
+}
+
+// admitDeadlineKey carries the end of a request's admit budget in its context,
+// so time spent waiting on peers is not given again to the local admission wait.
+type admitDeadlineKey struct{}
+
+// spillRetryInterval is how often a request that local VRAM cannot take asks
+// the peers again. A var so tests can shorten it.
+var spillRetryInterval = 3 * time.Second
+
+// spillWhileBlocked keeps offering req to peers until one serves it, local
+// room opens (false: carry on locally), the client goes, or the admit timeout
+// ends (503 with Retry-After). True means the response is written.
+func (r *Router) spillWhileBlocked(w http.ResponseWriter, req *http.Request, s *config.Stanza) bool {
+	body, err := readBody(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return true
+	}
+	// Every attempt, and the local path after it, starts from the original
+	// body: an earlier attempt may have read it or rewritten its model field.
+	resetBody := func() {
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		req.ContentLength = int64(len(body))
+	}
+	deadline := time.Now().Add(r.cfg().AdmitTimeout())
+	// One admit budget for the peer walk and the local admit that follows:
+	// peer loads and the local wait both read it from the request.
+	*req = *req.WithContext(context.WithValue(req.Context(), admitDeadlineKey{}, deadline))
+	var askedPeers time.Time
+	for {
+		if time.Since(askedPeers) >= spillRetryInterval {
+			askedPeers = time.Now()
+			resetBody()
+			if r.serveSpill(w, req, s.ModelID) {
+				return true
+			}
+		}
+		resetBody()
+		if r.localCanServe(s) {
+			return false
+		}
+		if time.Now().After(deadline) {
+			r.logger.Warnf("no room for %s here and no peer took it; giving up", s.ModelID)
+			loadFailed(w, &admitError{fmt.Sprintf("no GPU can take %s now and no peer served it", s.ModelID)})
+			return true
+		}
+		// Wake on the occupancy poke (or the 200 ms fallback) like waitAdmit,
+		// so room that opens locally is taken at once rather than on the next
+		// poll; the peers are still asked again every spillRetryInterval.
+		if err := r.waitAdmit(req.Context()); err != nil {
+			return true
+		}
 	}
 }
 
@@ -1343,8 +1433,30 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 	if last == nil {
 		// Nothing was asked: every router peer is inside a window it sent.
 		last, retry = fmt.Errorf("no node can serve %q", modelID), soonest
+		r.logger.Meshf("peer walk %s: no peer chosen (%s)", modelID, r.noPeerReason(modelID))
 	}
 	return false, last, retry
+}
+
+// noPeerReason says why each configured peer was left out of a walk.
+func (r *Router) noPeerReason(modelID string) string {
+	var out []string
+	for _, p := range r.cfg().Peers {
+		switch rem := r.peerCooling(p.Name, modelID); {
+		case !r.peerHasModel(&p, modelID):
+			out = append(out, p.Name+": does not advertise it")
+		case p.Kind != "openai" && rem > 0:
+			out = append(out, fmt.Sprintf("%s: cooling for %ds", p.Name, int(rem.Seconds())))
+		case p.Kind != "openai" && !r.peers.Fresh(p.Name):
+			out = append(out, p.Name+": telemetry stale")
+		default:
+			out = append(out, p.Name+": refused")
+		}
+	}
+	if len(out) == 0 {
+		return "no peers configured"
+	}
+	return strings.Join(out, ", ")
 }
 
 func (r *Router) spillTargets(failedLocal string) []string {
@@ -1525,6 +1637,13 @@ func jsonSetField(raw []byte, field, value string) ([]byte, bool) {
 // peerLoad asks a peer to load a model. The peer's own admission control
 // decides; we only use cached telemetry for *candidate* selection.
 func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) error {
+	// A request already waiting on peers keeps one admit budget: its load
+	// call must not outlive it.
+	if d, ok := ctx.Value(admitDeadlineKey{}).(time.Time); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, d)
+		defer cancel()
+	}
 	body, _ := json.Marshal(map[string]string{"model_id": modelID})
 	url := p.BaseURL + "/_router/load"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

@@ -575,3 +575,20 @@ func TestFilterIDsExpandModelID(t *testing.T) {
 		t.Error("a:high does not resolve to stanza a")
 	}
 }
+
+func TestAdmitTimeoutDefaultsAndOverrides(t *testing.T) {
+	cfg, err := Parse([]byte("start_port: 5900\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AdmitTimeout() != DefaultAdmitTimeout {
+		t.Fatalf("default = %v, want %v", cfg.AdmitTimeout(), DefaultAdmitTimeout)
+	}
+	cfg, err = Parse([]byte("start_port: 5900\nadmit_timeout_seconds: 7\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AdmitTimeout().Seconds() != 7 {
+		t.Fatalf("override = %v, want 7s", cfg.AdmitTimeout())
+	}
+}
