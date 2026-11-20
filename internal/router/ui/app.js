@@ -425,6 +425,7 @@
   function fmtDur(ms){ms=Number(ms)||0;if(ms<1000)return ms+' ms';if(ms<60000)return (ms/1000).toFixed(2)+' s';return Math.floor(ms/60000)+'m '+((ms/1000)%60).toFixed(0)+'s'}
   function fmtSpeed(v){v=Number(v);return v>0?v.toFixed(v>=100?0:1)+' t/s':'—'}
   function fmtTok(v){v=Number(v)||0;return v>0?v.toLocaleString():'—'}
+  function fmtBytes(v){v=Number(v)||0;if(!v)return '—';if(v<1024)return v+' B';if(v<1048576)return (v/1024).toFixed(1)+' KB';if(v<1073741824)return (v/1048576).toFixed(1)+' MB';return (v/1073741824).toFixed(1)+' GB'}
   function fmtTime(ts){const d=new Date(ts);return isNaN(d)?String(ts||''):d.toLocaleTimeString()}
   function prettyBody(raw){
     const s=String(raw??'');
@@ -620,7 +621,7 @@
   // dialog then opens on the raw view.
   function capParsed(e,cap){
     const tok=e.tokens||{},req=parseJSON(cap.req_body);
-    let html='<dl class="cap-summary">'+capStat('Model',e.model||'—')+capStat('Target',e.target||'—')+capStat('Request',(e.method||'')+' '+(e.path||''))+capStat('Status',e.status)+capStat('Duration',fmtDur(e.duration_ms))+capStat('Time to first token',e.ttft_ms?fmtDur(e.ttft_ms):'—')+capStat('Tokens',fmtTok(tok.prompt_tokens)+' in, '+fmtTok(tok.completion_tokens)+' out'+(tok.cached_tokens?', '+fmtTok(tok.cached_tokens)+' cached':''))+capStat('Speed',fmtSpeed(tok.prompt_per_second)+' prompt, '+fmtSpeed(tok.tokens_per_second)+' generation')+'</dl>';
+    let html='<dl class="cap-summary">'+capStat('Model',e.model||'—')+capStat('Target',e.target||'—')+capStat('Request',(e.method||'')+' '+(e.path||''))+capStat('Status',e.status)+capStat('Duration',fmtDur(e.duration_ms))+capStat('Time to first token',e.ttft_ms?fmtDur(e.ttft_ms):'—')+capStat('Tokens',fmtTok(tok.prompt_tokens)+' in, '+fmtTok(tok.completion_tokens)+' out'+(tok.cached_tokens?', '+fmtTok(tok.cached_tokens)+' cached':''))+capStat('Speed',fmtSpeed(tok.prompt_per_second)+' prompt, '+fmtSpeed(tok.tokens_per_second)+' generation')+capStat('Content type',e.content_type||'—')+capStat('Size',fmtBytes(e.resp_bytes))+'</dl>';
     let ok=false;
     if(IMG_PATH.test(e.path||'')){
       const resp=parseJSON(cap.resp_body),imgs=imgSrcs(resp),r=req||{};
@@ -658,6 +659,14 @@
     if(row)row.setAttribute('aria-busy','true');
     if(!dlg.open)dlg.showModal();
     try{
+      if(!e.has_capture){
+        // Nothing was stored for this row (a media response with no request
+        // body, or a capture over the ring budget): show the row summary.
+        $('capture-meta').textContent='No captured body.';
+        $('capture-parsed').innerHTML=capParsed(e,{req_body:'',resp_body:''}).html;
+        setCapView('parsed');
+        return;
+      }
       const cap=await json('/_router/activity/'+id);
       const p=capParsed(e,cap);
       $('capture-meta').textContent=(cap.truncated?'Bodies truncated to 256 KB. ':'')+(p.ok?'':'Not a recognised chat or image body, showing the raw view. ');

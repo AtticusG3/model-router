@@ -179,6 +179,9 @@ type Stanza struct {
 	// Filters rewrite the request body before the backend sees it. Its
 	// SetParamsByID mints extra ids that resolve to this stanza.
 	Filters Filters `yaml:"filters"`
+	// MaxRequestBodyMB overrides the top-level max_request_body_mb for this
+	// stanza. 0 = inherit.
+	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
 
 	// InstancePorts holds the backend port of each instance; [0] is Port.
 	// Derived by Parse from MaxInstances.
@@ -378,6 +381,10 @@ type Config struct {
 	// StreamLoadProgress writes loading updates into a streaming chat response
 	// while the chosen local backend spins up. Default false.
 	StreamLoadProgress bool `yaml:"stream_load_progress"`
+	// MaxRequestBodyMB caps the request body the router will read for any
+	// stanza (a stanza may override it). Over the cap the client gets 413
+	// before any model is loaded. Default 256.
+	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`
@@ -387,6 +394,9 @@ type Config struct {
 	aliasByID  map[string]*Stanza
 	poolByName map[string]*Pool
 	peerByName map[string]*Peer
+	// maxBodyBytes is the largest cap any stanza accepts, so the matcher can
+	// bound a read before it knows which stanza matched.
+	maxBodyBytes int64
 }
 
 // Defaults applied by Load when fields are unset.
@@ -397,6 +407,11 @@ const (
 	DefaultPeerSync    = 5
 	DefaultPeerStale   = 15
 	DefaultStartPort   = 5800
+	// DefaultMaxRequestBodyMB caps a request body when max_request_body_mb is unset.
+	DefaultMaxRequestBodyMB = 256
+	// MaxRequestBodyMBLimit (1 TiB) keeps the cap in bytes, plus one for the
+	// over-cap probe read, well inside int64.
+	MaxRequestBodyMBLimit = 1 << 20
 )
 
 var portMacroRe = regexp.MustCompile(`\{port\}|\$\{PORT\}`)
@@ -420,6 +435,24 @@ func (c *Config) AdmitTimeout() time.Duration {
 	}
 	return time.Duration(c.AdmitTimeoutSeconds) * time.Second
 }
+
+// RequestBodyLimit is the byte cap for a request resolved to stanza id (empty
+// for a pool or peer): the stanza's max_request_body_mb override, else the
+// top-level value.
+func (c *Config) RequestBodyLimit(stanzaID string) int64 {
+	mb := c.MaxRequestBodyMB
+	if s := c.stanzaByID[stanzaID]; s != nil && s.MaxRequestBodyMB > 0 {
+		mb = s.MaxRequestBodyMB
+	}
+	if mb <= 0 {
+		mb = DefaultMaxRequestBodyMB
+	}
+	return int64(mb) << 20
+}
+
+// MaxRequestBodyBytes is the largest cap any stanza accepts, so the matcher can
+// bound a read before it knows which stanza matched.
+func (c *Config) MaxRequestBodyBytes() int64 { return c.maxBodyBytes }
 
 // Parse parses config bytes and applies defaults/derivation.
 func Parse(raw []byte) (*Config, error) {
@@ -468,6 +501,12 @@ func Parse(raw []byte) (*Config, error) {
 
 	if cfg.HeadroomMB < 0 {
 		return nil, fmt.Errorf("headroom_mb must not be negative")
+	}
+	if cfg.MaxRequestBodyMB == 0 {
+		cfg.MaxRequestBodyMB = DefaultMaxRequestBodyMB
+	}
+	if cfg.MaxRequestBodyMB < 0 || cfg.MaxRequestBodyMB > MaxRequestBodyMBLimit {
+		return nil, fmt.Errorf("max_request_body_mb must be between 0 and %d", MaxRequestBodyMBLimit)
 	}
 
 	reserved := map[int]bool{}
@@ -542,6 +581,9 @@ func Parse(raw []byte) (*Config, error) {
 		if err := s.validatePlacement(); err != nil {
 			return nil, err
 		}
+		if s.MaxRequestBodyMB < 0 || s.MaxRequestBodyMB > MaxRequestBodyMBLimit {
+			return nil, fmt.Errorf("stanza %q: max_request_body_mb must be between 0 and %d", s.ModelID, MaxRequestBodyMBLimit)
+		}
 		customProxy := s.Proxy != ""
 		// Allocate a port.
 		if s.Port == 0 {
@@ -574,6 +616,15 @@ func Parse(raw []byte) (*Config, error) {
 		cfg.stanzaByID[s.ModelID] = s
 	}
 	cfg.allocateInstancePorts(reserved)
+
+	// The largest cap any stanza accepts, so the matcher can bound a read
+	// before it knows which stanza matched.
+	cfg.maxBodyBytes = int64(cfg.MaxRequestBodyMB) << 20
+	for i := range cfg.Stanzas {
+		if b := int64(cfg.Stanzas[i].MaxRequestBodyMB) << 20; b > cfg.maxBodyBytes {
+			cfg.maxBodyBytes = b
+		}
+	}
 
 	cfg.poolByName = map[string]*Pool{}
 	for name, p := range cfg.Pools {

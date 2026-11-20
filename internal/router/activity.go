@@ -2,9 +2,12 @@ package router
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"image"
 	"image/jpeg"
 	_ "image/png"
@@ -27,6 +30,9 @@ const (
 	maxImageBody = 32 * 1024 * 1024
 	// maxThumbEdge is the long edge of a stored thumbnail, in pixels.
 	maxThumbEdge = 160
+	// maxHashBytes is how much of an uncaptured media response is hashed for
+	// the Activity row: an identity check, not a checksum of the whole body.
+	maxHashBytes = 64 << 10
 )
 
 var sensitiveHeaders = map[string]bool{
@@ -66,6 +72,12 @@ type ActivityEntry struct {
 	TTFTMs     int        `json:"ttft_ms,omitempty"`
 	Tokens     TokenStats `json:"tokens"`
 	HasCapture bool       `json:"has_capture"`
+	// RespBytes is the response body size when the body was not captured: a
+	// media response keeps only the content type, byte count and BodyHash.
+	RespBytes int64 `json:"resp_bytes,omitempty"`
+	// BodyHash is a hexadecimal prefix of the media response body hash, so an
+	// operator can tell two uncaptured responses apart.
+	BodyHash string `json:"body_hash,omitempty"`
 	// ThumbIssue says why an image response has no thumbnail — a decode or
 	// size failure. Empty when the row is not an image request or a thumbnail
 	// was stored, so operators can tell a failure from "not an image".
@@ -197,14 +209,29 @@ type activityWriter struct {
 	img          bytes.Buffer
 	imgMax       int
 	imgTruncated bool
+	// A media response (audio, video, octet-stream) is never captured: only
+	// its byte count and a hash prefix are kept.
+	media     bool
+	sniffed   string // body type sniffed when the head carried no Content-Type
+	respBytes int64
+	hash      hash.Hash
+	hashed    int
 }
 
 func (w *activityWriter) WriteHeader(code int) {
+	// A forwarded interim response (100 Continue) is not the final head: pass
+	// it through, but do not record it as the status or pick the body kind
+	// from its empty headers.
+	if code < 200 {
+		w.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if w.wroteHead {
 		return
 	}
 	w.wroteHead = true
 	w.status = code
+	w.media = isMediaResponse(w.Header().Get("Content-Type"))
 	w.ResponseWriter.WriteHeader(code)
 }
 
@@ -212,7 +239,44 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 	if !w.wroteHead {
 		w.WriteHeader(http.StatusOK)
 	}
+	if w.sniffed == "" && len(p) > 0 && w.Header().Get("Content-Type") == "" {
+		// No Content-Type on the head: net/http sniffs the first bytes for the
+		// client, so pick the body kind from the same sniff.
+		w.sniffed = http.DetectContentType(p)
+		w.media = isMediaResponse(w.sniffed)
+	}
 	w.noteFirstToken(p)
+	if w.media {
+		w.captureMedia(p)
+	} else {
+		w.captureBody(p)
+	}
+	// No flush here: proxyTo's ReverseProxy (FlushInterval -1) already flushes
+	// each chunk through Flush below.
+	return w.ResponseWriter.Write(p)
+}
+
+// captureMedia counts the response bytes and hashes the first maxHashBytes,
+// without holding the body.
+func (w *activityWriter) captureMedia(p []byte) {
+	w.respBytes += int64(len(p))
+	if w.hashed >= maxHashBytes {
+		return
+	}
+	n := maxHashBytes - w.hashed
+	if n > len(p) {
+		n = len(p)
+	}
+	if w.hash == nil {
+		w.hash = sha256.New()
+	}
+	w.hash.Write(p[:n])
+	w.hashed += n
+}
+
+// captureBody buffers the response for the activity capture, clipped to max,
+// and fills the extra image buffer for a thumbnail.
+func (w *activityWriter) captureBody(p []byte) {
 	if w.imgMax > 0 {
 		n := w.imgMax - w.img.Len()
 		if n > len(p) {
@@ -235,7 +299,27 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 	default:
 		w.body.Write(p)
 	}
-	return w.ResponseWriter.Write(p)
+}
+
+// bodyHash is a hexadecimal prefix of the media response hash, "" when no media
+// body was written.
+func (w *activityWriter) bodyHash() string {
+	if w.hash == nil {
+		return ""
+	}
+	return hex.EncodeToString(w.hash.Sum(nil))[:16]
+}
+
+// isMediaResponse reports whether a response body is binary media the router
+// never captures in memory: audio, video, or an opaque octet stream.
+func isMediaResponse(contentType string) bool {
+	ct := strings.ToLower(strings.TrimSpace(contentType))
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = strings.TrimSpace(ct[:i])
+	}
+	return strings.HasPrefix(ct, "audio/") ||
+		strings.HasPrefix(ct, "video/") ||
+		ct == "application/octet-stream"
 }
 
 func (w *activityWriter) Flush() {
@@ -636,6 +720,9 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		status = http.StatusOK
 	}
 	ct := rec.Header().Get("Content-Type")
+	if ct == "" {
+		ct = rec.sniffed
+	}
 	tokens := parseTokenStats(rec.body.Bytes(), ct)
 	ttft := rec.ttftMs
 	if !rec.ttftSet {
@@ -661,6 +748,8 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	if r.activity == nil || !isGenerationRequest(req.Method, req.URL.Path) {
 		return
 	}
+	entry.RespBytes = rec.respBytes
+	entry.BodyHash = rec.bodyHash()
 	reqStr, clipped := clipBody(reqBody)
 	respStr := rec.body.String()
 	thumb, issue := thumbFromImageResponse(rec.img.Bytes())
@@ -681,23 +770,61 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	if r.activity == nil {
 		return w, func() {}
 	}
-	reqBody, err := io.ReadAll(req.Body)
-	if err != nil {
-		reqBody = nil
-	}
-	req.Body = io.NopCloser(bytes.NewReader(reqBody))
-	reqTrunc := false
-	captureReq := reqBody
-	if len(captureReq) > maxCaptureBody {
-		captureReq = captureReq[:maxCaptureBody]
-		reqTrunc = true
-	}
 	started := time.Now()
 	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody, started: started}
 	if isImageRequest(req.URL.Path) {
 		rec.imgMax = maxImageBody
 	}
+	// Tee the request body as the proxy streams it, instead of reading it all
+	// into memory first, so a large upload is not buffered a second time.
+	var cap *captureReader
+	if req.Body != nil && req.Body != http.NoBody {
+		cap = &captureReader{rc: req.Body, max: maxCaptureBody}
+		req.Body = cap
+	}
 	return rec, func() {
-		r.recordProxy(req, rec, started, captureReq, reqTrunc, model, target)
+		var reqBody []byte
+		var reqTrunc bool
+		if cap != nil {
+			// A backend that answers before reading the upload leaves the body
+			// undrained: flag the capture as partial rather than complete.
+			reqBody, reqTrunc = cap.buf.Bytes(), cap.truncated || (!cap.eof && req.ContentLength != 0)
+		}
+		r.recordProxy(req, rec, started, reqBody, reqTrunc, model, target)
 	}
 }
+
+// captureReader passes the request body through to the backend while keeping
+// the first maxCaptureBody bytes for the activity capture.
+type captureReader struct {
+	rc        io.ReadCloser
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+	eof       bool // the body was read to its end
+}
+
+func (c *captureReader) Read(p []byte) (int, error) {
+	n, err := c.rc.Read(p)
+	if n > 0 {
+		remain := c.max - c.buf.Len()
+		switch {
+		case remain <= 0:
+			c.truncated = true
+		case n > remain:
+			c.buf.Write(p[:remain])
+			c.truncated = true
+		default:
+			c.buf.Write(p[:n])
+		}
+	}
+	if err == io.EOF {
+		c.eof = true
+	} else if err != nil {
+		// The client went away or the body hit the cap: the capture is partial.
+		c.truncated = true
+	}
+	return n, err
+}
+
+func (c *captureReader) Close() error { return c.rc.Close() }

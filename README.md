@@ -127,7 +127,9 @@ The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
 click a row for request/response). Captures live in memory only (256 KB per
 body, 8 MB total) and reset on restart. Image responses also keep a downscaled
-thumbnail (long edge 160 px, JPEG), counted in that 8 MB. Hard-refresh `/ui/`
+thumbnail (long edge 160 px, JPEG), counted in that 8 MB. A media response
+(`audio/*`, `video/*`, `application/octet-stream`) keeps only its content type,
+byte count and a body hash. Hard-refresh `/ui/`
 after deploying a new binary.
 
 ## Config
@@ -143,6 +145,13 @@ stanzas). The swap procedure is in `deploy/swap-over.md`.
 `admit_timeout_seconds` (top level, default 60) is the longest a request waits for
 local GPU room while peers are re-tried. After that it gets `503` with
 `Retry-After`. A model that pinned models leave no room for fails at once.
+
+`max_request_body_mb` (top level, default 256, at most 1048576 = 1 TiB; a stanza may override it) caps
+one request body. Over the cap the client gets `413` before any model is
+loaded. A multipart upload is streamed or spooled to a temp file, not held in
+RAM. Media responses (`audio/*`, `video/*`, `application/octet-stream`) are
+flushed per chunk and their Activity row keeps the content type, byte count and
+a body hash instead of the body.
 
 `stream_load_progress: true` (top level, default off) writes "loading model… N%"
 chunks into the reasoning stream of a `stream: true` chat completion while its

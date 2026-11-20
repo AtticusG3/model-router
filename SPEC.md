@@ -95,6 +95,7 @@ listen: 0.0.0.0:18080
 start_port: 5800          # base for auto-allocated ports
 reserved_ports: [8081, 6333]
 headroom_mb: 0            # MB left unbooked on every GPU; default 0
+max_request_body_mb: 256  # cap on one request body; over it is 413 before any load; default 256
 preload: [intent-model]   # load at startup; restored in config order if evicted
 
 telemetry:
@@ -121,6 +122,7 @@ stanzas:
     health_check: /health
     idle_ttl_seconds: 600  # 0 = resident, never swept
     hold_seconds: 0        # seconds after healthy during which eviction skips it
+    max_request_body_mb: 256  # optional: override the top-level body cap
     port: 5901             # 0 = next free port from start_port
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
 
@@ -202,10 +204,24 @@ and `{gpu}` (the index chosen at spawn). A multi-instance stanza needs
 `model_id` and aliases must not contain `#`. That character marks instance
 keys (`model#2`). Instance 0 keeps the bare id.
 
+`max_request_body_mb` (top level, default 256, at most 1048576 = 1 TiB) caps one request body; a stanza
+may override it. Over the cap the client gets `413` before any model is loaded.
+JSON and form bodies are read into memory (the filters rewrite them). A
+multipart body is read only as far as its `model` field and the rest is
+streamed to the backend; when the `model` part comes after a file part the body
+is spooled to a temp file (deleted when the request ends) instead of RAM. A
+`?model=` query skips that spool, so it wins over a `model` part past the
+first 64 KB. A
+media response (`audio/*`, `video/*`, `application/octet-stream`) is flushed per
+chunk and never captured; its Activity row keeps the content type, byte count
+and a body hash prefix.
+
 ## Request flow
 
 1. The client hits this node's HTTP API.
-2. The matcher reads the body, then the URL.
+2. The matcher reads the body (JSON and form bodies in full, up to
+   `max_request_body_mb`; a multipart body only as far as its `model` field),
+   then the URL.
    - JSON: the first configured body field that is a non-empty string
      (`model`, plus any stanza `body_field`).
    - Form and multipart: the `model` field, then the query.
@@ -481,8 +497,10 @@ Unload start and stop this node's stanzas only. Choosing a remote `model_id`
 in the Playground is an ordinary `/v1/...` request, so this node
 spills or proxies. Activity keeps the last 200 proxied requests, with at
 most 256 KB per body and 8 MB of captures, in memory only. An image response
-also keeps a downscaled thumbnail (160 px long edge, JPEG) in that budget. It
-resets on restart. Authorization and cookie headers are not stored.
+also keeps a downscaled thumbnail (160 px long edge, JPEG) in that budget. A
+media response (`audio/*`, `video/*`, `application/octet-stream`) is not
+captured; its row keeps the content type, byte count and a body hash prefix.
+It resets on restart. Authorization and cookie headers are not stored.
 
 ## Still out of scope
 
