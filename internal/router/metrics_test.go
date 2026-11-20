@@ -88,6 +88,30 @@ func TestMetricsEmptyModelIsUnknown(t *testing.T) {
 	}
 }
 
+// Media rows add a count and media seconds per api_type; a voice library
+// change is not an api_type and is left out.
+func TestMetricsMediaPerAPIType(t *testing.T) {
+	m := NewMetrics()
+	m.Observe(ActivityEntry{Model: "voice", Status: 200, Media: &MediaStats{Kind: "speech", Seconds: 1.5}})
+	m.Observe(ActivityEntry{Model: "voice", Status: 200, Media: &MediaStats{Kind: "speech", Seconds: 2}})
+	m.Observe(ActivityEntry{Model: "live", Status: 101, Media: &MediaStats{Kind: "realtime", Seconds: 30}})
+	m.Observe(ActivityEntry{Model: "voice", Status: 200, Media: &MediaStats{Kind: voiceAdminKind}})
+	out := m.Render("n")
+	for _, want := range []string{
+		`model_router_media_requests_total{api_type="speech"} 2`,
+		`model_router_media_seconds_total{api_type="speech"} 3.500`,
+		`model_router_media_requests_total{api_type="realtime"} 1`,
+		`model_router_media_seconds_total{api_type="realtime"} 30.000`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing %q\n---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `api_type="admin"`) {
+		t.Fatalf("voice admin row counted as an api_type:\n%s", out)
+	}
+}
+
 func TestMetricsNilSafe(t *testing.T) {
 	var m *Metrics
 	m.IncInflight() // must not panic; callers guard with a nil check but be safe
