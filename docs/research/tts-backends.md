@@ -87,8 +87,10 @@ Qwen3-TTS-12Hz-1.7B-Base GGUF, on the 32 GB sm_70 cards (`device: "1|2"`), or
 on CPU.** It is the same binary family the router already runs for chat,
 embedding and rerank, it has `/health` (503 while loading, 200 when ready), and
 its CUDA build already runs on the V100s on this host. v1.0.0 (2026-11-13) added
-an OpenAI-compatible `/v1/audio/speech` that converts to its native `/tts`, with
-`speaker_ref_b64` for inline cloning and `stream_format: "audio"` for streaming.
+an OpenAI-compatible `/v1/audio/speech` that converts to its native `/tts`
+(ggml-org/llama.cpp PR #31763) `(verify)`, with `speaker_ref_b64` for inline
+cloning and `stream_format: "audio"` for streaming `(verify)`: these facts come
+from release notes on a mirror, not yet checked against the upstream PR.
 It serves the **same model weights**, so the same reference clip gives the same
 cast voice. MIT code. It is one week old, so it is the fallback, not the
 primary.
@@ -121,7 +123,7 @@ all, and the expected VRAM. Licence is code / weights.
 | Name | Repo | Licence | Last release / commit | API shape | Sync / async | Streaming | 3090 (sm_86) | V100 (sm_70) | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | vLLM-Omni + Qwen3-TTS 1.7B | https://github.com/vllm-project/vllm-omni, https://github.com/QwenLM/Qwen3-TTS | Apache-2.0 / Apache-2.0 | vLLM-Omni 0.32.0 (date `(verify)`); Qwen3-TTS Jan 2026 | OpenAI `/v1/audio/speech` plus `/v1/audio/voices`, `/batch`, websocket `/stream` | sync (batched inside) | raw PCM/WAV chunks, SSE, websocket | yes; ~3.9 GB used, budget per stage (§4) | **no** (current docs: cc 7.5+) | **primary** |
-| llama.cpp `llama-server` + Qwen3-TTS Base GGUF | https://github.com/ggml-org/llama.cpp | MIT / Apache-2.0 | v1.0.0, 2026-11-13 | OpenAI `/v1/audio/speech` (converted to native `/tts`) | sync | `stream_format: "audio"` | yes; ~3-4 GB `(verify)` | yes (ggml CUDA builds `70-virtual`; host already runs it on the V100s) | **fallback** |
+| llama.cpp `llama-server` + Qwen3-TTS Base GGUF | https://github.com/ggml-org/llama.cpp | MIT / Apache-2.0 | v1.0.0, 2026-11-13 | OpenAI `/v1/audio/speech` (converted to native `/tts`) `(verify)` | sync | `stream_format: "audio"` `(verify)`, upstream PR #31763 | yes; ~3-4 GB `(verify)` | yes (ggml CUDA builds `70-virtual`; host already runs it on the V100s) | **fallback** |
 | faster-qwen3-tts | https://github.com/andimarafioti/faster-qwen3-tts | MIT `(verify)` / Apache-2.0 | PyPI 0.5.4 (date `(verify)`) | OpenAI `/v1/audio/speech` in `examples/openai_server.py` | sync | yes (`wav`, `pcm`, `mp3`) | yes; RTF 5.6 on a 4090 | maybe: PyTorch ≥ 2.5.1 with cu126 and fp16 `(verify)` | strong engine, but the server is an example script with no confirmed health or voices route; re-check if the GGUF route disappoints |
 | Kokoro-FastAPI (Kokoro-82M) | https://github.com/remsky/Kokoro-FastAPI | Apache-2.0 `(verify)` / Apache-2.0 | v0.3.0, 2026-05-15 | OpenAI `/v1/audio/speech`, `/v1/audio/voices`, `/v1/models` | sync | `stream` flag, chunked `(verify)` | yes; ~2-3 GB `(verify)` | yes (default image is cu126) | **CPU stock-voice stanza** (§6.3), not a cast-voice fallback |
 | speaches (Kokoro ONNX, Piper) | https://github.com/speaches-ai/speaches | MIT / per model | v0.9.0-rc.3, 2025-12-27 | OpenAI, multi-model | sync | raw or SSE `(verify)` | yes | yes (ONNX) | skip: model ids carry a `/` the router refuses, and models load lazily after `/health` is already 200 |
@@ -297,16 +299,18 @@ process-group kill does not reach the container, so prefer the venv.
 
 | Item | Value |
 | --- | --- |
-| Files | backbone `Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf` plus `--mmproj mmproj-Qwen3-TTS-12Hz-1.7B-Base-bf16.gguf` (speaker encoder and code predictor) |
+| Files | backbone `Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf` plus `--mmproj mmproj-Qwen3-TTS-12Hz-1.7B-Base-bf16.gguf` (speaker encoder and code predictor); file names `(verify)` against ggml-org/llama.cpp PR #26254 and the published GGUF repo |
 | VRAM | ~3-4 GB at Q8_0 `(verify)`; book `vram_mb: 4000` until measured |
 | sm_70 | ggml CUDA builds `70-virtual` for CUDA < 13, and the host's `llama-server` already serves chat on the V100s. The **bf16 mmproj** on Volta is `(verify)`; if it fails, convert the mmproj to f16 |
 | CPU | `--n-gpu-layers 0` and `device: cpu`; speed **unknown**, has to be measured (checklist item 8) |
 | Cold start | seconds, like the other `llama-server` stanzas `(verify)` |
-| Version | needs **v1.0.0 or later** for `/v1/audio/speech` (PR #31763) and `/tts` (since v0.8.0, PR #26603). The host's build version is checklist item 2 |
+| Version | needs **v1.0.0 or later** for `/v1/audio/speech` (ggml-org/llama.cpp PR #31763 `(verify)`) and `/tts` (since v0.8.0, PR #26603). The host's build version is checklist item 2 |
 
 **Placement cost on the 32 GB cards:** the large chat model books 64000 MB of
-the two cards' ~65500 MB. A 4000 MB TTS load on `"1|2"` therefore evicts it,
-costing ~7 minutes of chat. That is why the fallback is for when an image job
+the two cards' ~65500 MB. A 4000 MB TTS load on `"1|2"` therefore evicts it.
+Preload restore only brings it back once it fits without evicting, so chat is
+down for the whole TTS session, plus the 5 minute idle TTL before the TTS
+stanza stops, plus the ~7 minute reload. That is why the fallback is for when an image job
 holds GPU 0, or when the operator has deliberately freed a 32 GB card. It is not
 a routine second home.
 
@@ -397,7 +401,7 @@ What breaks with pure passthrough, plainly:
 
 - **Primary to fallback is not a drop-in swap.** vLLM-Omni takes `ref_audio`
   (a `data:` URI) plus `ref_text`. llama-server takes `speaker_ref_b64` (and
-  `lang`, not `language`). A request built for one and sent to the other
+  `lang`, not `language`) `(verify)` against ggml-org/llama.cpp PR #31763. A request built for one and sent to the other
   probably ignores the unknown field and speaks with no reference `(verify)`.
   That is why rule 3 in §1 forbids a pool. Making a pool safe needs a **router
   change**: a per-stanza field mapping (rename `ref_audio` to
@@ -559,10 +563,14 @@ LAN.
 - **Maturity**: llama-server's speech endpoint shipped on 2026-11-13. The
   fallback is a week old.
 
-## 8. GPU host verification checklist (read-only) and open questions
+## 8. GPU host verification checklist and open questions
 
-Run as the service user. Steps 3 to 8 start a backend by hand on a spare port
-and a free card, then stop it. Nothing else is changed.
+Run as the service user. Steps 1 and 2 are read-only. **Steps 3 to 8 change GPU
+state and need an agreed window**: they start backends by hand, outside the
+router, which does not count that memory in its ledger. Before each GPU step,
+check the card's free memory and unload any router stanza on it; after it,
+`kill` the process. Expect the unloaded models (and, on the V100s, the large
+chat model) to be down until preload restore brings them back.
 
 ```bash
 # 1. Cards, compute capability, and what holds GPU 0 right now (anything not a router stanza?).
@@ -577,12 +585,17 @@ curl -s http://127.0.0.1:18080/_router/status | head -c 2000
 # 3. vLLM-Omni venv (to be created): versions must match; sm_86 only.
 /opt/ai/venv-vllm-omni/bin/python -c "import vllm, vllm_omni, torch; print(vllm.__version__, vllm_omni.__version__, torch.__version__, torch.cuda.get_arch_list())"
 
-# 4. Start the primary by hand on GPU 0, time the cold start, check the API surface.
+# 4. GPU STATE CHANGE. Start the primary by hand on GPU 0, time the cold start, check the API surface.
+#    First: no image job running; unload every router stanza on GPU 0 (see /_router/status), then
+#    confirm >= 10000 MiB free on GPU 0 before starting.
+curl -s -X POST http://127.0.0.1:18080/_router/unload -d '{"model_id":"<each stanza on GPU 0>"}'
+nvidia-smi -i 0 --query-gpu=memory.free --format=csv
 date +%s; CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 /opt/ai/venv-vllm-omni/bin/vllm serve \
   /opt/ai/models/tts/Qwen3-TTS-12Hz-1.7B-Base --omni \
   --deploy-config /opt/ai/config/vllm-omni/qwen3_tts_24gb.yaml \
   --served-model-name qwen3-tts-1.7b --host 127.0.0.1 --port 5960 \
   --trust-remote-code --enforce-eager &
+VLLM_PID=$!
 until curl -sf http://127.0.0.1:5960/health; do sleep 2; done; date +%s   # spin_up_seconds
 curl -s http://127.0.0.1:5960/v1/models
 curl -s http://127.0.0.1:5960/v1/audio/voices
@@ -600,18 +613,26 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5960/v1/audio/speech -
 # Base model with no voice and no ref_audio: does it 400, or kill the engine (then /health fails)?
 curl -s http://127.0.0.1:5960/v1/audio/speech -H 'Content-Type: application/json' -d '{"input":"x","language":"English"}'
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5960/health
+kill $VLLM_PID   # step 7's GPU 0 peak must be read before this
 
-# 6. Fallback on a free V100 with the same clip; compare by ear with /tmp/tts.wav.
-CUDA_VISIBLE_DEVICES=1 /opt/ai/bin/llama-server \
+# 6. GPU STATE CHANGE. Fallback on a V100 with the same clip; compare by ear with /tmp/tts.wav.
+#    The large chat model books 64000 MB across both V100s: unload it first (chat is down until
+#    preload restore), then confirm >= 5000 MiB free on the card you use. Pick the card, do not assume 1.
+curl -s -X POST http://127.0.0.1:18080/_router/unload -d '{"model_id":"qwen38-flash-next"}'
+nvidia-smi --query-gpu=index,memory.free --format=csv
+CUDA_VISIBLE_DEVICES=<free V100 index> /opt/ai/bin/llama-server \
   --model /opt/ai/models/tts/Qwen3-TTS-12Hz-1.7B-Base-Q8_0.gguf \
   --mmproj /opt/ai/models/tts/mmproj-Qwen3-TTS-12Hz-1.7B-Base-bf16.gguf \
   --host 127.0.0.1 --port 5961 --n-gpu-layers 999 --parallel 1 &
+LLAMA_PID=$!
+until curl -sf http://127.0.0.1:5961/health; do sleep 2; done
 curl -s http://127.0.0.1:5961/props | head -c 1500                                  # voices, modalities
 curl -s http://127.0.0.1:5961/v1/audio/speech -H 'Content-Type: application/json' \
   -d "{\"model\":\"qwen3-tts-1.7b-gguf\",\"input\":\"Testing one two three.\",\"lang\":\"en\",\"speaker_ref_b64\":\"$REF\"}" -o /tmp/tts-gguf.wav
 # Same request with vLLM-Omni's field names: is the reference silently ignored?
 curl -s http://127.0.0.1:5961/v1/audio/speech -H 'Content-Type: application/json' \
   -d "{\"input\":\"Testing one two three.\",\"language\":\"English\",\"ref_audio\":\"data:audio/wav;base64,$REF\"}" -o /tmp/tts-gguf-wrongfields.wav
+kill $LLAMA_PID   # after step 7's peak reading
 
 # 7. Peak VRAM for vram_mb (both backends), eager vs CUDA graphs for the primary.
 nvidia-smi --query-gpu=index,memory.used --format=csv -l 1   # run during steps 5 and 6, note the peak
@@ -621,6 +642,7 @@ nvidia-smi --query-gpu=index,memory.used --format=csv -l 1   # run during steps 
 time curl -s http://127.0.0.1:5962/v1/audio/speech -H 'Content-Type: application/json' \
   -d '{"model":"kokoro","input":"A fictional sentence of about twenty words, read aloud to measure the real-time factor on this host.","voice":"af_heart","response_format":"wav"}' -o /tmp/kokoro.wav
 #    Repeat step 6's request against the §6.2 command with --n-gpu-layers 0 under the same taskset.
+#    kill both CPU processes afterwards; they take cores the router's CPU stanzas use.
 
 # 9. Through the router once stanzas are staged: model-less default, voices default, wrong id.
 curl -s http://127.0.0.1:18080/v1/models | grep -o -E 'qwen3-tts-1.7b(-gguf)?|kokoro'
@@ -700,7 +722,9 @@ llama.cpp
 - https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
 - https://github.com/ggml-org/llama.cpp/blob/master/tools/tts/README.md
 - https://github.com/ggml-org/llama.cpp/pull/26254 (Qwen3-TTS in mtmd)
-- https://sourceforge.net/projects/llama-cpp.mirror/files/v1.0.0/ (v1.0.0 notes: #31763 `/v1/audio/speech`, #26603 `/tts`)
+- https://github.com/ggml-org/llama.cpp/pull/31763 (`/v1/audio/speech`; field names `(verify)` here)
+- https://github.com/ggml-org/llama.cpp/pull/26603 (`/tts`)
+- https://github.com/ggml-org/llama.cpp/releases/tag/v1.0.0 (release notes; read only via a mirror so far, `(verify)` upstream)
 - https://github.com/dwain-barnes/llama-tts-server (third-party wrapper; Base has no voice of its own)
 
 faster-qwen3-tts
