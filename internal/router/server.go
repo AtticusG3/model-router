@@ -3,7 +3,9 @@ package router
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -35,6 +37,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 				"peers":       peers,
 				"peers_fresh": fresh,
 				"reload":      r.reloadStatus(),
+				"jobs":        r.RunningJobs(),
 			})
 		}},
 		{"/_router/backend-metrics", func(w http.ResponseWriter, req *http.Request) {
@@ -265,6 +268,13 @@ func handleMetrics(r *Router) http.HandlerFunc {
 			}
 			fmt.Fprintf(&sb, "model_router_model_running{model=%q} %d\n", ms.ID, running)
 			fmt.Fprintf(&sb, "model_router_model_vram_mb{model=%q} %d\n", ms.ID, ms.VramMB)
+		}
+
+		fmt.Fprintf(&sb, "# HELP model_router_jobs_running async jobs holding a model loaded\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_jobs_running gauge\n")
+		jobs := r.RunningJobs()
+		for _, id := range slices.Sorted(maps.Keys(jobs)) {
+			fmt.Fprintf(&sb, "model_router_jobs_running{model=%q} %d\n", id, jobs[id])
 		}
 
 		snap := r.TelemetrySnapshot()

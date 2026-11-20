@@ -42,7 +42,8 @@ wherever its API contract shapes the code directly.
   beyond the current network.
 - No node autoscaling.
 - No killing of an in-flight generation. A request that is mid-proxy holds
-  the model until it finishes.
+  the model until it finishes, and so does a running async job (see Async
+  jobs).
 - No sub-path rewrite of a third-party WebUI bundle. The operator UI is
   embedded in the binary at `/ui/`. `/upstream/{model_id}/` proxies to a
   local backend with that prefix stripped, on the router's own port.
@@ -96,6 +97,8 @@ start_port: 5800          # base for auto-allocated ports
 reserved_ports: [8081, 6333]
 headroom_mb: 0            # MB left unbooked on every GPU; default 0
 max_request_body_mb: 256  # cap on one request body; over it is 413 before any load; default 256
+job_table_max: 256        # async jobs remembered; a full table drops the oldest finished one; default 256
+job_ttl_minutes: 60       # longest one async job holds its model; default 60
 preload: [intent-model]   # load at startup; restored in config order if evicted
 
 telemetry:
@@ -320,6 +323,52 @@ does not abort a spin-up that is already useful. The wait is capped at
 A peer load joins an instance that is already live instead of starting
 another copy.
 
+## Async jobs
+
+Video generation runs for minutes, longer than clients and fronting proxies
+hold a connection, so its backends answer a submit at once and run the job in
+the background. The router speaks one job API for this, the OpenAI-style
+`/v1/videos` (create, retrieve, content, delete), to clients and to backends. A
+backend with its own job shape (`sd-server`, ComfyUI) sits behind a small
+adapter in the stanza `command`; `docs/research/video-backends.md` §5.4 lists
+the translation. The router learns no backend-specific job shape and has no
+per-stanza job config.
+
+- **Submit.** A `2xx` answer to `POST /v1/videos` whose JSON has an `id`
+  records the job: id, model, the local instance or peer that took it, and the
+  time. The router records it before the answer reaches the client, so a poll
+  can never beat it. The submit is detached from client cancel: a client that
+  drops mid-submit still leaves a job the router knows about.
+- **Hold.** The job takes one occupancy slot on its instance, the same count a
+  mid-proxy request takes, so the idle sweep and eviction leave the model
+  alone and a competing load waits or spills. The router polls
+  `GET /v1/videos/{id}` on the target every 2 seconds. `completed`, `failed`,
+  `cancelled`, a `404`, the model being unloaded, or `job_ttl_minutes`
+  (default 60) ends the hold. The idle clock starts when the job ends, so
+  `idle_ttl_seconds` is the window to fetch the content. `slots` does not
+  bound jobs: a second submit while one runs queues on the same instance.
+- **Follow-ups.** `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content` and
+  `DELETE /v1/videos/{id}` (any path under `/v1/videos/{id}`) name no model.
+  The router looks the id up and proxies to the recorded instance or peer. It
+  never loads a model for a follow-up. An unknown id is `404` with a hint to
+  submit again; a job whose model is no longer loaded is `404` too. A
+  `POST /v1/videos/{id}/remix` makes a child job, which the router records
+  and holds like a submit.
+- **Cancel.** Closing the client connection does not stop a job. A `2xx`
+  answer to `DELETE` ends the job, frees the hold and forgets the id.
+- **Peers.** A job that spilled to a router peer is recorded with that peer.
+  Follow-ups and the router's polls go there with `X-Model-Router-Peer`; the
+  peer records the same job against its own instance and holds it.
+- **Table.** In memory only, like Activity. `job_table_max` (default 256) caps
+  it: a full table drops its oldest finished job. Running jobs are never
+  dropped, so the table can run over the cap while every entry is running.
+- **Restart.** A router restart stops every backend and forgets every job.
+  A client polling an old id gets `404` and submits again.
+- **Visibility.** `/_router/status` has `jobs` (running jobs per model id) and
+  `/metrics` has `model_router_jobs_running{model}`. Activity logs each job
+  as one `POST /v1/videos` row, written when it ends, with `job_id`,
+  `job_state` and the duration from submit to end.
+
 ## Placement
 
 `device` says which GPUs a stanza may use:
@@ -379,8 +428,8 @@ cached, possibly stale copy and never treat it as ground truth.
 
 ## Eviction
 
-Something that is mid-request, still starting, or already stopping is never
-unloaded. A stanza with `vram_mb <= 0` is never unloaded to make room; it
+Something that is mid-request, holding a running async job, still starting,
+or already stopping is never unloaded. A stanza with `vram_mb <= 0` is never unloaded to make room; it
 does not free a GPU. `hold_seconds` (default 0) also skips eviction for that
 many seconds after the instance first reports healthy, so a long cold start
 is not reclaimed before a client can reach it. The idle sweep skips a hold
@@ -487,7 +536,8 @@ the peer admits against its own budget.
 | `/v1/*`, `/v/*`, `/sdapi/v1/*`, `/rerank`, `/reranking`, `/infill`, `/completion`, `/props`, `/slots`, `/tokenize`, `/detokenize`, `/apply-template` | Passthrough to the resolved backend. `/` is the same when a model id is present. |
 | `/v1/models` | One row per mesh `model_id`: every local stanza, plus models listed by fresh router peers and by openai peers. No aliases, no pools, no `peer/model` ids. |
 | `POST /_router/load`, `POST /_router/unload` | This node's admission. Body `{"model_id":"..."}`. Unload of a model id stops every instance. |
-| `GET /_router/status` | Node name, catalog, local telemetry, cached peers. |
+| `GET`, `DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content` | Async job follow-ups, routed by job id to the instance or peer that owns the job. Unknown id: 404. See Async jobs. |
+| `GET /_router/status` | Node name, catalog, local telemetry, cached peers, running async jobs per model (`jobs`). |
 | `GET /_router/telemetry` | The snapshot peers pull. |
 | `GET /_router/logs` | Router, upstream, and mesh rings, plus a scrape of each running backend's `/metrics`. |
 | `GET /_router/logs/{model_id}` | One model's log ring as JSON (`lines`), for the UI's polling fallback when a proxy holds the live stream open (ids may contain slashes). Unknown id: 404. |
@@ -498,7 +548,7 @@ the peer admits against its own budget.
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
 | `GET /health` | `OK`. |
-| `GET /metrics` | Prometheus: up, running models, GPU free and reclaimable, peer freshness. |
+| `GET /metrics` | Prometheus: up, running models, running async jobs per model, GPU free and reclaimable, peer freshness. |
 
 `api_type` and `capabilities` are published in `/v1/models` and
 `/_router/status` (each catalog row carries `api_type` and `capabilities`), and
@@ -523,7 +573,4 @@ It resets on restart. Authorization and cookie headers are not stored.
 
 - Preempting a generation that is already in flight.
 - Auth or TLS on the mesh.
-- A separate job API for slow spin-up or image generation. The client
-  connection is held for the proxied request; only the peer `load` call is
-  detached from client cancel, and only up to the cap above.
 - Dynamic discovery, consensus, and node autoscaling.

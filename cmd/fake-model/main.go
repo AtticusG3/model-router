@@ -38,7 +38,6 @@ type fakeModel struct {
 	voices  map[string]string // id -> file name
 	voiceID int
 	jobs    map[string]*job
-	jobSeq  int
 }
 
 type job struct {
@@ -319,9 +318,9 @@ func (f *fakeModel) createJob(kind string) http.HandlerFunc {
 		json.NewDecoder(r.Body).Decode(&body)
 
 		f.mu.Lock()
-		f.jobSeq++
+		// Random ids, as real backends make: two instances never share one.
 		j := &job{
-			ID: fmt.Sprintf("%s-%d", kind, f.jobSeq), Object: kind,
+			ID: kind + "-" + rand.Text(), Object: kind,
 			Model: body.Model, Status: "queued", Created: time.Now().Unix(),
 		}
 		f.jobs[j.ID] = j
