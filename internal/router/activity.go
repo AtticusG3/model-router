@@ -82,6 +82,10 @@ type ActivityEntry struct {
 	// size failure. Empty when the row is not an image request or a thumbnail
 	// was stored, so operators can tell a failure from "not an image".
 	ThumbIssue string `json:"thumb_issue,omitempty"`
+	// JobID and JobState are set on an async job's row, written when the job
+	// ends: DurationMs then runs from submit to that end state.
+	JobID    string `json:"job_id,omitempty"`
+	JobState string `json:"job_state,omitempty"`
 }
 
 // ActivityCapture is the request/response pair for one activity id.

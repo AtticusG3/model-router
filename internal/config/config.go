@@ -385,6 +385,12 @@ type Config struct {
 	// stanza (a stanza may override it). Over the cap the client gets 413
 	// before any model is loaded. Default 256.
 	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
+	// JobTableMax caps the async job table; a full table drops its oldest
+	// finished job. Default 256.
+	JobTableMax int `yaml:"job_table_max"`
+	// JobTTLMinutes is the longest the router holds a model for one async job
+	// that never reports an end state. Default 60.
+	JobTTLMinutes int `yaml:"job_ttl_minutes"`
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`
@@ -434,6 +440,22 @@ func (c *Config) AdmitTimeout() time.Duration {
 		return DefaultAdmitTimeout
 	}
 	return time.Duration(c.AdmitTimeoutSeconds) * time.Second
+}
+
+// JobTableCap is JobTableMax, or 256 when unset.
+func (c *Config) JobTableCap() int {
+	if c.JobTableMax <= 0 {
+		return 256
+	}
+	return c.JobTableMax
+}
+
+// JobTTL is JobTTLMinutes, or an hour when unset.
+func (c *Config) JobTTL() time.Duration {
+	if c.JobTTLMinutes <= 0 {
+		return time.Hour
+	}
+	return time.Duration(c.JobTTLMinutes) * time.Minute
 }
 
 // RequestBodyLimit is the byte cap for a request resolved to stanza id (empty

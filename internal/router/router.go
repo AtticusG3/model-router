@@ -35,6 +35,8 @@ type Router struct {
 	occupancy map[string]int       // target key -> in-flight selected requests
 	draining  map[string]bool      // claimed for unload; new requests wait
 	peerUntil map[string]time.Time // "peer/model" -> end of the Retry-After that peer sent
+	jobs      map[string]*job      // async job id -> owner; see jobs.go
+	jobsDone  []*job               // finished jobs in the order they ended; may hold stale entries
 	spawn     spawner              // tests inject a fake; nil uses the GOOS default
 	admitWait chan struct{}        // 1-buffer poke when occupancy/unload may free VRAM
 	shutdown  chan struct{}
@@ -71,6 +73,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		occupancy:       map[string]int{},
 		draining:        map[string]bool{},
 		peerUntil:       map[string]time.Time{},
+		jobs:            map[string]*job{},
 		cooldowns:       map[string]*startCooldown{},
 		evictedPreloads: map[string]string{},
 		admitWait:       make(chan struct{}, 1),
@@ -1152,6 +1155,10 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	cs, req := withCleanups(req)
 	defer cs.run()
+	if id := jobID(req.URL.Path); id != "" {
+		r.serveJob(w, req, id)
+		return
+	}
 	ref, err := matchRequest(req, r.cfg())
 	if err != nil {
 		if errors.Is(err, ErrNoModel) {
@@ -1573,7 +1580,7 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			return nil
 		}
 	}
-	r.proxyTo(w, req, m.proxy(), key, r.node)
+	r.proxyJobAware(w, req, Target{Local: key}, m.proxy(), key, r.node)
 	return nil
 }
 
@@ -1606,7 +1613,7 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	}
 	req.Header.Set("X-Model-Router-Peer", r.node)
 	r.logger.Meshf("%s %s -> %s (%s)", req.Method, req.URL.Path, peerName, peerModel)
-	r.proxyTo(w, req, p.BaseURL, peerModel, peerName)
+	r.proxyJobAware(w, req, Target{Peer: peerName, PeerID: peerModel}, p.BaseURL, peerModel, peerName)
 	return nil
 }
 
