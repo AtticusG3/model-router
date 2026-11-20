@@ -4,17 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"maps"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
 
 	"model-router/internal/config"
 )
 
-// applyFilters strips then sets top-level keys on a JSON object body. Later
-// maps in sets win. A key ending in "?" is set only if the client's body
-// (after stripping) omitted it. Anything that is not a JSON object body is
-// left untouched. The matcher already buffered r.Body.
+// applyFilters strips then sets top-level keys on a JSON object body, or form
+// fields on a urlencoded or multipart body (file parts are never touched).
+// Later maps in sets win. A key ending in "?" is set only if the client's body
+// (after stripping) omitted it. Any other body is left untouched.
 func applyFilters(req *http.Request, strip []string, sets ...map[string]any) error {
 	n := len(strip)
 	for _, set := range sets {
@@ -23,8 +30,15 @@ func applyFilters(req *http.Request, strip []string, sets ...map[string]any) err
 	if n == 0 {
 		return nil // no filters: do not re-encode the client's body
 	}
-	if req.Body == nil || !strings.Contains(req.Header.Get("Content-Type"), "application/json") {
+	if req.Body == nil {
 		return nil
+	}
+	if !strings.Contains(req.Header.Get("Content-Type"), "application/json") {
+		e, err := newFormEdit(strip, sets...)
+		if err != nil {
+			return err
+		}
+		return editForm(req, e)
 	}
 	raw, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -63,6 +77,200 @@ func applyFilters(req *http.Request, strip []string, sets ...map[string]any) err
 	req.Body = io.NopCloser(bytes.NewReader(out))
 	req.ContentLength = int64(len(out))
 	return nil
+}
+
+// formEdit is a set of form field changes: strip drops fields, set gives the
+// value each named field ends up with.
+type formEdit struct {
+	strip map[string]bool
+	set   map[string]*formSet
+}
+
+// formSet is one field to set: force replaces the client's value, fallback (a
+// "?" key) fills the field only when the client omitted it.
+type formSet struct{ force, fallback *string }
+
+// value is what the field ends up as; ok false keeps the client's value.
+func (s *formSet) value(present bool) (v string, ok bool) {
+	switch {
+	case present && s.force == nil:
+		return "", false
+	case present:
+		return *s.force, true
+	case s.fallback != nil:
+		return *s.fallback, true
+	}
+	return *s.force, true
+}
+
+// newFormEdit turns filters into a formEdit with the same precedence as the
+// JSON path: strip first, later sets win, "?" keys yield to the client.
+func newFormEdit(strip []string, sets ...map[string]any) (formEdit, error) {
+	e := formEdit{strip: map[string]bool{}, set: map[string]*formSet{}}
+	for _, k := range strip {
+		e.strip[k] = true
+	}
+	for _, set := range sets {
+		for k, v := range set {
+			s, ok := v.(string)
+			if !ok {
+				b, err := json.Marshal(v) // numbers and bools read the same in a form
+				if err != nil {
+					return e, err
+				}
+				s = string(b)
+			}
+			bare := strings.TrimSuffix(k, "?")
+			fs := e.set[bare]
+			if fs == nil {
+				fs = &formSet{}
+				e.set[bare] = fs
+			}
+			if bare != k {
+				fs.fallback = &s
+			} else {
+				fs.force, fs.fallback = &s, nil
+			}
+		}
+	}
+	return e, nil
+}
+
+// editForm applies e to a urlencoded or multipart body; any other body is left
+// alone. A urlencoded body is small (the matcher held it in memory); a
+// multipart body is streamed part by part so a file part is never buffered.
+func editForm(req *http.Request, e formEdit) error {
+	if req.Body == nil || req.Body == http.NoBody {
+		return nil
+	}
+	mt, params, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
+	if err != nil {
+		return nil
+	}
+	switch mt {
+	case "application/x-www-form-urlencoded":
+		raw, err := io.ReadAll(req.Body)
+		req.Body.Close()
+		if err != nil {
+			return err
+		}
+		vals, err := url.ParseQuery(string(raw))
+		if err != nil {
+			req.Body = io.NopCloser(bytes.NewReader(raw)) // not a form we can edit: forward as sent
+			return nil
+		}
+		for k := range e.strip {
+			vals.Del(k)
+		}
+		for k, s := range e.set {
+			if v, ok := s.value(vals.Has(k)); ok {
+				vals.Set(k, v)
+			}
+		}
+		out := vals.Encode()
+		req.Body = io.NopCloser(strings.NewReader(out))
+		req.ContentLength = int64(len(out))
+	case "multipart/form-data":
+		editMultipart(req, params["boundary"], e)
+	}
+	return nil
+}
+
+// editMultipart re-streams a multipart body through e with the same boundary,
+// so the Content-Type header stays right for a retry that reinstalls the
+// original body. The new length is unknown, so the body goes out chunked.
+// shortcut: an edited multipart body is always chunked, work out its length up front if a backend refuses chunked uploads.
+func editMultipart(req *http.Request, boundary string, e formEdit) {
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	if boundary == "" || mw.SetBoundary(boundary) != nil {
+		return // not an RFC 2046 boundary, so no valid client sent it: forward as sent
+	}
+	src := &srcReader{ReadCloser: req.Body}
+	// A body nobody reads (an error before the proxy) must not pin the goroutine.
+	ctx := req.Context()
+	stop := context.AfterFunc(ctx, func() { pr.CloseWithError(ctx.Err()) })
+	go func() {
+		defer stop()
+		defer src.Close()
+		err := copyParts(multipart.NewReader(src, boundary), mw, e)
+		// The source's own error (a body over the cap) reaches the proxy as is;
+		// anything else is a body that is not valid multipart.
+		if err != nil && src.err == nil {
+			err = fmt.Errorf("%w: %v", errBadMultipart, err)
+		}
+		pw.CloseWithError(err)
+	}()
+	req.Body, req.ContentLength = pr, -1
+}
+
+// errBadMultipart marks a multipart body that broke partway through being
+// re-streamed (a bad part header, no closing boundary). Part of it has already
+// gone upstream, so it cannot be resent as is; proxyTo answers 400, not 502.
+var errBadMultipart = errors.New("malformed multipart body")
+
+// srcReader remembers the body's own read error, so copyParts' parse errors
+// can be told apart from it.
+type srcReader struct {
+	io.ReadCloser
+	err error
+}
+
+func (s *srcReader) Read(p []byte) (int, error) {
+	n, err := s.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		s.err = err
+	}
+	return n, err
+}
+
+// copyParts copies every part from mr to mw, applying e to text fields. Part
+// headers are kept; part bodies are copied raw, never decoded.
+func copyParts(mr *multipart.Reader, mw *multipart.Writer, e formEdit) error {
+	seen := map[string]bool{}
+	for {
+		p, err := mr.NextRawPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		name, value, replace := p.FormName(), "", false
+		if p.FileName() == "" {
+			if e.strip[name] {
+				continue
+			}
+			if s := e.set[name]; s != nil {
+				value, replace = s.value(true)
+				if replace && seen[name] {
+					continue // a repeated field being replaced is sent once
+				}
+				seen[name] = true
+			}
+		}
+		w, err := mw.CreatePart(p.Header)
+		if err != nil {
+			return err
+		}
+		if replace {
+			_, err = io.WriteString(w, value)
+		} else {
+			_, err = io.Copy(w, p)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(e.set)) {
+		if !seen[k] {
+			v, _ := e.set[k].value(false)
+			if err := mw.WriteField(k, v); err != nil {
+				return err
+			}
+		}
+	}
+	return mw.Close()
 }
 
 // filterLocal applies the stanza's filters for the id the client used (a

@@ -35,6 +35,8 @@ type Router struct {
 	occupancy map[string]int       // target key -> in-flight selected requests
 	draining  map[string]bool      // claimed for unload; new requests wait
 	peerUntil map[string]time.Time // "peer/model" -> end of the Retry-After that peer sent
+	jobs      map[string]*job      // async job id -> owner; see jobs.go
+	jobsDone  []*job               // finished jobs in the order they ended; may hold stale entries
 	spawn     spawner              // tests inject a fake; nil uses the GOOS default
 	admitWait chan struct{}        // 1-buffer poke when occupancy/unload may free VRAM
 	shutdown  chan struct{}
@@ -71,6 +73,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		occupancy:       map[string]int{},
 		draining:        map[string]bool{},
 		peerUntil:       map[string]time.Time{},
+		jobs:            map[string]*job{},
 		cooldowns:       map[string]*startCooldown{},
 		evictedPreloads: map[string]string{},
 		admitWait:       make(chan struct{}, 1),
@@ -1152,6 +1155,10 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	cs, req := withCleanups(req)
 	defer cs.run()
+	if id := jobID(req.URL.Path); id != "" {
+		r.serveJob(w, req, id)
+		return
+	}
 	ref, err := matchRequest(req, r.cfg())
 	if err != nil {
 		if errors.Is(err, ErrNoModel) {
@@ -1573,7 +1580,7 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			return nil
 		}
 	}
-	r.proxyTo(w, req, m.proxy(), key, r.node)
+	r.proxyJobAware(w, req, Target{Local: key}, m.proxy(), key, r.node)
 	return nil
 }
 
@@ -1601,37 +1608,54 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	// only knows its local id, so rewrite the model field before proxying
 	// (llama-swap's ReplaceRequestModel does the same). The field rewritten is
 	// the peer's configured body_field, not a hardcoded "model".
-	if err := rewriteBodyModel(req, peerModel, p.BodyField); err != nil {
-		return err
-	}
-	if err := applyFilters(req, p.Filters.StripParams, p.Filters.SetParams); err != nil {
+	if err := rewriteBodyModel(req, peerModel, p.BodyField, p.Filters); err != nil {
 		return err
 	}
 	req.Header.Set("X-Model-Router-Peer", r.node)
 	r.logger.Meshf("%s %s -> %s (%s)", req.Method, req.URL.Path, peerName, peerModel)
-	r.proxyTo(w, req, p.BaseURL, peerModel, peerName)
+	r.proxyJobAware(w, req, Target{Peer: peerName, PeerID: peerModel}, p.BaseURL, peerModel, peerName)
 	return nil
 }
 
 // rewriteBodyModel replaces the model field in a request body (or query) with
-// the given id, restoring the body for downstream use. JSON bodies are
-// rewritten to field (the peer's configured body_field), preserving all other
-// fields; GETs rewrite the "model" query param, which body_field does not
-// cover. The matcher already buffered and restored r.Body; this only sets
-// the field on those bytes.
-func rewriteBodyModel(req *http.Request, newModel, field string) error {
-	if req.Method == http.MethodGet {
-		q := req.URL.Query()
-		if q.Get("model") != "" {
-			q.Set("model", newModel)
-			req.URL.RawQuery = q.Encode()
-		}
-		return nil
+// the given id, restoring the body for downstream use. JSON bodies, and
+// urlencoded or multipart forms, are rewritten to field (the peer's configured
+// body_field), preserving all other fields and file parts. A "model" query
+// param, which body_field does not cover, is rewritten on any method: the
+// peer's matcher reads it on GETs and on multipart uploads. The peer's filters
+// f are applied too: a form body takes both in one pass.
+func rewriteBodyModel(req *http.Request, newModel, field string, f config.Filters) error {
+	q := req.URL.Query()
+	if q.Get("model") != "" {
+		q.Set("model", newModel)
+		req.URL.RawQuery = q.Encode()
 	}
 	ct := req.Header.Get("Content-Type")
 	if !strings.Contains(ct, "application/json") {
-		return nil
+		// editForm ignores non-form bodies itself; naming the form types here
+		// keeps the pass-through decision visible at the call site, where a
+		// reviewer or reader looks for it (review round, PR #107).
+		isForm := strings.Contains(ct, "multipart/form-data") ||
+			strings.Contains(ct, "application/x-www-form-urlencoded")
+		if !isForm {
+			return nil
+		}
+		e, err := newFormEdit(f.StripParams, f.SetParams)
+		if err != nil {
+			return err
+		}
+		e.set[field] = &formSet{force: &newModel} // config forbids filters on body_field, so nothing clashes
+		return editForm(req, e)
 	}
+	if err := rewriteJSONModel(req, newModel, field); err != nil {
+		return err
+	}
+	return applyFilters(req, f.StripParams, f.SetParams)
+}
+
+// rewriteJSONModel sets field to newModel on a JSON object body; any other
+// body is forwarded unchanged.
+func rewriteJSONModel(req *http.Request, newModel, field string) error {
 	if req.Body == nil {
 		return nil
 	}
@@ -1740,6 +1764,10 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 			// backend request was cut off, so the client gets 413, not 502.
 			if errors.Is(err, errBodyTooLarge) {
 				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
+			if errors.Is(err, errBadMultipart) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
