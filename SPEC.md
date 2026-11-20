@@ -114,7 +114,8 @@ stanzas:
     max_instances: 2       # 0 or 1 = one copy
     slots: 2               # 0 = read --parallel / -np from command, else 1
     spin_up_seconds: 60    # 0 = default 60
-    api_type: chat         # chat | embedding | image | rerank (UI metadata)
+    api_type: chat         # see api_type below; empty means chat
+    capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning
     match:
       body_field: model    # XOR path_prefix
     health_check: /health
@@ -132,6 +133,12 @@ stanzas:
       path_default: true   # fallback when the body has no model id
     health_check: /sdapi/v1/options
     idle_ttl_seconds: 300
+
+  - model_id: stt-large
+    command: "/opt/ai/bin/stt-server --port {port}"
+    vram_mb: 0             # CPU-only: no card, no reservation, never evicted
+    device: cpu
+    api_type: transcription
 
 pools:
   embed-pool:
@@ -156,6 +163,37 @@ with neither matches JSON field `model`. The matcher always understands
 `model` as well, so a normal OpenAI body still resolves. Several image
 stanzas may share one `path_prefix`; at most one of them is `path_default`.
 
+`api_type` is one of `chat`, `embedding`, `rerank`, `image`, `speech`,
+`transcription`, `realtime`, `video`, `audio_gen`. Empty means `chat`. An
+unknown value is a load error that lists the valid values, so a typo is caught
+by `-check` instead of silently hiding the model. `-check` prints the type per
+stanza.
+
+`capabilities` is an optional list per stanza from `vision`, `audio_in`,
+`audio_out`, `tools`, `reasoning`; an unknown flag is a load error. It is
+published in `/v1/models` and `/_router/status`. A vision chat model (started
+with an `--mmproj`) stays `api_type: chat` and adds `capabilities: [vision]`.
+
+An `api_type` gives a model-less request a default route. The type serves these
+API paths:
+
+| api_type | paths |
+|----------|-------|
+| `speech` | `/v1/audio/speech` |
+| `transcription` | `/v1/audio/transcriptions`, `/v1/audio/translations` |
+| `realtime` | `/v1/realtime` |
+| `video` | `/v1/videos` |
+| `audio_gen` | `/v1/audio/generations` |
+| `image` | `/v1/images/*`, `/sdapi/v1/*` |
+| `embedding` | `/v1/embeddings` |
+| `rerank` | `/v1/rerank` |
+
+When a request reaches one of those paths with no `model`, the router serves it
+with the stanza of that type marked `path_default: true`, or with the only
+stanza of that type. Several candidates and no default is a `400` that names
+them. At most one stanza per `api_type` may be `path_default`, whatever its
+`path_prefix`; a second is a load error. A stanza's explicit `match.path_prefix` still wins over this fallback.
+
 Command and env macros: `{port}` or `${PORT}`, `{model}` or `{model_path}`,
 and `{gpu}` (the index chosen at spawn). A multi-instance stanza needs
 `{port}` in the command or env. A device that is a choice of cards needs
@@ -176,6 +214,8 @@ keys (`model#2`). Instance 0 keeps the bare id.
      id some peer lists, it wins over path matching.
    - Otherwise `path_prefix`: the `path_default` stanza for that prefix, or
      the first stanza in config order.
+   - Otherwise the path's `api_type` (table above): its `path_default` stanza,
+     or its only one. Several candidates and no default is `400` naming them.
    - Anything else is `404` with `no model id could be identified`.
 3. Resolve the id:
    - Local stanza or alias → this node.
@@ -257,6 +297,7 @@ another copy.
 | `"1"` or `"CUDA1"` | That card only. |
 | `"1\|2"` | One of the listed cards, chosen per load. Command or env must contain `{gpu}`. |
 | `"0,1,2"` | One process across every listed card. No `{gpu}`. `max_instances` must be 1. |
+| `"cpu"` | No card at all (a CPU speech or transcription backend). Usually with `vram_mb: 0`. |
 
 Single-card ranking, best first: a card that is not already running another
 copy of this model, then the tightest fit (leftover VRAM in 1 GB buckets, so
@@ -299,6 +340,9 @@ cached, possibly stale copy and never treat it as ground truth.
   It does not change a stanza's `vram_mb` and is not a reservation.
 - `vram_mb <= 0` with no GPU telemetry is allowed (a CPU process). A positive
   `vram_mb` is refused until the first successful poll.
+- A `device: cpu` stanza never touches the ledger: `Reserve` returns no GPU
+  index, so it is never admitted against a card and never evicts to fit. See
+  CPU-only placement in the Placement section above.
 
 ## Eviction
 
@@ -394,7 +438,8 @@ The snapshot a node publishes:
   evicted, free MB if idle models were evicted. All three free figures are
   after `headroom_mb`.
 - Each running instance: `model_id`, instance key when it is not instance 0,
-  `fresh` or `stale`, VRAM budget, GPU, slot count, in-flight count.
+  `fresh` or `stale`, VRAM budget, GPU, slot count, in-flight count. A
+  `device: cpu` instance has no GPU entry (`gpu: none`).
 
 Candidate selection treats a card as empty enough to try when idle-evicted
 free is within 2 GB of the card total. nvidia-smi never reports a fully idle
@@ -422,8 +467,12 @@ the peer admits against its own budget.
 | `GET /health` | `OK`. |
 | `GET /metrics` | Prometheus: up, running models, GPU free and reclaimable, peer freshness. |
 
-`api_type` does not choose a route. The UI uses it to decide which models
-the Playground Chat and Image tabs offer. Routing is only the matcher plus the catalog.
+`api_type` and `capabilities` are published in `/v1/models` and
+`/_router/status` (each catalog row carries `api_type` and `capabilities`), and
+the UI uses them to pick which models the Playground tabs offer. `api_type` also
+gives a model-less request its default route (see the api_type table in the
+Config section). A request that names a model, or a stanza's explicit
+`match.path_prefix`, still wins over that fallback.
 
 ## Operator UI
 

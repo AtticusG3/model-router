@@ -592,3 +592,119 @@ func TestAdmitTimeoutDefaultsAndOverrides(t *testing.T) {
 		t.Fatalf("override = %v, want 7s", cfg.AdmitTimeout())
 	}
 }
+
+func TestAPITypeValidation(t *testing.T) {
+	for _, at := range APITypes {
+		if _, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: " + at + "}\n")); err != nil {
+			t.Errorf("api_type %q rejected: %v", at, err)
+		}
+	}
+	cfg, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x}\n"))
+	if err != nil {
+		t.Fatalf("empty api_type: %v", err)
+	}
+	if cfg.Stanza("a").APIType != APITypeChat {
+		t.Errorf("empty api_type = %q, want chat", cfg.Stanza("a").APIType)
+	}
+	_, err = Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: transcribe}\n"))
+	if err == nil || !strings.Contains(err.Error(), `api_type "transcribe" is not valid`) || !strings.Contains(err.Error(), APITypeAudioGen) {
+		t.Fatalf("transcribe err = %v, want it named with the vocabulary listed", err)
+	}
+}
+
+func TestCapabilityValidation(t *testing.T) {
+	if _, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: chat, capabilities: [vision, tools]}\n")); err != nil {
+		t.Fatalf("known capabilities rejected: %v", err)
+	}
+	_, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, capabilities: [telepathy]}\n"))
+	if err == nil || !strings.Contains(err.Error(), `capability "telepathy" is not valid`) || !strings.Contains(err.Error(), "vision") {
+		t.Fatalf("telepathy err = %v, want it named with the vocabulary listed", err)
+	}
+}
+
+func TestCPUDeviceParses(t *testing.T) {
+	cfg, err := Parse([]byte(`
+stanzas:
+  - model_id: stt
+    command: "stt-server --port {port}"
+    vram_mb: 0
+    device: cpu
+    api_type: transcription
+`))
+	if err != nil {
+		t.Fatalf("device: cpu rejected: %v", err)
+	}
+	if !cfg.Stanza("stt").CPUOnly() {
+		t.Error("device: cpu must be CPUOnly")
+	}
+	if _, _, err := ParseDevice("CPU"); err != nil {
+		t.Fatalf("ParseDevice(CPU): %v", err)
+	}
+	gpu, err := Parse([]byte("stanzas:\n  - {model_id: g, command: x, device: CUDA0, vram_mb: 9000}\n"))
+	if err != nil {
+		t.Fatalf("gpu stanza: %v", err)
+	}
+	if gpu.Stanza("g").CPUOnly() {
+		t.Error("a GPU device must not read as CPUOnly")
+	}
+}
+
+func TestDefaultStanzaForType(t *testing.T) {
+	cfg, err := Parse([]byte(`
+stanzas:
+  - model_id: stt
+    command: x
+    api_type: transcription
+  - model_id: speech-a
+    command: x
+    api_type: speech
+  - model_id: speech-b
+    command: x
+    api_type: speech
+    match: {path_default: true}
+  - model_id: krea
+    command: x
+    api_type: image
+    match: {path_prefix: /sdapi/v1, path_default: true}
+  - model_id: sdxl
+    command: x
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := cfg.DefaultStanza(APITypeTranscription); id != "stt" {
+		t.Errorf("single transcription = %q, want stt", id)
+	}
+	if id, cands := cfg.DefaultStanza(APITypeSpeech); id != "speech-b" || len(cands) != 2 {
+		t.Errorf("speech default = %q over %v, want speech-b of two", id, cands)
+	}
+	if id, _ := cfg.DefaultStanza(APITypeImage); id != "krea" {
+		t.Errorf("image default = %q, want krea (its path_default)", id)
+	}
+	if id, cands := cfg.DefaultStanza(APITypeVideo); id != "" || cands != nil {
+		t.Errorf("type with no stanza = %q %v, want empty", id, cands)
+	}
+}
+
+// Two path_default stanzas of one api_type are ambiguous: Parse rejects them,
+// and DefaultStanza (built past Parse) names both instead of picking the last.
+func TestDefaultStanzaAmbiguousPathDefault(t *testing.T) {
+	_, err := Parse([]byte(`
+stanzas:
+  - {model_id: speech-a, command: x, api_type: speech, match: {path_default: true}}
+  - {model_id: speech-b, command: x, api_type: speech, match: {path_prefix: /tts, path_default: true}}
+`))
+	if err == nil || !strings.Contains(err.Error(), `duplicate path_default for api_type "speech"`) {
+		t.Fatalf("Parse err = %v, want duplicate path_default for api_type", err)
+	}
+	cfg := &Config{Stanzas: []Stanza{
+		{ModelID: "speech-a", APIType: APITypeSpeech, Match: Match{PathDefault: true}},
+		{ModelID: "speech-b", APIType: APITypeSpeech, Match: Match{PathPrefix: "/tts", PathDefault: true}},
+	}}
+	id, cands := cfg.DefaultStanza(APITypeSpeech)
+	if id != "" || len(cands) != 2 || cands[0] != "speech-a" || cands[1] != "speech-b" {
+		t.Fatalf("DefaultStanza = %q %v, want empty id and both candidates", id, cands)
+	}
+}

@@ -779,3 +779,39 @@ func TestPinnedMBCountsAdmittedButNotRunningReservation(t *testing.T) {
 		t.Fatal("an unpinned holder can be evicted, so b can be admitted")
 	}
 }
+
+func TestCPUStanzaNeverTakesAGPUReservation(t *testing.T) {
+	l := NewLedger()
+	l.SetGPUs([]*GPUState{gpu(0, 10000)})
+	s := &config.Stanza{ModelID: "stt", Device: "cpu", VramMB: 0}
+	idx, ok := l.Reserve("stt", s)
+	if !ok || idx != -1 {
+		t.Fatalf("Reserve(cpu) = (%d,%v), want (-1,true)", idx, ok)
+	}
+	if occ := l.occupantsOnGPU(-1, ""); len(occ) != 0 {
+		t.Fatalf("a cpu stanza must hold no reservation, occupants = %v", occ)
+	}
+	if !l.CanAdmit("stt", s) {
+		t.Fatal("a cpu stanza is always admittable")
+	}
+}
+
+// Loading a cpu stanza must not evict a GPU resident to "make room".
+func TestCPUStanzaLoadsWithoutEvictingAGPU(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg().Stanza("a").VramMB = 10000 // fills the only 10000 MB card
+	r.cfg().Stanza("b").Device = "cpu"
+	r.cfg().Stanza("b").VramMB = 0
+	if _, err := r.Load("a"); err != nil {
+		t.Fatalf("Load a: %v", err)
+	}
+	if _, err := r.Load("b"); err != nil {
+		t.Fatalf("Load b (cpu): %v", err)
+	}
+	if _, ok := r.managed["a"]; !ok {
+		t.Fatal("loading the cpu stanza must not evict the GPU resident")
+	}
+	if g := r.managed["b"].gpuIndex(); g != -1 {
+		t.Fatalf("cpu stanza gpu = %d, want -1 (no card)", g)
+	}
+}

@@ -1152,7 +1152,12 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ref, err := matchRequest(req, r.cfg())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		code := http.StatusNotFound
+		var amb *ambiguousTypeError
+		if errors.As(err, &amb) {
+			code = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), code)
 		return
 	}
 	req = withRequestedID(req, ref.Raw)
@@ -1761,6 +1766,8 @@ type ModelStatus struct {
 	Freshness string `json:"freshness,omitempty"` // fresh | stale when running locally
 	VramMB    int64  `json:"vram_mb,omitempty"`
 	APIType   string `json:"api_type,omitempty"`
+	// Capabilities lists what the backend supports (vision, tools, ...).
+	Capabilities []string `json:"capabilities,omitempty"`
 	// GPUs lists where running local instances sit, one entry per instance.
 	GPUs []int `json:"gpus,omitempty"`
 }
@@ -1804,7 +1811,9 @@ func (r *Router) catalogStatuses() []ModelStatus {
 				continue
 			}
 			st = StateRunning
-			gpus = append(gpus, m.gpuIndex())
+			if g := m.gpuIndex(); g >= 0 {
+				gpus = append(gpus, g) // a CPU stanza has no card, so "gpu: none"
+			}
 			if !m.IsStale(now) {
 				freshness = "fresh"
 			} else if freshness == "" {
@@ -1814,7 +1823,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
-			GPUs: gpus,
+			Capabilities: s.Capabilities, GPUs: gpus,
 		})
 		seen[id] = true
 		// A filter-set id is a catalog row of its own, sharing the stanza's state.
