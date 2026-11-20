@@ -263,6 +263,81 @@ func TestActivityRealtimeSessionRow(t *testing.T) {
 	}
 }
 
+// Frames the backend sends, ending in its own close frame, are counted as out
+// and keep the backend's close code: the proxy copies them over the hijacked
+// conn, not the ReadWriter that carried the 101 head.
+func TestActivityRealtimeServerCloseCounted(t *testing.T) {
+	sent := maskedFrame(1, []byte(`{"type":"response.create"}`))
+	sent = append(sent, maskedFrame(2, make([]byte, 200))...)
+	var reply []byte // unmasked server frames: text, binary, text, close 1001
+	for _, f := range []struct {
+		op      byte
+		payload []byte
+	}{
+		{1, []byte(`{"type":"response.created"}`)},
+		{2, make([]byte, 40)},
+		{1, []byte(`{"type":"response.done"}`)},
+		{8, []byte{0x03, 0xe9}},
+	} {
+		reply = append(reply, 0x80|f.op, byte(len(f.payload)))
+		reply = append(reply, f.payload...)
+	}
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/v1/realtime" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		conn, brw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		fmt.Fprint(brw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		_ = brw.Flush()
+		// Take the client's frames, answer, then close from the server side.
+		_, _ = io.CopyN(io.Discard, brw, int64(len(sent)))
+		_, _ = conn.Write(reply)
+	}))
+	defer backend.Close()
+	r, h := uploadRouter(t, backend.URL, "")
+	front := httptest.NewServer(h)
+	defer front.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(front.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	nonce := base64.StdEncoding.EncodeToString([]byte("activity-closing"))
+	fmt.Fprintf(conn, "GET /v1/realtime?model=chat-a HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"+
+		"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: %s\r\n\r\n", nonce)
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		t.Fatalf("status = %d, want 101", resp.StatusCode)
+	}
+	if _, err := conn.Write(sent); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(reply))
+	if _, err := io.ReadFull(br, got); err != nil || !bytes.Equal(got, reply) {
+		t.Fatalf("reply = %x, %v; want %x", got, err, reply)
+	}
+	_ = conn.Close()
+
+	for deadline := time.Now().Add(5 * time.Second); len(r.Activity().List()) == 0 && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	m := onlyEntry(t, r).Media
+	if m == nil || m.Kind != "realtime" || m.FramesIn != 2 || m.FramesOut != 4 || m.CloseCode != 1001 {
+		t.Fatalf("media = %+v, want 2 in, 4 out, close 1001", m)
+	}
+}
+
 // A video submit is one row with the job id, state and requested length; a
 // voice library write and delete are admin rows.
 func TestActivityVideoJobAndVoiceAdminRows(t *testing.T) {
