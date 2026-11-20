@@ -331,14 +331,14 @@ func (l *Ledger) Reserve(key string, s *config.Stanza) (int, bool) {
 		// Already reserved (e.g. concurrent load for the same instance).
 		return r.gpuIndex, true
 	}
+	if s.CPUOnly() {
+		// A CPU-only backend holds no VRAM and never lands on a card.
+		return -1, true
+	}
 	if len(l.gpus) == 0 {
-		// No GPU telemetry yet: allow a single optimistic reservation so the
-		// router still works on CPU-only nodes / before first poll. Gate on
-		// there being at least one known GPU in practice by requiring vram_mb.
-		if s.VramMB <= 0 {
-			return -1, true
-		}
-		return -1, false
+		// No GPU telemetry yet: allow a zero-vram stanza optimistically; a
+		// positive vram_mb is refused until the first successful poll.
+		return -1, s.VramMB <= 0
 	}
 	used, credit := l.usageLocked(nil)
 	if splitPlacement(s) {
@@ -389,6 +389,9 @@ func (l *Ledger) canAdmitOn(key string, s *config.Stanza, only int, evict []stri
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, exists := l.reservations[key]; exists {
+		return true
+	}
+	if s.CPUOnly() {
 		return true
 	}
 	if len(l.gpus) == 0 {

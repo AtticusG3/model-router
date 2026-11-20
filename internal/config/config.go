@@ -79,6 +79,32 @@ func (f *Filters) validate(owner string, protected ...string) error {
 	return nil
 }
 
+// The api_type vocabulary a stanza may declare. An empty api_type is chat.
+// The list is shared by config validation, /v1/models, the operator UI and the
+// model-less route default, so a typo fails at load instead of silently
+// hiding the model from the Playground.
+const (
+	APITypeChat          = "chat"
+	APITypeEmbedding     = "embedding"
+	APITypeRerank        = "rerank"
+	APITypeImage         = "image"
+	APITypeSpeech        = "speech"
+	APITypeTranscription = "transcription"
+	APITypeRealtime      = "realtime"
+	APITypeVideo         = "video"
+	APITypeAudioGen      = "audio_gen"
+)
+
+// APITypes is every value a stanza's api_type may take, in the order errors
+// list them.
+var APITypes = []string{
+	APITypeChat, APITypeEmbedding, APITypeRerank, APITypeImage,
+	APITypeSpeech, APITypeTranscription, APITypeRealtime, APITypeVideo, APITypeAudioGen,
+}
+
+// Capabilities are the optional capability flags a stanza may declare.
+var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning"}
+
 // Stanza is one model this node can serve. See SPEC.md.
 type Stanza struct {
 	ModelID string `yaml:"model_id"`
@@ -107,9 +133,16 @@ type Stanza struct {
 	MaxInstances int `yaml:"max_instances"`
 	// SpinUpSeconds is how long to wait for health before declaring failure.
 	SpinUpSeconds int `yaml:"spin_up_seconds"`
-	// APIType is one of chat | embedding | image | realtime | rerank | speech | transcription.
+	// APIType is one of APITypes. Empty means chat. It is UI metadata, and it
+	// gives a model-less request its default route (see SPEC.md); a request
+	// that names a model, or an explicit match.path_prefix, still wins.
 	APIType string `yaml:"api_type"`
-	Match   Match  `yaml:"match"`
+	// Capabilities lists what the backend supports (vision, audio_in,
+	// audio_out, tools, reasoning). Published in /v1/models and
+	// /_router/status. A vision chat model (started with an --mmproj) is
+	// still api_type: chat plus capabilities: [vision].
+	Capabilities []string `yaml:"capabilities"`
+	Match        Match    `yaml:"match"`
 	// HealthCheck is the URL path polled for readiness. Default "/health".
 	HealthCheck string `yaml:"health_check"`
 	// IdleTTLSeconds unloads a running instance after this many idle seconds
@@ -161,6 +194,13 @@ func (s *Stanza) SlotCount() int {
 		return 1
 	}
 	return s.Slots
+}
+
+// CPUOnly reports whether the stanza runs with no GPU: `device: cpu` (a CPU
+// speech or transcription backend, usually with vram_mb: 0). It never takes a
+// GPU reservation and is never evicted to free VRAM it does not hold.
+func (s *Stanza) CPUOnly() bool {
+	return strings.EqualFold(strings.TrimSpace(s.Device), "cpu")
 }
 
 // LaunchEqual reports whether a backend started from s is the same process a
@@ -223,10 +263,15 @@ func (s *Stanza) Render(n, gpu int) (string, []string) {
 
 // ParseDevice reads a stanza device field. split is true for a comma list
 // (one model across every listed GPU); a pipe list or a single index is a
-// set of candidates for single-GPU placement. Empty returns no indexes.
+// set of candidates for single-GPU placement. Empty, or "cpu", returns no
+// indexes (a GPU-less stanza).
 func ParseDevice(device string) (idxs []int, split bool, err error) {
 	device = strings.TrimSpace(device)
 	if device == "" {
+		return nil, false, nil
+	}
+	if strings.EqualFold(device, "cpu") {
+		// A CPU-only backend: no GPU index, nothing to place.
 		return nil, false, nil
 	}
 	sep := "|"
@@ -476,7 +521,17 @@ func Parse(raw []byte) (*Config, error) {
 		}
 		s.Filters.SetParamsByID = byID
 		if s.APIType == "" {
-			s.APIType = "chat"
+			s.APIType = APITypeChat
+		}
+		if !slices.Contains(APITypes, s.APIType) {
+			return nil, fmt.Errorf("stanza %q: api_type %q is not valid; must be one of %s",
+				s.ModelID, s.APIType, strings.Join(APITypes, ", "))
+		}
+		for _, c := range s.Capabilities {
+			if !slices.Contains(Capabilities, c) {
+				return nil, fmt.Errorf("stanza %q: capability %q is not valid; must be one of %s",
+					s.ModelID, c, strings.Join(Capabilities, ", "))
+			}
 		}
 		if s.HealthCheck == "" {
 			s.HealthCheck = DefaultHealthCheck
@@ -583,6 +638,10 @@ func (s *Stanza) validatePlacement() error {
 	if err != nil {
 		return fmt.Errorf("stanza %q: %w", s.ModelID, err)
 	}
+	if s.CPUOnly() {
+		// No card to place, so no {gpu} or device-shape rules apply.
+		return nil
+	}
 	hasGPU := s.usesMacro(func(v string) bool { return strings.Contains(v, "{gpu}") })
 	if split && hasGPU {
 		return fmt.Errorf("stanza %q: {gpu} names one GPU but device %q splits across several", s.ModelID, s.Device)
@@ -645,6 +704,7 @@ func (c *Config) allocateInstancePorts(reserved map[int]bool) {
 
 func (c *Config) validateCatalog() error {
 	pathDefault := map[string]string{}
+	typeDefault := map[string]string{}
 	for i := range c.Stanzas {
 		s := &c.Stanzas[i]
 		if s.Match.PathDefault && s.Match.PathPrefix != "" {
@@ -652,6 +712,13 @@ func (c *Config) validateCatalog() error {
 				return fmt.Errorf("duplicate path_default for prefix %q (stanzas %q and %q)", s.Match.PathPrefix, prev, s.ModelID)
 			}
 			pathDefault[s.Match.PathPrefix] = s.ModelID
+		}
+		if s.Match.PathDefault {
+			// Model-less routing by api_type needs one default per type, whatever the prefix.
+			if prev, ok := typeDefault[s.APIType]; ok {
+				return fmt.Errorf("duplicate path_default for api_type %q (stanzas %q and %q)", s.APIType, prev, s.ModelID)
+			}
+			typeDefault[s.APIType] = s.ModelID
 		}
 		for _, a := range s.Aliases {
 			if _, ok := c.poolByName[a]; ok {
@@ -768,6 +835,33 @@ func (c *Config) BodyFields() []string {
 	}
 	add("model")
 	return out
+}
+
+// DefaultStanza returns the stanza a model-less request for apiType should be
+// served by: the one marked path_default, or the only stanza of that type.
+// candidates lists every stanza of that type, so a caller can name them when
+// there is no single default (none, or more than one path_default); id is
+// empty then.
+func (c *Config) DefaultStanza(apiType string) (id string, candidates []string) {
+	defaults := 0
+	for i := range c.Stanzas {
+		s := &c.Stanzas[i]
+		if s.APIType != apiType {
+			continue
+		}
+		candidates = append(candidates, s.ModelID)
+		if s.Match.PathDefault {
+			id = s.ModelID
+			defaults++
+		}
+	}
+	if defaults > 1 {
+		return "", candidates
+	}
+	if id == "" && len(candidates) == 1 {
+		id = candidates[0]
+	}
+	return id, candidates
 }
 
 // parallelFromCommand reads llama.cpp --parallel / -np from a backend

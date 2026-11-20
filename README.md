@@ -158,11 +158,35 @@ model starts, so chat UIs do not look hung. See the Supervisor section of
   then idle, then resident; fewest MB). A `"1|2"` stanza must use `{gpu}`,
   usually `CUDA_VISIBLE_DEVICES={gpu}` with `--device CUDA0`.
 - `"0,1,2"` splits one model across all listed cards.
+- `"cpu"` is a GPU-less backend (a CPU speech or transcription server), usually
+  with `vram_mb: 0`. It takes no card, holds no reservation and is never evicted;
+  `/_router/status` shows it with `gpu: none`.
 
 `max_instances: N` lets a model run up to N copies on separate cards. An extra
 copy starts only when every copy has all its slots busy and a card has room
 without evicting. Extra copies get ports above the highest stanza port
 (`-check` lists them), and each one idles out on its own.
+
+`api_type` is validated against a fixed vocabulary: `chat`, `embedding`,
+`rerank`, `image`, `speech`, `transcription`, `realtime`, `video`, `audio_gen`.
+An empty value means `chat`; anything else fails `-check` and lists the valid
+values, so a typo like `transcribe` is caught at load. `-check` prints the type
+per stanza.
+
+`capabilities` is an optional list per stanza: `vision`, `audio_in`,
+`audio_out`, `tools`, `reasoning`. An unknown flag fails load. Capabilities are
+published in `/v1/models` and `/_router/status`, so a vision chat model (started
+with an `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`.
+
+A request with no `model` falls back by path: `match.path_prefix` first, then
+the `api_type` that path serves — `/v1/audio/speech` → `speech`,
+`/v1/audio/transcriptions` and `/v1/audio/translations` → `transcription`,
+`/v1/realtime` → `realtime`, `/v1/videos` → `video`,
+`/v1/audio/generations` → `audio_gen`, `/v1/images/*` and `/sdapi/v1/*` →
+`image`, `/v1/embeddings` → `embedding`, `/v1/rerank` → `rerank`. That type's
+`path_default: true` stanza (or its only stanza) is used; several candidates and
+no default is a `400` that names them. Only one stanza per `api_type` may be
+`path_default`; `-check` rejects a second.
 
 ## Test
 

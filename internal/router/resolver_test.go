@@ -2,6 +2,9 @@ package router
 
 import (
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"model-router/internal/config"
@@ -318,6 +321,31 @@ stanzas:
 	}
 	if got["chat-a"] != "chat" || got["img-a"] != "image" {
 		t.Fatalf("api_type = %v, want chat-a=chat img-a=image", got)
+	}
+}
+
+func TestCapabilitiesPublishedInModelsAndStatus(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: vision-chat
+    command: "x --port {port}"
+    vram_mb: 0
+    api_type: chat
+    capabilities: [vision, tools]
+`)
+	h := NewHandler(r, NewLogger(io.Discard, false))
+	want := `"capabilities":["vision","tools"]`
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("/v1/models = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_router/status", nil))
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("/_router/status missing capabilities: %s", rec.Body.String())
 	}
 }
 

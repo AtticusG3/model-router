@@ -19,6 +19,56 @@ import (
 // The message mirrors llama-swap's so existing clients keep their behaviour.
 var ErrNoModel = errors.New("no model id could be identified")
 
+// pathAPITypes maps an API request path to the api_type that serves
+// it, so a request with no model id falls back to that type's default stanza
+// (config.DefaultStanza). An explicit match.path_prefix still wins.
+var pathAPITypes = []struct{ prefix, apiType string }{
+	{"/v1/audio/speech", config.APITypeSpeech},
+	{"/v1/audio/transcriptions", config.APITypeTranscription},
+	{"/v1/audio/translations", config.APITypeTranscription},
+	{"/v1/realtime", config.APITypeRealtime},
+	{"/v1/videos", config.APITypeVideo},
+	{"/v1/audio/generations", config.APITypeAudioGen},
+	{"/v1/images/", config.APITypeImage},
+	{"/sdapi/v1/", config.APITypeImage},
+	{"/v1/embeddings", config.APITypeEmbedding},
+	{"/v1/rerank", config.APITypeRerank},
+}
+
+// ambiguousTypeError is a model-less request whose path maps to an api_type
+// with several stanzas and no path_default. It answers 400, not 404: the path
+// does serve a type here, so the client must name one of the candidates.
+type ambiguousTypeError struct {
+	apiType    string
+	candidates []string
+}
+
+func (e *ambiguousTypeError) Error() string {
+	return fmt.Sprintf("no model id in request and no default for api_type %q; name one of: %s",
+		e.apiType, strings.Join(e.candidates, ", "))
+}
+
+// matchTypeDefault resolves a model-less request by the api_type its path
+// serves. ok is false when the path maps to no type, or to a type this node
+// has no stanza for; the caller then falls through to ErrNoModel.
+func matchTypeDefault(path string, cfg *config.Config) (ref ModelRef, err error, ok bool) {
+	for _, m := range pathAPITypes {
+		if !strings.HasPrefix(path, m.prefix) {
+			continue
+		}
+		id, cands := cfg.DefaultStanza(m.apiType)
+		switch {
+		case id != "":
+			return ModelRef{Local: id}, nil, true
+		case len(cands) > 1:
+			return ModelRef{}, &ambiguousTypeError{apiType: m.apiType, candidates: cands}, true
+		default:
+			return ModelRef{}, nil, false
+		}
+	}
+	return ModelRef{}, nil, false
+}
+
 // ModelRef is a resolved model reference: local stanza, pool (compat),
 // peer-qualified "peer/model", or a mesh id (Raw only; peers advertise it).
 type ModelRef struct {
@@ -64,6 +114,8 @@ func resolveRef(raw string, cfg *config.Config) ModelRef {
 //     "model"), or query "model" for GETs / form bodies.
 //  2. Stanza path_prefix match: first matching stanza in config order, unless
 //     a unique path_default for that prefix was set at parse.
+//  3. The api_type the path serves (pathAPITypes): its path_default stanza, or
+//     its only one. Several candidates and no default is an ambiguousTypeError.
 func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 	body, err := readBody(r)
 	if err != nil {
@@ -81,6 +133,12 @@ func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 
 	if ref, ok := matchPathPrefix(r.URL.Path, cfg); ok {
 		return ref, nil
+	}
+
+	// No body model and no explicit path_prefix: fall back to the api_type
+	// this path serves (speech, transcription, video, ...).
+	if ref, err, ok := matchTypeDefault(r.URL.Path, cfg); ok {
+		return ref, err
 	}
 
 	return ModelRef{}, ErrNoModel
