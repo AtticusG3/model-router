@@ -61,7 +61,14 @@ type Metrics struct {
 	start    time.Time
 	mu       sync.Mutex
 	models   map[string]*modelMetrics
-	inflight int64 // atomic: requests currently being proxied
+	media    map[string]*mediaTotals // api_type -> media row totals
+	inflight int64                   // atomic: requests currently being proxied
+}
+
+// mediaTotals counts the media rows of one api_type and their media seconds.
+type mediaTotals struct {
+	count   uint64
+	seconds float64
 }
 
 // NewMetrics returns an empty collector stamped with the process start time.
@@ -149,6 +156,19 @@ func (m *Metrics) Observe(e ActivityEntry) {
 	if e.TTFTMs > 0 {
 		mm.ttft.observe(ttftBuckets, float64(e.TTFTMs)/1000)
 	}
+	// A voice library change is not an api_type, so it stays out of these.
+	if e.Media != nil && e.Media.Kind != voiceAdminKind {
+		if m.media == nil {
+			m.media = map[string]*mediaTotals{}
+		}
+		mt := m.media[e.Media.Kind]
+		if mt == nil {
+			mt = &mediaTotals{}
+			m.media[e.Media.Kind] = mt
+		}
+		mt.count++
+		mt.seconds += e.Media.Seconds
+	}
 }
 
 // Render writes the collector in Prometheus text exposition format (0.0.4).
@@ -235,6 +255,24 @@ func (m *Metrics) Render(node string) string {
 			if mm.completion > 0 {
 				fmt.Fprintf(&sb, "model_router_tokens_total{model=%q,kind=\"completion\"} %d\n", k, mm.completion)
 			}
+		}
+	}
+
+	if len(m.media) > 0 {
+		types := make([]string, 0, len(m.media))
+		for t := range m.media {
+			types = append(types, t)
+		}
+		sort.Strings(types)
+		fmt.Fprintf(&sb, "# HELP model_router_media_requests_total Audio, video and realtime requests by api_type.\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_media_requests_total counter\n")
+		for _, t := range types {
+			fmt.Fprintf(&sb, "model_router_media_requests_total{api_type=%q} %d\n", t, m.media[t].count)
+		}
+		fmt.Fprintf(&sb, "# HELP model_router_media_seconds_total Media seconds by api_type: speech out, transcribed audio in, requested job length, realtime session length.\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_media_seconds_total counter\n")
+		for _, t := range types {
+			fmt.Fprintf(&sb, "model_router_media_seconds_total{api_type=%q} %.3f\n", t, m.media[t].seconds)
 		}
 	}
 

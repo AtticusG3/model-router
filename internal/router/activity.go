@@ -1,9 +1,11 @@
 package router
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,11 +15,15 @@ import (
 	_ "image/png"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"model-router/internal/config"
 )
 
 const (
@@ -82,6 +88,39 @@ type ActivityEntry struct {
 	// size failure. Empty when the row is not an image request or a thumbnail
 	// was stored, so operators can tell a failure from "not an image".
 	ThumbIssue string `json:"thumb_issue,omitempty"`
+	// Media replaces the token stats on an audio, video, realtime or voice
+	// library row; nil on every other row.
+	Media *MediaStats `json:"media,omitempty"`
+}
+
+// voiceAdminKind is the MediaStats kind of a voice library write or delete.
+const voiceAdminKind = "admin"
+
+// MediaStats summarises a media row. Kind is the api_type the path serves
+// (speech, transcription, video, audio_gen, realtime) or "admin" for a voice
+// library change; only the fields of that kind are set.
+type MediaStats struct {
+	Kind string `json:"kind"`
+	// Seconds is the media length: speech audio out, transcribed audio in
+	// (when the backend reports it), the job's requested duration, or the
+	// realtime session length.
+	Seconds    float64 `json:"seconds,omitempty"`
+	InputChars int     `json:"input_chars,omitempty"`
+	Voice      string  `json:"voice,omitempty"`
+	// Playable is true when the whole audio response fitted the capture cap
+	// and is served from /_router/activity/{id}/audio.
+	Playable    bool   `json:"playable,omitempty"`
+	FileName    string `json:"file_name,omitempty"`
+	InputBytes  int64  `json:"input_bytes,omitempty"`
+	OutputChars int    `json:"output_chars,omitempty"`
+	Language    string `json:"language,omitempty"`
+	// Text is the first 200 characters of a transcript.
+	Text      string `json:"text,omitempty"`
+	JobID     string `json:"job_id,omitempty"`
+	State     string `json:"state,omitempty"`
+	FramesIn  int    `json:"frames_in,omitempty"`
+	FramesOut int    `json:"frames_out,omitempty"`
+	CloseCode int    `json:"close_code,omitempty"`
 }
 
 // ActivityCapture is the request/response pair for one activity id.
@@ -94,10 +133,13 @@ type ActivityCapture struct {
 	Truncated   bool                `json:"truncated"`
 }
 
+// storedCapture holds the capture and one optional blob served beside it: an
+// image thumbnail (JPEG) or a whole speech response that fitted the cap.
 type storedCapture struct {
-	cap   ActivityCapture
-	thumb []byte
-	size  int
+	cap      ActivityCapture
+	blob     []byte
+	blobType string
+	size     int
 }
 
 // ActivityLog is an in-memory ring of recent proxied requests plus capped
@@ -136,16 +178,15 @@ func (a *ActivityLog) Capture(id int) (ActivityCapture, bool) {
 	return sc.cap, true
 }
 
-// Thumb returns the JPEG thumbnail decoded from an image response body, if one
-// was captured for id.
-func (a *ActivityLog) Thumb(id int) ([]byte, bool) {
+// Blob returns the thumbnail or audio kept for id, with its content type.
+func (a *ActivityLog) Blob(id int) ([]byte, string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	sc, ok := a.captures[id]
-	if !ok || len(sc.thumb) == 0 {
-		return nil, false
+	if !ok || len(sc.blob) == 0 {
+		return nil, "", false
 	}
-	return sc.thumb, true
+	return sc.blob, sc.blobType, true
 }
 
 func (a *ActivityLog) dropOldestCapture() {
@@ -166,19 +207,19 @@ func (a *ActivityLog) dropOldestCapture() {
 	}
 }
 
-func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, thumb []byte) ActivityEntry {
+func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []byte, blobType string) ActivityEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.nextID++
 	entry.ID = a.nextID
 	cap.ID = entry.ID
-	size := len(cap.ReqBody) + len(cap.RespBody) + len(thumb)
+	size := len(cap.ReqBody) + len(cap.RespBody) + len(blob)
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
 		a.dropOldestCapture()
 	}
 	if size > 0 && a.captureSz+size <= maxCaptureBytes {
 		entry.HasCapture = true
-		a.captures[entry.ID] = storedCapture{cap: cap, thumb: thumb, size: size}
+		a.captures[entry.ID] = storedCapture{cap: cap, blob: blob, blobType: blobType, size: size}
 		a.captureSz += size
 	}
 	a.entries = append(a.entries, entry)
@@ -209,13 +250,17 @@ type activityWriter struct {
 	img          bytes.Buffer
 	imgMax       int
 	imgTruncated bool
-	// A media response (audio, video, octet-stream) is never captured: only
-	// its byte count and a hash prefix are kept.
+	// A media response (audio, video, octet-stream) is never captured as
+	// text: only its byte count and a hash prefix are kept. keepMedia also
+	// keeps up to max bytes, so a short speech response can be replayed.
 	media     bool
+	keepMedia bool
 	sniffed   string // body type sniffed when the head carried no Content-Type
 	respBytes int64
 	hash      hash.Hash
 	hashed    int
+	// ws is set once a websocket upgrade hijacks the connection.
+	ws *wsConn
 }
 
 func (w *activityWriter) WriteHeader(code int) {
@@ -248,7 +293,8 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 	w.noteFirstToken(p)
 	if w.media {
 		w.captureMedia(p)
-	} else {
+	}
+	if !w.media || w.keepMedia {
 		w.captureBody(p)
 	}
 	// No flush here: proxyTo's ReverseProxy (FlushInterval -1) already flushes
@@ -330,6 +376,147 @@ func (w *activityWriter) Flush() {
 
 func (w *activityWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
+}
+
+// Hijack hands a websocket upgrade the client connection, wrapped so the
+// session row can count frames each way. The 101 head still goes out through
+// the server's own writer, so it is not read as a frame.
+func (w *activityWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	conn, brw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err != nil {
+		return nil, nil, err
+	}
+	// Bytes the server read ahead of the hijack come first, then the socket.
+	src := io.Reader(conn)
+	if n := brw.Reader.Buffered(); n > 0 {
+		ahead, _ := brw.Reader.Peek(n)
+		src = io.MultiReader(bytes.NewReader(ahead), conn)
+	}
+	w.ws = &wsConn{Conn: conn, r: src}
+	w.status, w.wroteHead = http.StatusSwitchingProtocols, true
+	return w.ws, bufio.NewReadWriter(bufio.NewReader(w.ws), brw.Writer), nil
+}
+
+// wsConn is the client side of a proxied websocket session. It counts frames
+// each way for the Activity row and never holds a payload.
+type wsConn struct {
+	net.Conn
+	r       io.Reader
+	mu      sync.Mutex
+	in, out wsFrames
+	code    int
+}
+
+func (c *wsConn) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.note(&c.in, p[:n])
+	return n, err
+}
+
+func (c *wsConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.note(&c.out, p[:n])
+	return n, err
+}
+
+// CloseWrite keeps the half-close the proxy sends the client when the backend
+// ends; the embedded net.Conn alone would hide it.
+func (c *wsConn) CloseWrite() error {
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func (c *wsConn) note(f *wsFrames, p []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if code := f.feed(p); code != 0 && c.code == 0 {
+		c.code = code
+	}
+}
+
+// counts returns the frames each way and the first close code either side sent.
+func (c *wsConn) counts() (in, out, code int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.in.n, c.out.n, c.code
+}
+
+// wsFrames follows one direction of a websocket stream (RFC 6455 framing),
+// counting frames and reading the status code of a close frame.
+type wsFrames struct {
+	n      int
+	hdr    []byte
+	left   uint64 // payload bytes of the current frame not yet seen
+	close  bool   // the current frame is a close frame
+	masked bool
+	mask   [4]byte
+	seen   int // close payload bytes read, up to the 2-byte code
+	code   [2]byte
+}
+
+// feed consumes the next bytes of the stream. It returns the close code when
+// this chunk completes one, else 0.
+func (f *wsFrames) feed(p []byte) (closeCode int) {
+	for len(p) > 0 {
+		if f.left == 0 {
+			f.hdr = append(f.hdr, p[0])
+			p = p[1:]
+			need := 2
+			if len(f.hdr) >= 2 {
+				switch f.hdr[1] & 0x7f {
+				case 126:
+					need += 2
+				case 127:
+					need += 8
+				}
+				if f.hdr[1]&0x80 != 0 {
+					need += 4
+				}
+			}
+			if len(f.hdr) < need {
+				continue
+			}
+			size, rest := uint64(f.hdr[1]&0x7f), f.hdr[2:]
+			switch size {
+			case 126:
+				size, rest = uint64(binary.BigEndian.Uint16(rest)), rest[2:]
+			case 127:
+				size, rest = binary.BigEndian.Uint64(rest), rest[8:]
+			}
+			f.masked = len(rest) == 4
+			copy(f.mask[:], rest)
+			f.n++
+			f.close = f.hdr[0]&0x0f == 8
+			f.seen = 0
+			f.left = size
+			f.hdr = f.hdr[:0]
+			continue
+		}
+		n := len(p)
+		if uint64(n) > f.left {
+			n = int(f.left)
+		}
+		if f.close && f.seen < 2 {
+			for _, b := range p[:n] {
+				if f.seen == 2 {
+					break
+				}
+				if f.masked {
+					b ^= f.mask[f.seen]
+				}
+				f.code[f.seen] = b
+				f.seen++
+			}
+			if f.seen == 2 {
+				closeCode = int(binary.BigEndian.Uint16(f.code[:]))
+			}
+		}
+		f.left -= uint64(n)
+		p = p[n:]
+	}
+	return closeCode
 }
 
 func (w *activityWriter) noteFirstToken(p []byte) {
@@ -580,6 +767,10 @@ func asFloat(v any) float64 {
 	case json.Number:
 		f, _ := n.Float64()
 		return f
+	case string:
+		// Some job APIs send a duration as a string, e.g. "seconds":"4".
+		f, _ := strconv.ParseFloat(n, 64)
+		return f
 	default:
 		return 0
 	}
@@ -680,7 +871,15 @@ var generationPathSuffixes = []string{
 	"/rerank", "/reranking",
 	"/images/generations", "/images/edits", "/images/variations",
 	"/audio/speech", "/audio/transcriptions", "/audio/translations",
+	"/audio/speech/batch", "/audio/generations", "/videos",
 	"/txt2img", "/img2img",
+}
+
+// isVoiceAdmin reports whether a request writes to or deletes from the voice
+// library; it gets an admin row rather than a generation row.
+func isVoiceAdmin(method, path string) bool {
+	return (method == http.MethodPost && strings.HasSuffix(path, "/audio/voices")) ||
+		(method == http.MethodDelete && strings.Contains(path, "/audio/voices/"))
 }
 
 // isGenerationRequest reports whether a proxied request is a generation or
@@ -714,7 +913,7 @@ func isImageRequest(path string) bool {
 	return false
 }
 
-func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started time.Time, reqBody []byte, reqTrunc bool, model, target string) {
+func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started time.Time, reqBody []byte, reqBytes int64, reqTrunc bool, model, target string) {
 	status := rec.status
 	if status == 0 {
 		status = http.StatusOK
@@ -723,7 +922,10 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	if ct == "" {
 		ct = rec.sniffed
 	}
-	tokens := parseTokenStats(rec.body.Bytes(), ct)
+	var tokens TokenStats
+	if !rec.media {
+		tokens = parseTokenStats(rec.body.Bytes(), ct)
+	}
 	ttft := rec.ttftMs
 	if !rec.ttftSet {
 		ttft = roundMs(tokens.PromptMs)
@@ -740,30 +942,173 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		TTFTMs:      ttft,
 		Tokens:      tokens,
 	}
+	// A realtime session is logged once, when its websocket closes.
+	logged := rec.ws != nil || isGenerationRequest(req.Method, req.URL.Path) || isVoiceAdmin(req.Method, req.URL.Path)
+	if logged {
+		entry.Media = mediaStats(req, rec, reqBody, reqBytes, entry.DurationMs)
+	}
 	// Metrics see every proxied request, even when the activity ring is
 	// disabled or filters the row out.
 	if r.metrics != nil {
 		r.metrics.Observe(entry)
 	}
-	if r.activity == nil || !isGenerationRequest(req.Method, req.URL.Path) {
+	if r.activity == nil || !logged {
 		return
 	}
 	entry.RespBytes = rec.respBytes
 	entry.BodyHash = rec.bodyHash()
 	reqStr, clipped := clipBody(reqBody)
-	respStr := rec.body.String()
-	thumb, issue := thumbFromImageResponse(rec.img.Bytes())
-	if rec.imgTruncated {
-		thumb, issue = nil, fmt.Sprintf("response exceeds the %d MB image buffer", maxImageBody>>20)
+	var respStr string
+	var blob []byte
+	blobType := "image/jpeg"
+	if rec.media {
+		// Kept media bytes are served whole as the row's audio, never as text,
+		// and only when the response fitted the cap.
+		if !rec.truncated && rec.body.Len() > 0 {
+			blob, blobType = rec.body.Bytes(), ct
+			if entry.Media != nil {
+				entry.Media.Playable = true
+			}
+		}
+	} else {
+		respStr = rec.body.String()
+		thumb, issue := thumbFromImageResponse(rec.img.Bytes())
+		if rec.imgTruncated {
+			thumb, issue = nil, fmt.Sprintf("response exceeds the %d MB image buffer", maxImageBody>>20)
+		}
+		entry.ThumbIssue = issue
+		blob = thumb
 	}
-	entry.ThumbIssue = issue
 	r.activity.record(entry, ActivityCapture{
 		ReqHeaders:  copyHeaderMap(req.Header),
 		ReqBody:     reqStr,
 		RespHeaders: copyHeaderMap(rec.Header()),
 		RespBody:    respStr,
-		Truncated:   reqTrunc || clipped || rec.truncated,
-	}, thumb)
+		Truncated:   reqTrunc || clipped || (rec.truncated && !rec.media),
+	}, blob, blobType)
+}
+
+// pathAPIType is the api_type a request path serves, "" when none.
+func pathAPIType(path string) string {
+	for _, m := range pathAPITypes {
+		if strings.HasPrefix(path, m.prefix) {
+			return m.apiType
+		}
+	}
+	return ""
+}
+
+// mediaStats summarises an audio, video, realtime or voice library row from
+// the captured bodies. It is nil for any other row, which keeps token stats.
+func mediaStats(req *http.Request, rec *activityWriter, reqBody []byte, reqBytes int64, durMs int) *MediaStats {
+	kind := pathAPIType(req.URL.Path)
+	if isVoiceAdmin(req.Method, req.URL.Path) {
+		kind = voiceAdminKind
+	}
+	m := &MediaStats{Kind: kind}
+	// resp stays nil for an audio or plain-text body; reading a nil map is safe.
+	var resp map[string]any
+	_ = json.Unmarshal(rec.body.Bytes(), &resp)
+	switch kind {
+	case config.APITypeSpeech:
+		var in struct {
+			Input string `json:"input"`
+			Voice string `json:"voice"`
+		}
+		_ = json.Unmarshal(reqBody, &in)
+		m.InputChars = utf8.RuneCountInString(in.Input)
+		m.Voice = in.Voice
+		m.Seconds = wavSeconds(rec.body.Bytes(), rec.respBytes)
+	case config.APITypeTranscription:
+		m.FileName = multipartFileName(reqBody)
+		m.InputBytes = reqBytes
+		var text string
+		switch {
+		case rec.status >= 400:
+		case resp != nil:
+			text, _ = resp["text"].(string)
+			m.Language, _ = resp["language"].(string)
+			m.Seconds = asFloat(resp["duration"])
+		default: // response_format text, srt or vtt
+			text = rec.body.String()
+		}
+		m.OutputChars = utf8.RuneCountInString(text)
+		m.Text = clipRunes(text, 200)
+	case config.APITypeVideo, config.APITypeAudioGen:
+		// shortcut: the row holds the submit response only, update it from the job's polls once #69 tracks jobs.
+		m.JobID, _ = resp["id"].(string)
+		m.State, _ = resp["status"].(string)
+		if m.Seconds = asFloat(resp["seconds"]); m.Seconds == 0 {
+			m.Seconds = asFloat(resp["duration"])
+		}
+	case config.APITypeRealtime:
+		if rec.ws == nil {
+			return nil
+		}
+		m.FramesIn, m.FramesOut, m.CloseCode = rec.ws.counts()
+		m.Seconds = float64(durMs) / 1000
+	case voiceAdminKind:
+	default:
+		return nil
+	}
+	return m
+}
+
+// wavSeconds is the play length of a WAV body from its header, given the first
+// bytes and the full byte count; 0 when the body is not a WAV.
+func wavSeconds(b []byte, total int64) float64 {
+	if len(b) < 12 || string(b[:4]) != "RIFF" || string(b[8:12]) != "WAVE" {
+		return 0
+	}
+	var byteRate uint32
+	for i := 12; i+8 <= len(b); {
+		size := binary.LittleEndian.Uint32(b[i+4:])
+		body := i + 8
+		switch string(b[i : i+4]) {
+		case "fmt ":
+			if body+12 <= len(b) {
+				byteRate = binary.LittleEndian.Uint32(b[body+8:])
+			}
+		case "data":
+			if byteRate == 0 {
+				return 0
+			}
+			n, rest := int64(size), total-int64(body)
+			// A streamed WAV leaves the data size at 0 or 0xFFFFFFFF.
+			if size == 0 || size == math.MaxUint32 || n > rest {
+				n = rest
+			}
+			return float64(n) / float64(byteRate)
+		}
+		i = body + int(size) + int(size&1)
+	}
+	return 0
+}
+
+// multipartFileName is the first file name in a multipart body prefix, or "".
+func multipartFileName(body []byte) string {
+	const key = `filename="`
+	i := bytes.Index(body, []byte(key))
+	if i < 0 {
+		return ""
+	}
+	rest := body[i+len(key):]
+	j := bytes.IndexByte(rest, '"')
+	if j < 0 || j > 255 {
+		return ""
+	}
+	return string(rest[:j])
+}
+
+// clipRunes returns the first n characters of s.
+func clipRunes(s string, n int) string {
+	for i := range s {
+		if n == 0 {
+			return s[:i]
+		}
+		n--
+	}
+	return s
 }
 
 func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, target string) (http.ResponseWriter, func()) {
@@ -771,7 +1116,8 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 		return w, func() {}
 	}
 	started := time.Now()
-	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody, started: started}
+	// A logged request keeps its audio up to the capture cap for the player.
+	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody, started: started, keepMedia: isGenerationRequest(req.Method, req.URL.Path)}
 	if isImageRequest(req.URL.Path) {
 		rec.imgMax = maxImageBody
 	}
@@ -784,13 +1130,14 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	}
 	return rec, func() {
 		var reqBody []byte
+		var reqBytes int64
 		var reqTrunc bool
 		if cap != nil {
 			// A backend that answers before reading the upload leaves the body
 			// undrained: flag the capture as partial rather than complete.
-			reqBody, reqTrunc = cap.buf.Bytes(), cap.truncated || (!cap.eof && req.ContentLength != 0)
+			reqBody, reqBytes, reqTrunc = cap.buf.Bytes(), cap.n, cap.truncated || (!cap.eof && req.ContentLength != 0)
 		}
-		r.recordProxy(req, rec, started, reqBody, reqTrunc, model, target)
+		r.recordProxy(req, rec, started, reqBody, reqBytes, reqTrunc, model, target)
 	}
 }
 
@@ -801,11 +1148,13 @@ type captureReader struct {
 	buf       bytes.Buffer
 	max       int
 	truncated bool
-	eof       bool // the body was read to its end
+	eof       bool  // the body was read to its end
+	n         int64 // bytes read in total, captured or not
 }
 
 func (c *captureReader) Read(p []byte) (int, error) {
 	n, err := c.rc.Read(p)
+	c.n += int64(n)
 	if n > 0 {
 		remain := c.max - c.buf.Len()
 		switch {
