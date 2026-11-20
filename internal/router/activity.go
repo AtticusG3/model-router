@@ -176,7 +176,10 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, thumb []b
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
 		a.dropOldestCapture()
 	}
-	if size > 0 && a.captureSz+size <= maxCaptureBytes {
+	// A capture worth keeping holds bytes or flags a truncated request: an
+	// undrained upload with an empty response must still be visible as partial,
+	// not dropped as an empty capture.
+	if (size > 0 || cap.Truncated) && a.captureSz+size <= maxCaptureBytes {
 		entry.HasCapture = true
 		a.captures[entry.ID] = storedCapture{cap: cap, thumb: thumb, size: size}
 		a.captureSz += size
