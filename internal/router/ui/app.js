@@ -504,7 +504,7 @@
   function setNote(text){$('activity-rows').querySelectorAll('.act-note').forEach(n=>n.remove());$('activity-rows').insertAdjacentHTML('beforeend','<tr class="act-note"><td colspan="10" class="empty">'+esc(text)+'</td></tr>')}
   function actCells(e){
     const tok=e.tokens||{};
-    const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"></span>':'';
+    const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"'+(e.thumb_issue?' title="'+esc(e.thumb_issue)+'"':'')+'></span>':'';
     return [
       ['mono',esc(fmtTime(e.timestamp))],
       ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></div></div>'],
@@ -561,11 +561,16 @@
   function loadThumb(el){
     const id=el.dataset.id;
     if(!thumbs.has(id))thumbs.set(id,thumbSrc(id));
-    thumbs.get(id).then(src=>{
-      if(!src){el.dataset.state='none';return}
-      const im=new Image();im.alt='';im.decoding='async';im.src=src;
-      el.replaceChildren(im);el.dataset.state='done';
-    });
+    thumbs.get(id).then(src=>src?showThumb(el,src,()=>captureSrc(id)):el.dataset.state='none');
+  }
+  // The thumb probe and the <img> GET are separate requests, so the row state flips
+  // only once the bytes decode; a failed GET retries the captured body, then gives up.
+  function showThumb(el,src,retry){
+    if(!src){el.dataset.state='none';return}
+    const im=new Image();im.alt='';im.decoding='async';
+    im.onload=()=>{el.replaceChildren(im);el.dataset.state='done'};
+    im.onerror=()=>retry?retry().then(fb=>showThumb(el,fb===src?'':fb,null)):el.dataset.state='none';
+    im.src=src;
   }
   // The thumb endpoint 404s when the response carried no image; the captured body still
   // holds one for responses small enough to fit the capture limit.

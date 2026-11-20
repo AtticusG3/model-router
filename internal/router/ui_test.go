@@ -81,6 +81,9 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 		"function capParsed", "function chatReply", "function imgSrcs",
 		// Image rows fetch the server-rendered thumbnail, with the capture as fallback.
 		"'/_router/activity/'+id+'/thumb'", "function thumbSrc", "function captureSrc",
+		// The row state commits only once the image decodes; a failed GET retries the
+		// captured body. A decode failure on the server is surfaced as thumb_issue.
+		"function showThumb", "im.onload=", "im.onerror=", "e.thumb_issue",
 		// A model shows on every GPU it occupies.
 		"m.gpus&&m.gpus.length?m.gpus:[m.gpu]",
 	} {
