@@ -107,12 +107,19 @@ func TestActivitySpeechRow(t *testing.T) {
 		name     string
 		size     int
 		playable bool
+		streamed bool
 	}{
-		{"under cap", 8044, true},
-		{"over cap", maxCaptureBody + 8044, false},
+		{"under cap", 8044, true, false},
+		{"over cap", maxCaptureBody + 8044, false, false},
+		// Truncated capture with no data size in the header: the length comes
+		// from the full byte count, not the captured prefix.
+		{"over cap, streamed header", maxCaptureBody + 8044, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wav := activityWAV(tc.size)
+			if tc.streamed {
+				binary.LittleEndian.PutUint32(wav[40:], 0xFFFFFFFF)
+			}
 			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/audio/speech" {
 					w.WriteHeader(http.StatusOK)
