@@ -103,7 +103,7 @@ stanzas:
       --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/agents-a1/Agents-A1-Uncensored-MTP-APEX-I-Mini.gguf
       --port {port}
       --host 127.0.0.1
-      --ctx-size 131072
+      --ctx-size 262144
       --threads 8
       --parallel 1
       --cont-batching
@@ -111,8 +111,8 @@ stanzas:
       --flash-attn on
       --cache-type-k turbo4
       --cache-type-v turbo4
-      --fit on --fit-target 1024
-      --spec-type draft-mtp --spec-draft-n-max 4
+      --fit on --fit-target 512
+      --spec-type draft-mtp --spec-draft-n-max 3
       --metrics
     vram_mb: 14500
     device: 0
@@ -315,12 +315,133 @@ stanzas:
     idle_ttl_seconds: 300
     unlisted: false
     port: 5828
+  - model_id: flux3-klein
+    name: "Flux.3 Image Klein"
+    aliases: [flux3-klein-waldron]
+    command: >
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux3-klein/flux3-image-klein-Q8_0.gguf
+      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux2-klein/flux2-vae.safetensors
+      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux3-klein/Qwen3VL-4B-Instruct-Q4_K_M.gguf
+      --mmap --max-vram -1 --rng cuda --vae-tiling --fa
+      --steps 16 --cfg-scale 1.0 --seed -1 --sampling-method euler
+      -W 1024 -H 1024
+      -l 0.0.0.0 --listen-port {port}
+    vram_mb: 9500
+    device: 0
+    spin_up_seconds: 60
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5829
+
+
+  - model_id: fibo-2.0-edit-turbo
+    name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
+    aliases: [fibo-2.0, fibo-edit-turbo]
+    command: >
+      /opt/ai/bin/sd-router-shim {port} --
+      /opt/ai/bin/sd-server
+      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/fibo-2.0/fibo2_edit_turbo_int8_convrot.safetensors
+      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux3-klein/Qwen3VL-4B-Instruct-Q4_K_M.gguf
+      --llm_vision /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/fibo-2.0/mmproj-Qwen3VL-4B-Instruct-F16.gguf
+      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/flux2-klein/flux2-vae.safetensors
+      --mmap --max-vram 12 --rng cuda --vae-tiling --fa --offload-to-cpu
+      --sampling-method euler --steps 4 --cfg-scale 1.0 --seed -1
+      -W 1024 -H 1024
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 120
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5830
+
+  - model_id: qwen3.6-35b-a3b-genesis-hermes
+    name: "Qwen 3.6 35B A3B Uncensored Genesis Hermes (APEX-Compact, vision, partial offload)"
+    aliases: [genesis-hermes, qwen3.6-genesis, hermes-35b, luffy-hermes, qwen3.6-35b-genesis]
+    command: >
+      /opt/ai/bin/llama-server
+      --model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36-genesis-hermes/Hermes3.6-35B-A3B-Uncensored-Genesis-APEX-Compact.gguf
+      --mmproj /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36-genesis-hermes/mmproj-Hermes3.6-35B-A3B-Uncensored-Genesis-F16.gguf
+      --mmproj-offload
+      --port {port}
+      --host 127.0.0.1
+      --ctx-size 131072
+      --threads 8
+      --parallel 1
+      --cont-batching
+      --load-mode mlock
+      --flash-attn on
+      --cache-type-k f16
+      --cache-type-v f16
+      --n-gpu-layers 999
+      --n-cpu-moe 40
+      --jinja --chat-template-file /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/llama-cpp/models/qwen36-genesis-hermes/chat_template.jinja
+      --metrics
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 180
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5812
+
+  - model_id: qwen3.8-flash-next-iq2_xs
+    name: "Qwen3.8 Flash-Next 125B A6B IQ2_XS (Strata, 256k, uncensored cvec)"
+    aliases: [flash-next-iq2xs, qwen38-flash-next-iq2xs, qwen3.8-flash-next-iq2-xs]
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/.venv/bin/python
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/serve/server.py
+      --engine strata
+      --config /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/strata-iq2_xs.json
+      --port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID"]
+    vram_mb: 14200
+    device: 0
+    spin_up_seconds: 300
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 1800
+    hold_seconds: 120
+    slots: 2
+    unlisted: false
+    port: 5808
+
+  - model_id: deepseek-v4.1-flash-ista-das-coder
+    name: "DeepSeek V4.1 Flash ISTA-DAS Coder (Strata dsv41, 131k, IQ2_XXS)"
+    aliases: [ista-das-coder, dsv41-coder, deepseek-coder]
+    command: >
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/.venv/bin/python
+      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/serve/server.py
+      --engine strata
+      --config /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/strata-deepseek-v4.1-flash-ista-das-coder.json
+      --port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID"]
+    vram_mb: 14200
+    device: 0
+    spin_up_seconds: 600
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 900
+    hold_seconds: 60
+    slots: 1
+    unlisted: false
+    port: 5940
 
 peers:
   - name: buster
     kind: router
     base_url: http://203.0.113.77:18080
-    models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
+    models: [qwen38-flash-next, agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
              ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: digger
