@@ -177,7 +177,7 @@ SPEC.md                  goals & architecture
 PLAN.md                  fleet survey, pitfalls, fitted design, deploy plan
 docs/vram-fit-ladder.md  shared model_ids, VRAM ladder, Qwen chat template
 cmd/model-router/        the router binary
-cmd/fake-model/          test backend (OpenAI + sdapi surface)
+cmd/fake-model/          test backend (OpenAI + sdapi + audio/voice/realtime/video-job surface)
 internal/config/         config loading/validation
 internal/router/         matcher, admission, supervisor, telemetry, pools, proxy, server
 configs/                 per-node YAML + qwen-fixed-chat-template.jinja
