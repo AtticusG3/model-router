@@ -94,15 +94,19 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 }
 
 // Some proxies hold a text/plain stream until it ends. The Logs page must stop
-// waiting for headers and poll the JSON snapshot instead, and say so.
+// waiting for headers and poll the JSON snapshot instead, and say so. A model
+// source has no lines in the combined snapshot, so it polls its own.
 func TestEmbeddedUILogsPollFallback(t *testing.T) {
 	for _, want := range []string{
 		"LOG_STREAM_WAIT", "slow=true;ac.abort()", "logPoll(next)",
-		"fetch('/_router/logs'", "Polling every 2 s", "Stream blocked",
+		"/_router/logs/'+model", "j.lines", "Polling every 2 s",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)
 		}
+	}
+	if strings.Contains(webUIHTML, "Stream blocked") {
+		t.Error("the poll fallback still gives up on model sources")
 	}
 }
 
