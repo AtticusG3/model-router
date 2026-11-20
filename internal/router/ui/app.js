@@ -552,21 +552,29 @@
     if(!entries.length)setNote(ACT_NOTE);
   }
 
-  // Thumbnails: image rows get a placeholder at once; the image is fetched from the capture only when the
-  // row scrolls into view. The captured image is shown at thumbnail size by CSS, it is not downscaled.
-  // shortcut: a response body clipped at the capture limit has no whole image, so that row keeps the
-  // placeholder, upgrade when the capture API serves a thumbnail.
+  // Thumbnails: image rows get a placeholder at once; the image is fetched from the
+  // capture only when the row scrolls into view. The server decodes and downscales the
+  // first image it saw in the response; rows captured without one fall back to the body.
   const thumbs=new Map();
   const thumbIO=window.IntersectionObserver&&new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){thumbIO.unobserve(x.target);loadThumb(x.target)}}),{rootMargin:'160px'});
   function hydrateThumb(el){if(thumbIO&&!thumbs.has(el.dataset.id))thumbIO.observe(el);else loadThumb(el)}
   function loadThumb(el){
     const id=el.dataset.id;
-    if(!thumbs.has(id))thumbs.set(id,json('/_router/activity/'+id).then(c=>imgSrcs(parseJSON(c.resp_body))[0]||'').catch(()=>{thumbs.delete(id);return ''}));
+    if(!thumbs.has(id))thumbs.set(id,thumbSrc(id));
     thumbs.get(id).then(src=>{
       if(!src){el.dataset.state='none';return}
       const im=new Image();im.alt='';im.decoding='async';im.src=src;
       el.replaceChildren(im);el.dataset.state='done';
     });
+  }
+  // The thumb endpoint 404s when the response carried no image; the captured body still
+  // holds one for responses small enough to fit the capture limit.
+  function thumbSrc(id){
+    const url='/_router/activity/'+id+'/thumb';
+    return fetch(url).then(r=>r.ok?url:captureSrc(id)).catch(()=>captureSrc(id));
+  }
+  function captureSrc(id){
+    return json('/_router/activity/'+id).then(c=>imgSrcs(parseJSON(c.resp_body))[0]||'').catch(()=>{thumbs.delete(id);return ''});
   }
 
   const parseJSON=s=>{try{return JSON.parse(s)}catch(e){return null}};

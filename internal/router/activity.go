@@ -2,7 +2,11 @@ package router
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"math"
 	"net/http"
@@ -16,6 +20,12 @@ const (
 	maxActivityEntries = 200
 	maxCaptureBody     = 256 * 1024
 	maxCaptureBytes    = 8 * 1024 * 1024
+	// maxImageBody is the extra buffer kept for an image-generation response so
+	// the thumbnail is decoded from the whole body, not the clipped capture.
+	// Longer responses are captured truncated with no thumbnail.
+	maxImageBody = 32 * 1024 * 1024
+	// maxThumbEdge is the long edge of a stored thumbnail, in pixels.
+	maxThumbEdge = 160
 )
 
 var sensitiveHeaders = map[string]bool{
@@ -68,8 +78,9 @@ type ActivityCapture struct {
 }
 
 type storedCapture struct {
-	cap  ActivityCapture
-	size int
+	cap   ActivityCapture
+	thumb []byte
+	size  int
 }
 
 // ActivityLog is an in-memory ring of recent proxied requests plus capped
@@ -108,6 +119,18 @@ func (a *ActivityLog) Capture(id int) (ActivityCapture, bool) {
 	return sc.cap, true
 }
 
+// Thumb returns the JPEG thumbnail decoded from an image response body, if one
+// was captured for id.
+func (a *ActivityLog) Thumb(id int) ([]byte, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sc, ok := a.captures[id]
+	if !ok || len(sc.thumb) == 0 {
+		return nil, false
+	}
+	return sc.thumb, true
+}
+
 func (a *ActivityLog) dropOldestCapture() {
 	if len(a.captures) == 0 {
 		return
@@ -126,19 +149,19 @@ func (a *ActivityLog) dropOldestCapture() {
 	}
 }
 
-func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture) ActivityEntry {
+func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, thumb []byte) ActivityEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.nextID++
 	entry.ID = a.nextID
 	cap.ID = entry.ID
-	size := len(cap.ReqBody) + len(cap.RespBody)
+	size := len(cap.ReqBody) + len(cap.RespBody) + len(thumb)
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
 		a.dropOldestCapture()
 	}
 	if size > 0 && a.captureSz+size <= maxCaptureBytes {
 		entry.HasCapture = true
-		a.captures[entry.ID] = storedCapture{cap: cap, size: size}
+		a.captures[entry.ID] = storedCapture{cap: cap, thumb: thumb, size: size}
 		a.captureSz += size
 	}
 	a.entries = append(a.entries, entry)
@@ -164,6 +187,10 @@ type activityWriter struct {
 	ttftMs    int
 	ttftSet   bool
 	scan      bytes.Buffer
+	// img keeps a full copy of an image response (up to imgMax) so the
+	// thumbnail can be decoded before the capture body is clipped.
+	img    bytes.Buffer
+	imgMax int
 }
 
 func (w *activityWriter) WriteHeader(code int) {
@@ -180,6 +207,13 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	w.noteFirstToken(p)
+	if w.imgMax > w.img.Len() {
+		n := w.imgMax - w.img.Len()
+		if n > len(p) {
+			n = len(p)
+		}
+		w.img.Write(p[:n])
+	}
 	remain := w.max - w.body.Len()
 	switch {
 	case remain <= 0:
@@ -325,6 +359,93 @@ func clipBody(b []byte) (string, bool) {
 		return string(b), false
 	}
 	return string(b[:maxCaptureBody]), true
+}
+
+// thumbFromImageResponse returns a downscaled JPEG thumbnail decoded from the
+// first image in an image-generation response — sd.cpp's images[] or the
+// OpenAI data[].b64_json. It returns nil when the body holds no image.
+func thumbFromImageResponse(body []byte) []byte {
+	if len(body) == 0 {
+		return nil
+	}
+	var obj struct {
+		Images []string `json:"images"`
+		Data   []struct {
+			B64JSON string `json:"b64_json"`
+			URL     string `json:"url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return nil
+	}
+	var enc string
+	for _, s := range obj.Images {
+		if s != "" {
+			enc = s
+			break
+		}
+	}
+	if enc == "" {
+		for _, d := range obj.Data {
+			if d.B64JSON != "" {
+				enc = d.B64JSON
+				break
+			}
+			if d.URL != "" {
+				enc = d.URL
+				break
+			}
+		}
+	}
+	if i := strings.Index(enc, ";base64,"); i >= 0 {
+		enc = enc[i+len(";base64,"):]
+	}
+	if enc == "" {
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil {
+		return nil
+	}
+	src, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, downscale(src, maxThumbEdge), &jpeg.Options{Quality: 80}); err != nil {
+		return nil
+	}
+	return buf.Bytes()
+}
+
+// downscale returns src scaled so its long edge is at most max pixels, sampling
+// the nearest source pixel.
+// shortcut: nearest-neighbour, swap in a box filter if thumbnails look aliased.
+func downscale(src image.Image, max int) image.Image {
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= max && h <= max {
+		return src
+	}
+	nw, nh := max, max
+	if w >= h {
+		nh = h * max / w
+	} else {
+		nw = w * max / h
+	}
+	if nw < 1 {
+		nw = 1
+	}
+	if nh < 1 {
+		nh = 1
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
+	for y := range nh {
+		for x := range nw {
+			dst.Set(x, y, src.At(b.Min.X+x*w/nw, b.Min.Y+y*h/nh))
+		}
+	}
+	return dst
 }
 
 func asInt(v any) int {
@@ -474,6 +595,23 @@ func isGenerationRequest(method, path string) bool {
 	return false
 }
 
+// imagePathSuffixes are the generation endpoints whose response body carries a
+// rendered image; their responses get the extra buffer for a thumbnail.
+var imagePathSuffixes = []string{
+	"/images/generations", "/images/edits", "/images/variations",
+	"/txt2img", "/img2img",
+}
+
+// isImageRequest reports whether a proxied request renders an image.
+func isImageRequest(path string) bool {
+	for _, suffix := range imagePathSuffixes {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started time.Time, reqBody []byte, reqTrunc bool, model, target string) {
 	status := rec.status
 	if status == 0 {
@@ -513,7 +651,7 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		RespHeaders: copyHeaderMap(rec.Header()),
 		RespBody:    respStr,
 		Truncated:   reqTrunc || clipped || rec.truncated,
-	})
+	}, thumbFromImageResponse(rec.img.Bytes()))
 }
 
 func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, target string) (http.ResponseWriter, func()) {
@@ -533,6 +671,9 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	}
 	started := time.Now()
 	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody, started: started}
+	if isImageRequest(req.URL.Path) {
+		rec.imgMax = maxImageBody
+	}
 	return rec, func() {
 		r.recordProxy(req, rec, started, captureReq, reqTrunc, model, target)
 	}

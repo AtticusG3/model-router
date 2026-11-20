@@ -79,6 +79,8 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 		// The dialog has a parsed view, a raw fallback and collapsible headers.
 		`id="capture-parsed"`, `id="capture-raw"`, `id="capture-toggle"`, `<details class="capture-headers" open>`,
 		"function capParsed", "function chatReply", "function imgSrcs",
+		// Image rows fetch the server-rendered thumbnail, with the capture as fallback.
+		"'/_router/activity/'+id+'/thumb'", "function thumbSrc", "function captureSrc",
 		// A model shows on every GPU it occupies.
 		"m.gpus&&m.gpus.length?m.gpus:[m.gpu]",
 	} {

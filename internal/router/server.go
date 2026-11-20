@@ -54,6 +54,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 		{"/logs/stream/upstream", handleLogStream(logger, streamUpstream, "")},
 		{"/logs/stream/mesh", handleLogStream(logger, streamMesh, "")},
 		{"/logs/stream/{model_id...}", handleModelLogStream(r, logger)},
+		{"/_router/activity/{id}/thumb", handleActivityThumb(r)},
 		{"/_router/activity/{id}", handleActivityCapture(r)},
 		{"/_router/activity", handleActivity(r)},
 		{"/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
@@ -202,6 +203,29 @@ func handleActivityCapture(r *Router) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, cap)
+	}
+}
+
+func handleActivityThumb(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.Atoi(req.PathValue("id"))
+		if err != nil || id < 1 {
+			http.Error(w, "invalid activity id", http.StatusBadRequest)
+			return
+		}
+		data, ok := r.Activity().Thumb(id)
+		if !ok {
+			http.Error(w, "thumbnail not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		// The capture lives until the ring evicts it, so a short cache is safe.
+		w.Header().Set("Cache-Control", "private, max-age=600")
+		_, _ = w.Write(data)
 	}
 }
 
