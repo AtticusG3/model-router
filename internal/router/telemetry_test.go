@@ -113,6 +113,7 @@ func TestTelemetrySnapshotListsEveryGPUOfASplitModel(t *testing.T) {
 	r.ledger.SetGPUs([]*GPUState{gpu(0, 10000), gpu(1, 10000), gpu(2, 10000)})
 	r.cfg().Stanza("a").Device = "1,2"
 	r.cfg().Stanza("b").Device = "0"
+	r.cfg().Stanza("b").Port = r.cfg().Stanza("a").Port
 	for _, id := range []string{"a", "b"} {
 		if _, err := r.Load(id); err != nil {
 			t.Fatalf("Load %s: %v", id, err)

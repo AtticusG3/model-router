@@ -128,7 +128,7 @@ func TestLoadWaitUsesRemainingAdmitBudget(t *testing.T) {
 	ctx = context.WithValue(ctx, admitDeadlineKey{}, time.Now().Add(-time.Second))
 
 	start := time.Now()
-	_, err := r.load(ctx, "b", true)
+	_, err := r.load(ctx, "b", true, true)
 	if ae := new(admitError); !errors.As(err, &ae) {
 		t.Fatalf("error = %T %v, want admitError", err, err)
 	}

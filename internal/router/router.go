@@ -44,6 +44,14 @@ type Router struct {
 	coolMu    sync.Mutex
 	cooldowns map[string]*startCooldown // stanza model id -> failed-start state
 
+	// evictedPreloads maps a preload model that lost its VRAM to an eviction
+	// to the instance key that evicted it, so restorePreloads can bring it
+	// back once the room returns. Guarded by mu.
+	evictedPreloads map[string]string
+	// restoreMu keeps one restore pass in flight; a slow preload start must
+	// not be restarted by the next sweep or unload.
+	restoreMu sync.Mutex
+
 	httpc    *http.Client
 	activity *ActivityLog
 	metrics  *Metrics
@@ -55,20 +63,21 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 	ledger := NewLedger()
 	ledger.headroomMB = cfg.HeadroomMB
 	r := &Router{
-		logger:    logger,
-		ledger:    ledger,
-		peers:     NewPeerCache(stale),
-		node:      node,
-		managed:   map[string]*Managed{},
-		occupancy: map[string]int{},
-		draining:  map[string]bool{},
-		peerUntil: map[string]time.Time{},
-		cooldowns: map[string]*startCooldown{},
-		admitWait: make(chan struct{}, 1),
-		shutdown:  make(chan struct{}),
-		httpc:     &http.Client{Timeout: 0}, // no overall timeout; streaming is long
-		activity:  NewActivityLog(),
-		metrics:   NewMetrics(),
+		logger:          logger,
+		ledger:          ledger,
+		peers:           NewPeerCache(stale),
+		node:            node,
+		managed:         map[string]*Managed{},
+		occupancy:       map[string]int{},
+		draining:        map[string]bool{},
+		peerUntil:       map[string]time.Time{},
+		cooldowns:       map[string]*startCooldown{},
+		evictedPreloads: map[string]string{},
+		admitWait:       make(chan struct{}, 1),
+		shutdown:        make(chan struct{}),
+		httpc:           &http.Client{Timeout: 0}, // no overall timeout; streaming is long
+		activity:        NewActivityLog(),
+		metrics:         NewMetrics(),
 	}
 	r.cfgp.Store(cfg)
 	return r
@@ -100,17 +109,19 @@ func (r *Router) Peers() *PeerCache { return r.peers }
 // Fail-fast: preload and tests use this. Request paths use load(..., true)
 // so a busy GPU queues instead of 503.
 func (r *Router) Load(modelID string) (int, error) {
-	return r.load(context.Background(), modelID, false)
+	return r.load(context.Background(), modelID, false, true)
 }
 
-func (r *Router) load(ctx context.Context, key string, wait bool) (int, error) {
+// load ensures instance key is running. evict false keeps a caller that must
+// not disturb other models (restoring an evicted preload) from unloading one.
+func (r *Router) load(ctx context.Context, key string, wait, evict bool) (int, error) {
 	s := r.cfg().Stanza(instanceModel(key))
 	if n := instanceIndex(key); s == nil || n < 0 || n >= s.InstanceCount() {
 		return -1, fmt.Errorf("unknown local model %q", key)
 	}
 	// An extra copy is opportunistic: if its GPU is gone, the caller queues
 	// on a sibling instead of evicting or waiting here.
-	evictOK := !r.hasLiveSibling(key)
+	evictOK := evict && !r.hasLiveSibling(key)
 	if !evictOK {
 		wait = false
 	}
@@ -370,7 +381,14 @@ func (r *Router) waitAdmit(ctx context.Context) error {
 func (r *Router) Unload(id string) error {
 	s := r.cfg().Stanza(id)
 	if s == nil || s.InstanceCount() == 1 {
-		return r.unloadInstance(id)
+		if err := r.unloadInstance(id); err != nil {
+			return err
+		}
+		// A model the operator stopped frees its card for a pending preload.
+		// Eviction unloads do not come through here: the evictor is about to
+		// take the room, so restoring then would fight that load.
+		go r.restorePreloads()
+		return nil
 	}
 	unloaded := false
 	for n := 0; n < s.InstanceCount(); n++ {
@@ -381,6 +399,7 @@ func (r *Router) Unload(id string) error {
 	if !unloaded {
 		return fmt.Errorf("not loaded: %s", id)
 	}
+	go r.restorePreloads()
 	return nil
 }
 
@@ -446,6 +465,9 @@ func (r *Router) SweepStale() {
 			r.logger.Errorf("ttl evict %s: %v", key, err)
 		}
 	}
+	// A swept model frees its card: an evicted preload may fit again. This
+	// also retries a preload that had no room at the last free.
+	go r.restorePreloads()
 }
 
 // claimForSweep marks a stale idle model so a request cannot take a slot
@@ -591,7 +613,10 @@ func (r *Router) evict(id string, kind evictKind, forKey string, gpu int) {
 	r.logger.Infof("evicting %s %s from GPU %d to admit %s", kind, id, gpu, forKey)
 	if err := r.unloadInstance(id); err != nil {
 		r.logger.Errorf("evict %s: %v", id, err)
+		return
 	}
+	// A preload model evicted to make room comes back when the room returns.
+	r.notePreloadEvicted(instanceModel(id), forKey)
 }
 
 // claimForEvict marks an occupant for unload if kind allows it. Unload
@@ -1519,7 +1544,7 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			return err
 		}
 		w = lw
-	} else if _, err := r.load(req.Context(), key, true); err != nil {
+	} else if _, err := r.load(req.Context(), key, true, true); err != nil {
 		return err
 	}
 	r.mu.Lock()
@@ -1981,6 +2006,6 @@ func (r *Router) HandleLoad(_ context.Context, modelID string) error {
 		key = live[0]
 	}
 	r.mu.Unlock()
-	_, err := r.load(loadCtx, key, true)
+	_, err := r.load(loadCtx, key, true, true)
 	return err
 }
