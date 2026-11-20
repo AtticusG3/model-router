@@ -380,7 +380,8 @@ func (w *activityWriter) Unwrap() http.ResponseWriter {
 
 // Hijack hands a websocket upgrade the client connection, wrapped so the
 // session row can count frames each way. The 101 head still goes out through
-// the server's own writer, so it is not read as a frame.
+// the server's own writer, so it is not read as a frame; ReverseProxy writes
+// only that head to the ReadWriter and copies frames over the returned conn.
 func (w *activityWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, brw, err := http.NewResponseController(w.ResponseWriter).Hijack()
 	if err != nil {
