@@ -2,8 +2,13 @@ package router
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	_ "image/jpeg"
+	"image/png"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -134,6 +139,14 @@ func TestActivityRecordsProxiedRequest(t *testing.T) {
 	}
 	if got := cap.ReqHeaders["Authorization"]; len(got) != 1 || got[0] != "[redacted]" {
 		t.Fatalf("authorization = %v", cap.ReqHeaders["Authorization"])
+	}
+
+	// A chat response carries no image, so the thumbnail endpoint is a 404.
+	thumbReq := httptest.NewRequest("GET", "/_router/activity/1/thumb", nil)
+	thumbRec := httptest.NewRecorder()
+	h.ServeHTTP(thumbRec, thumbReq)
+	if thumbRec.Code != http.StatusNotFound {
+		t.Fatalf("non-image thumb status = %d, want 404", thumbRec.Code)
 	}
 }
 
@@ -267,5 +280,151 @@ func TestActivitySkipsNonGenerationRequests(t *testing.T) {
 	}
 	if n := len(r.Activity().List()); n != 0 {
 		t.Fatalf("activity rows = %d, want 0", n)
+	}
+}
+
+// An image response above the capture limit still yields a thumbnail: the router
+// buffers the whole body, decodes and downscales the first image before clipping
+// the capture, and serves it from /_router/activity/{id}/thumb.
+func TestActivityImageThumbnail(t *testing.T) {
+	// Incompressible noise, so the base64 JSON body stays above the capture limit.
+	src := image.NewNRGBA(image.Rect(0, 0, 512, 512))
+	rnd := rand.New(rand.NewPCG(1, 2))
+	for i := range src.Pix {
+		src.Pix[i] = byte(rnd.IntN(256))
+	}
+	var pngBuf bytes.Buffer
+	if err := png.Encode(&pngBuf, src); err != nil {
+		t.Fatalf("encode png: %v", err)
+	}
+	body := `{"images":["` + base64.StdEncoding.EncodeToString(pngBuf.Bytes()) + `"],"parameters":{}}`
+	if len(body) <= maxCaptureBody {
+		t.Fatalf("test body %d bytes, want over the %d capture limit", len(body), maxCaptureBody)
+	}
+
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/_router/load" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer peer.Close()
+
+	cfg, err := config.Load("../../test/router-a.yaml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.Peer("digger").BaseURL = peer.URL
+
+	logger := NewLogger(io.Discard, false)
+	r := New(cfg, logger, "router-a")
+	h := NewHandler(r, logger)
+
+	req := httptest.NewRequest("POST", "/sdapi/v1/txt2img", bytes.NewBufferString(`{"model":"digger/remote-model","prompt":"a cat","width":512,"height":512}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	entries := r.Activity().List()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if !entries[0].HasCapture {
+		t.Fatal("expected capture")
+	}
+
+	// The stored capture is still clipped to the limit even though the whole
+	// body was buffered for the thumbnail.
+	cap, ok := r.Activity().Capture(entries[0].ID)
+	if !ok {
+		t.Fatal("capture missing")
+	}
+	if !cap.Truncated || len(cap.RespBody) != maxCaptureBody {
+		t.Fatalf("capture = truncated %v, %d bytes, want truncated at %d", cap.Truncated, len(cap.RespBody), maxCaptureBody)
+	}
+
+	thumbReq := httptest.NewRequest("GET", "/_router/activity/1/thumb", nil)
+	thumbRec := httptest.NewRecorder()
+	h.ServeHTTP(thumbRec, thumbReq)
+	if thumbRec.Code != http.StatusOK {
+		t.Fatalf("thumb status = %d body=%s", thumbRec.Code, thumbRec.Body.String())
+	}
+	if ct := thumbRec.Header().Get("Content-Type"); ct != "image/jpeg" {
+		t.Fatalf("thumb content-type = %q", ct)
+	}
+	thumb, format, err := image.Decode(bytes.NewReader(thumbRec.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("decode thumb: %v", err)
+	}
+	if format != "jpeg" {
+		t.Fatalf("thumb format = %q, want jpeg", format)
+	}
+	if b := thumb.Bounds(); b.Dx() > maxThumbEdge || b.Dy() > maxThumbEdge {
+		t.Fatalf("thumb bounds = %v, want long edge at most %d", b, maxThumbEdge)
+	}
+}
+
+// An image the server cannot decode (an unregistered format such as WebP) records
+// why on the entry, so the Activity UI can tell a decode failure apart from a row
+// that never held an image, and serves no thumbnail.
+func TestActivityThumbnailDecodeFailureSurfaced(t *testing.T) {
+	// WebP magic with no decoder registered, so image.Decode fails on it.
+	fake := append([]byte("RIFF\x24\x00\x00\x00WEBPVP8 "), make([]byte, 24)...)
+	body := `{"images":["` + base64.StdEncoding.EncodeToString(fake) + `"]}`
+
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/_router/load" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer peer.Close()
+
+	cfg, err := config.Load("../../test/router-a.yaml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.Peer("digger").BaseURL = peer.URL
+
+	logger := NewLogger(io.Discard, false)
+	r := New(cfg, logger, "router-a")
+	h := NewHandler(r, logger)
+
+	req := httptest.NewRequest("POST", "/sdapi/v1/txt2img", bytes.NewBufferString(`{"model":"digger/remote-model","prompt":"a cat"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	entries := r.Activity().List()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want 1", len(entries))
+	}
+	if !strings.Contains(entries[0].ThumbIssue, "decode") {
+		t.Fatalf("thumb issue = %q, want a decode failure", entries[0].ThumbIssue)
+	}
+
+	thumbRec := httptest.NewRecorder()
+	h.ServeHTTP(thumbRec, httptest.NewRequest("GET", "/_router/activity/1/thumb", nil))
+	if thumbRec.Code != http.StatusNotFound {
+		t.Fatalf("thumb status = %d, want 404", thumbRec.Code)
+	}
+}
+
+// The extra image buffer stops at imgMax and flags the cut, so recordProxy can
+// report an oversized response instead of a decode failure.
+func TestActivityWriterFlagsImageBufferTruncation(t *testing.T) {
+	rec := httptest.NewRecorder()
+	w := &activityWriter{ResponseWriter: rec, max: maxCaptureBody, imgMax: 4, started: time.Now()}
+	_, _ = w.Write([]byte("abcdef"))
+	if !w.imgTruncated || w.img.String() != "abcd" {
+		t.Fatalf("img = %q, truncated = %v", w.img.String(), w.imgTruncated)
 	}
 }
