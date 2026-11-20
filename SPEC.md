@@ -401,6 +401,7 @@ the peer admits against its own budget.
 | `GET /_router/status` | Node name, catalog, local telemetry, cached peers. |
 | `GET /_router/telemetry` | The snapshot peers pull. |
 | `GET /_router/logs` | Router, upstream, and mesh rings, plus a scrape of each running backend's `/metrics`. |
+| `GET /_router/logs/{model_id}` | One model's log ring as JSON (`lines`), for the UI's polling fallback when a proxy holds the live stream open (ids may contain slashes). Unknown id: 404. |
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
 | `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |

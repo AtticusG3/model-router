@@ -765,19 +765,19 @@
   // snapshot (which such proxies do pass) instead of sitting on "Connecting…".
   const LOG_STREAM_WAIT=5000,LOG_POLL_MS=2000;
   async function logPoll(ac){
-    if(logSrc&&!['proxy','upstream','mesh'].includes(logSrc)){
-      logStatus('Stream blocked · model logs need a direct connection');
-      return;
-    }
+    // The combined snapshot carries no per-model lines, so a model source
+    // polls its own snapshot.
+    const model=['','proxy','upstream','mesh'].includes(logSrc)?'':logSrc;
     let prev=new Map();
     const tick=async()=>{
       try{
-        const r=await fetch('/_router/logs',{signal:ac.signal});
+        const url=model?'/_router/logs/'+model.split('/').map(encodeURIComponent).join('/'):'/_router/logs';
+        const r=await fetch(url,{signal:ac.signal});
         if(!r.ok)throw new Error('HTTP '+r.status);
         const j=await r.json();
         const key={proxy:'entries',upstream:'upstream',mesh:'mesh'}[logSrc];
         // shortcut: the combined view orders by the HH:MM:SS prefix, so lines either side of midnight can swap, upgrade if the snapshot carries a sequence number.
-        const lines=key?(j[key]||[]):[...(j.entries||[]),...(j.upstream||[]),...(j.mesh||[])].sort((a,b)=>a.slice(0,12)<b.slice(0,12)?-1:a.slice(0,12)>b.slice(0,12)?1:0);
+        const lines=model?(j.lines||[]):key?(j[key]||[]):[...(j.entries||[]),...(j.upstream||[]),...(j.mesh||[])].sort((a,b)=>a.slice(0,12)<b.slice(0,12)?-1:a.slice(0,12)>b.slice(0,12)?1:0);
         const seen=new Map();
         lines.forEach(l=>{
           const n=(seen.get(l)||0)+1;
