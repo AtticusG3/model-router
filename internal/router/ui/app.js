@@ -504,7 +504,7 @@
   function setNote(text){$('activity-rows').querySelectorAll('.act-note').forEach(n=>n.remove());$('activity-rows').insertAdjacentHTML('beforeend','<tr class="act-note"><td colspan="10" class="empty">'+esc(text)+'</td></tr>')}
   function actCells(e){
     const tok=e.tokens||{};
-    const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"></span>':'';
+    const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"'+(e.thumb_issue?' title="'+esc(e.thumb_issue)+'"':'')+'></span>':'';
     return [
       ['mono',esc(fmtTime(e.timestamp))],
       ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></div></div>'],
@@ -552,21 +552,34 @@
     if(!entries.length)setNote(ACT_NOTE);
   }
 
-  // Thumbnails: image rows get a placeholder at once; the image is fetched from the capture only when the
-  // row scrolls into view. The captured image is shown at thumbnail size by CSS, it is not downscaled.
-  // shortcut: a response body clipped at the capture limit has no whole image, so that row keeps the
-  // placeholder, upgrade when the capture API serves a thumbnail.
+  // Thumbnails: image rows get a placeholder at once; the image is fetched from the
+  // capture only when the row scrolls into view. The server decodes and downscales the
+  // first image it saw in the response; rows captured without one fall back to the body.
   const thumbs=new Map();
   const thumbIO=window.IntersectionObserver&&new IntersectionObserver(es=>es.forEach(x=>{if(x.isIntersecting){thumbIO.unobserve(x.target);loadThumb(x.target)}}),{rootMargin:'160px'});
   function hydrateThumb(el){if(thumbIO&&!thumbs.has(el.dataset.id))thumbIO.observe(el);else loadThumb(el)}
   function loadThumb(el){
     const id=el.dataset.id;
-    if(!thumbs.has(id))thumbs.set(id,json('/_router/activity/'+id).then(c=>imgSrcs(parseJSON(c.resp_body))[0]||'').catch(()=>{thumbs.delete(id);return ''}));
-    thumbs.get(id).then(src=>{
-      if(!src){el.dataset.state='none';return}
-      const im=new Image();im.alt='';im.decoding='async';im.src=src;
-      el.replaceChildren(im);el.dataset.state='done';
-    });
+    if(!thumbs.has(id))thumbs.set(id,thumbSrc(id));
+    thumbs.get(id).then(src=>src?showThumb(el,src,()=>captureSrc(id)):el.dataset.state='none');
+  }
+  // The thumb probe and the <img> GET are separate requests, so the row state flips
+  // only once the bytes decode; a failed GET retries the captured body, then gives up.
+  function showThumb(el,src,retry){
+    if(!src){el.dataset.state='none';return}
+    const im=new Image();im.alt='';im.decoding='async';
+    im.onload=()=>{el.replaceChildren(im);el.dataset.state='done'};
+    im.onerror=()=>retry?retry().then(fb=>showThumb(el,fb===src?'':fb,null)):el.dataset.state='none';
+    im.src=src;
+  }
+  // The thumb endpoint 404s when the response carried no image; the captured body still
+  // holds one for responses small enough to fit the capture limit.
+  function thumbSrc(id){
+    const url='/_router/activity/'+id+'/thumb';
+    return fetch(url).then(r=>r.ok?url:captureSrc(id)).catch(()=>captureSrc(id));
+  }
+  function captureSrc(id){
+    return json('/_router/activity/'+id).then(c=>imgSrcs(parseJSON(c.resp_body))[0]||'').catch(()=>{thumbs.delete(id);return ''});
   }
 
   const parseJSON=s=>{try{return JSON.parse(s)}catch(e){return null}};
