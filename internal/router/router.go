@@ -1150,14 +1150,20 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 
 // ServeHTTP is the entry for model-routed endpoints.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	cs, req := withCleanups(req)
+	defer cs.run()
 	ref, err := matchRequest(req, r.cfg())
 	if err != nil {
-		code := http.StatusNotFound
+		if errors.Is(err, ErrNoModel) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		var amb *ambiguousTypeError
 		if errors.As(err, &amb) {
-			code = http.StatusBadRequest
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		http.Error(w, err.Error(), code)
+		r.writeBodyError(w, req, err)
 		return
 	}
 	req = withRequestedID(req, ref.Raw)
@@ -1233,17 +1239,18 @@ var spillRetryInterval = 3 * time.Second
 // room opens (false: carry on locally), the client goes, or the admit timeout
 // ends (503 with Retry-After). True means the response is written.
 func (r *Router) spillWhileBlocked(w http.ResponseWriter, req *http.Request, s *config.Stanza) bool {
-	body, err := readBody(req)
+	snap, err := r.snapshotBody(req, r.cfg().RequestBodyLimit(s.ModelID))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		r.writeBodyError(w, req, err)
 		return true
 	}
+	// No deferred cleanup here: on false the local path still reads the body,
+	// so a spooled one is removed by the request's cleanup hook (snapshotBody
+	// registers it) when ServeHTTP ends.
 	// Every attempt, and the local path after it, starts from the original
 	// body: an earlier attempt may have read it or rewritten its model field.
-	resetBody := func() {
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
-	}
+	// install only fails if the spool vanished; the request then carries no body.
+	resetBody := func() { _ = snap.install(req) }
 	deadline := time.Now().Add(r.cfg().AdmitTimeout())
 	// One admit budget for the peer walk and the local admit that follows:
 	// peer loads and the local wait both read it from the request.
@@ -1281,11 +1288,12 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 		http.Error(w, fmt.Sprintf("unknown pool %q", poolName), http.StatusServiceUnavailable)
 		return
 	}
-	body, err := readBody(req)
+	snap, err := r.snapshotBody(req, r.cfg().RequestBodyLimit(""))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		r.writeBodyError(w, req, err)
 		return
 	}
+	defer snap.cleanup()
 	skip := map[string]bool{}
 	var last error
 	for {
@@ -1300,8 +1308,7 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 		}
 		skip[occupancyKey(tgt)] = true
 		// Each attempt starts from the original body; the last one consumed it.
-		req.Body = io.NopCloser(bytes.NewReader(body))
-		req.ContentLength = int64(len(body))
+		_ = snap.install(req)
 		aw := &attemptWriter{dst: w, h: http.Header{}}
 		var serveErr error
 		switch {
@@ -1713,8 +1720,9 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 	}
 	wrapped, done := r.wrapProxy(w, req, model, target)
 	defer done()
-	// The matcher already read the body and restored r.Body with a fresh
-	// reader, so the ReverseProxy can stream it downstream.
+	// The matcher left r.Body on the prepared request body: in-memory JSON, a
+	// stream (prefix plus the rest of the client body), or a temp file. The
+	// ReverseProxy streams it to the backend without another full copy.
 	proxy := &httputil.ReverseProxy{
 		Director: func(r *http.Request) {
 			r.URL.Scheme = u.Scheme
@@ -1724,8 +1732,16 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 			r.URL.Path = req.URL.Path
 			r.URL.RawQuery = req.URL.RawQuery
 		},
-		FlushInterval: -1, // flush immediately for SSE
+		// Flush every chunk: SSE, streamed TTS audio and other media start
+		// reaching the client before the backend ends.
+		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// A chunked upload ran past the cap mid-stream (limitBody): the
+			// backend request was cut off, so the client gets 413, not 502.
+			if errors.Is(err, errBodyTooLarge) {
+				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		},
 	}

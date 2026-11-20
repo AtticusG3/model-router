@@ -109,3 +109,20 @@ func TestLoadProgressFailedStartEndsWithError(t *testing.T) {
 		t.Fatalf("want an error event then [DONE], got %q", got)
 	}
 }
+
+func TestWantsStreamSkipsNonJSONBody(t *testing.T) {
+	body := `{"model":"a","stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	if wantsStream(req) {
+		t.Fatal("wantsStream read a non-JSON body")
+	}
+	if got, _ := io.ReadAll(req.Body); string(got) != body {
+		t.Fatalf("body after wantsStream = %q, want it untouched", got)
+	}
+	req = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if !wantsStream(req) {
+		t.Fatal("wantsStream missed a JSON stream request")
+	}
+}

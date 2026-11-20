@@ -108,40 +108,231 @@ func resolveRef(raw string, cfg *config.Config) ModelRef {
 
 // matchRequest resolves an incoming request to a ModelRef.
 //
-// The body is always fully read (and restored) before matching. Model id
-// extraction is one pass over those bytes plus query/form keys:
+// The body is read only as far as matching needs and the configured cap allows.
+// JSON and form bodies are read into memory (the filters rewrite them); a
+// multipart body is streamed after its model field is found, or spooled to a
+// temp file when the model part comes later. A body over the cap gets a 413
+// before any model is loaded. Model id extraction is one pass over those bytes
+// plus query/form keys:
 //  1. JSON body field named by each stanza's match.body_field (default
-//     "model"), or query "model" for GETs / form bodies.
+//     "model"), or query "model" for GETs / form bodies. On multipart, a query
+//     "model" beats a model part past the first bodyPrefixBytes.
 //  2. Stanza path_prefix match: first matching stanza in config order, unless
 //     a unique path_default for that prefix was set at parse.
 //  3. The api_type the path serves (pathAPITypes): its path_default stanza, or
 //     its only one. Several candidates and no default is an ambiguousTypeError.
 func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
-	body, err := readBody(r)
+	mb, err := readMatchBody(r, cfg.MaxRequestBodyBytes())
 	if err != nil {
 		return ModelRef{}, err
 	}
-	r.Body = io.NopCloser(bytes.NewReader(body))
-
-	if m := modelFromRequest(r, body, cfg); m != "" {
+	m, err := mb.modelID(r, cfg)
+	if err != nil {
+		mb.cleanup()
+		return ModelRef{}, err
+	}
+	if m != "" {
 		ref := resolveRef(m, cfg)
 		if ref.Local == "" && ref.Pool == "" && ref.Peer == "" && !cfg.PeerAdvertises(m) {
+			mb.cleanup()
 			return ModelRef{}, fmt.Errorf("%w: %q", ErrNoModel, m)
 		}
-		return ref, nil
+		return mb.finish(r, ref, cfg)
 	}
-
 	if ref, ok := matchPathPrefix(r.URL.Path, cfg); ok {
-		return ref, nil
+		return mb.finish(r, ref, cfg)
 	}
 
 	// No body model and no explicit path_prefix: fall back to the api_type
 	// this path serves (speech, transcription, video, ...).
 	if ref, err, ok := matchTypeDefault(r.URL.Path, cfg); ok {
-		return ref, err
+		if err != nil {
+			mb.cleanup()
+			return ModelRef{}, err
+		}
+		return mb.finish(r, ref, cfg)
 	}
 
+	mb.cleanup()
 	return ModelRef{}, ErrNoModel
+}
+
+// matchBody is the request body after the matcher has read only what it needs:
+// the whole body in memory, or a multipart prefix plus the stream after it.
+type matchBody struct {
+	mem    []byte        // whole body in memory (JSON, form, small body)
+	pref   []byte        // multipart prefix read so far
+	stream io.ReadCloser // rest of the body after pref (multipart), or the raw body
+	size   int64         // declared Content-Length, or -1
+	raw    bool          // non-JSON, non-multipart: never read, stream as-is
+	spool  *preparedBody // body spooled to a temp file (model after the file part)
+}
+
+// readMatchBody reads the head of the body the matcher needs. ceiling is the
+// largest cap any stanza accepts; a body over it is refused before reading.
+func readMatchBody(r *http.Request, ceiling int64) (*matchBody, error) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return &matchBody{size: 0}, nil
+	}
+	if r.ContentLength > ceiling {
+		return nil, tooLargeError(ceiling)
+	}
+	ct := r.Header.Get("Content-Type")
+	switch {
+	case strings.Contains(ct, "multipart/form-data"):
+		pref, err := io.ReadAll(io.LimitReader(r.Body, bodyPrefixBytes))
+		if err != nil {
+			return nil, err
+		}
+		mb := &matchBody{pref: pref, stream: r.Body, size: r.ContentLength}
+		if len(pref) < bodyPrefixBytes {
+			mb.mem, mb.pref, mb.stream = pref, nil, nil
+		}
+		return mb, nil
+	case strings.Contains(ct, "application/json"), strings.Contains(ct, "application/x-www-form-urlencoded"):
+		body, err := io.ReadAll(io.LimitReader(r.Body, ceiling+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(body)) > ceiling {
+			return nil, tooLargeError(ceiling)
+		}
+		return &matchBody{mem: body, size: int64(len(body))}, nil
+	default:
+		// A raw body (audio, video, octet-stream): the model comes from the
+		// path (or the query on a GET), so keep the stream unread.
+		return &matchBody{stream: r.Body, size: r.ContentLength, raw: true}, nil
+	}
+}
+
+// modelID extracts the model id from the body and query.
+func (mb *matchBody) modelID(r *http.Request, cfg *config.Config) (string, error) {
+	if r.Method == http.MethodGet {
+		return r.URL.Query().Get("model"), nil
+	}
+	ct := r.Header.Get("Content-Type")
+	switch {
+	case strings.Contains(ct, "application/json"):
+		return jsonModelID(mb.mem, cfg), nil
+	case strings.Contains(ct, "application/x-www-form-urlencoded"):
+		if vals, err := url.ParseQuery(string(mb.mem)); err == nil {
+			if m := vals.Get("model"); m != "" {
+				return m, nil
+			}
+		}
+		return r.URL.Query().Get("model"), nil
+	case strings.Contains(ct, "multipart/form-data"):
+		var m string
+		if mb.mem != nil {
+			m = multipartModel(ct, bytes.NewReader(mb.mem))
+		} else if m = multipartModel(ct, bytes.NewReader(mb.pref)); m == "" {
+			// A query model saves spooling the whole upload, so it wins over a
+			// model part that comes after the prefix.
+			if q := r.URL.Query().Get("model"); q != "" {
+				return q, nil
+			}
+			// The model part is past the prefix (usually after a file part):
+			// spool the whole body and scan it from disk instead of RAM.
+			var err error
+			if m, err = mb.spoolAndScan(r, ct, cfg); err != nil {
+				return "", err
+			}
+		}
+		if m != "" {
+			return m, nil
+		}
+		return r.URL.Query().Get("model"), nil
+	}
+	return "", nil
+}
+
+// spoolAndScan writes the rest of the body to a temp file, then reads the model
+// field from it. The file becomes the body the backend receives.
+func (mb *matchBody) spoolAndScan(r *http.Request, ct string, cfg *config.Config) (string, error) {
+	p, err := readPrepared(io.MultiReader(bytes.NewReader(mb.pref), mb.stream), cfg.MaxRequestBodyBytes())
+	if err != nil {
+		return "", err
+	}
+	trackCleanup(r, p.cleanup)
+	mb.spool, mb.mem, mb.pref, mb.stream, mb.size = p, nil, nil, nil, p.size
+	f, err := p.open()
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return multipartModel(ct, f), nil
+}
+
+// finish installs the prepared body on r and returns the resolved ref. limit is
+// the matched stanza's cap; a body over it gets 413.
+func (mb *matchBody) finish(r *http.Request, ref ModelRef, cfg *config.Config) (ModelRef, error) {
+	if err := mb.install(r, cfg.RequestBodyLimit(ref.Local)); err != nil {
+		mb.cleanup()
+		return ModelRef{}, err
+	}
+	return ref, nil
+}
+
+// install leaves r.Body ready to stream the whole body to a backend, without a
+// second full copy in RAM. Over limit it returns errBodyTooLarge.
+func (mb *matchBody) install(r *http.Request, limit int64) error {
+	if mb.spool != nil {
+		if mb.spool.size > limit {
+			return tooLargeError(limit)
+		}
+		return mb.spool.install(r)
+	}
+	if mb.size > limit {
+		return tooLargeError(limit)
+	}
+	switch {
+	case mb.mem != nil:
+		r.Body = io.NopCloser(bytes.NewReader(mb.mem))
+		r.ContentLength = int64(len(mb.mem))
+	case mb.pref != nil:
+		if mb.size < 0 {
+			// Unknown length: bound the tail so a chunked upload over the cap
+			// fails with 413 instead of running unbounded or short.
+			if int64(len(mb.pref)) >= limit {
+				return tooLargeError(limit)
+			}
+			r.Body = io.NopCloser(io.MultiReader(
+				bytes.NewReader(mb.pref),
+				&limitBody{rc: mb.stream, n: limit - int64(len(mb.pref)), err: tooLargeError(limit)},
+			))
+			return nil
+		}
+		// Stream the prefix already read, then the rest of the client body.
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(mb.pref), mb.stream))
+		r.ContentLength = mb.size
+	case mb.raw:
+		// The stream is untouched; bound a chunked body as it flows.
+		if mb.size < 0 {
+			r.Body = &limitBody{rc: r.Body, n: limit, err: tooLargeError(limit)}
+		}
+	}
+	return nil
+}
+
+func (mb *matchBody) cleanup() {
+	if mb.spool != nil {
+		mb.spool.cleanup()
+	}
+}
+
+// jsonModelID reads the model id from a JSON body using each stanza's
+// body_field, and always "model".
+func jsonModelID(body []byte, cfg *config.Config) string {
+	var obj map[string]any
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return ""
+	}
+	for _, field := range cfg.BodyFields() {
+		if m, ok := obj[field].(string); ok && m != "" {
+			return m
+		}
+	}
+	return ""
 }
 
 // matchPathPrefix finds a stanza whose path_prefix is a prefix of path.
@@ -168,47 +359,10 @@ func matchPathPrefix(path string, cfg *config.Config) (ModelRef, bool) {
 	return ModelRef{Local: first}, true
 }
 
-// modelFromRequest extracts a model id from the already-read body and query:
-// JSON fields (per-stanza body_field), urlencoded/multipart form "model", then
-// query "model" for GET and form bodies. GET and form use the "model" key,
-// which body_field does not cover.
-func modelFromRequest(r *http.Request, body []byte, cfg *config.Config) string {
-	if r.Method == http.MethodGet {
-		return r.URL.Query().Get("model")
-	}
-	ct := r.Header.Get("Content-Type")
-	if strings.Contains(ct, "application/json") {
-		var obj map[string]any
-		if err := json.Unmarshal(body, &obj); err != nil {
-			return ""
-		}
-		for _, field := range cfg.BodyFields() {
-			if m, ok := obj[field].(string); ok && m != "" {
-				return m
-			}
-		}
-		return ""
-	}
-	if strings.Contains(ct, "application/x-www-form-urlencoded") {
-		if vals, err := url.ParseQuery(string(body)); err == nil {
-			if m := vals.Get("model"); m != "" {
-				return m
-			}
-		}
-		return r.URL.Query().Get("model")
-	}
-	if strings.Contains(ct, "multipart/form-data") {
-		if m := multipartModel(ct, body); m != "" {
-			return m
-		}
-		return r.URL.Query().Get("model")
-	}
-	return ""
-}
-
-// multipartModel reads the "model" field from an already-buffered multipart
-// body. matchRequest ReadAlls the request first; this only parses those bytes.
-func multipartModel(contentType string, body []byte) string {
+// multipartModel reads the "model" field from a multipart stream. It stops at
+// the model part (or the end) rather than reading the whole body, so a large
+// file part before or after it stays on disk/the wire.
+func multipartModel(contentType string, body io.Reader) string {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return ""
@@ -217,26 +371,22 @@ func multipartModel(contentType string, body []byte) string {
 	if boundary == "" {
 		return ""
 	}
-	mr := multipart.NewReader(bytes.NewReader(body), boundary)
+	mr := multipart.NewReader(body, boundary)
 	for {
 		part, err := mr.NextPart()
 		if err != nil {
 			return ""
 		}
 		if part.FormName() == "model" {
-			val, _ := io.ReadAll(io.LimitReader(part, 4096))
+			val, err := io.ReadAll(io.LimitReader(part, 4096))
 			part.Close()
+			if err != nil {
+				// The value ran off the end of a prefix: not found, so the
+				// caller scans the whole body rather than use a cut-off id.
+				return ""
+			}
 			return string(val)
 		}
 		part.Close()
 	}
-}
-
-// readBody reads the request body fully. matchRequest restores r.Body
-// afterwards so downstream proxying can re-read it.
-func readBody(r *http.Request) ([]byte, error) {
-	if r.Body == nil {
-		return nil, nil
-	}
-	return io.ReadAll(r.Body)
 }

@@ -142,6 +142,44 @@ stanzas:
 	}
 }
 
+// The matcher's ceiling is the largest cap any stanza accepts, whatever order
+// the stanzas come in.
+func TestMaxRequestBodyBytesIsLargestStanzaCap(t *testing.T) {
+	cfg, err := Parse([]byte(`
+max_request_body_mb: 256
+stanzas:
+  - model_id: big
+    command: "x"
+    max_request_body_mb: 1024
+  - model_id: mid
+    command: "y"
+    max_request_body_mb: 512
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got := cfg.MaxRequestBodyBytes(); got != 1024<<20 {
+		t.Fatalf("MaxRequestBodyBytes = %d MB, want 1024 MB", got>>20)
+	}
+}
+
+// A cap so large its byte count (plus the one-byte over-cap probe) would wrap
+// int64 is refused, so the matcher never reads a body with a negative limit.
+func TestMaxRequestBodyMBOverLimitRejected(t *testing.T) {
+	huge := "8796093022208" // 1<<43 MB: shifted to bytes it wraps int64 to negative
+	for name, raw := range map[string]string{
+		"top level": "max_request_body_mb: " + huge + "\nstanzas:\n  - model_id: a\n    command: \"x\"\n",
+		"stanza":    "stanzas:\n  - model_id: a\n    command: \"x\"\n    max_request_body_mb: " + huge + "\n",
+	} {
+		if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), "max_request_body_mb") {
+			t.Fatalf("%s: err = %v, want a max_request_body_mb range error", name, err)
+		}
+	}
+	if _, err := Parse([]byte("max_request_body_mb: 1048576\nstanzas:\n  - model_id: a\n    command: \"x\"\n")); err != nil {
+		t.Fatalf("the 1 TiB limit itself should parse: %v", err)
+	}
+}
+
 func TestDuplicateModelIDRejected(t *testing.T) {
 	cfg := `
 stanzas:

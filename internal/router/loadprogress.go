@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -14,9 +15,11 @@ import (
 var loadProgressInterval = time.Second
 
 // wantsStream reports whether req is a chat completion asking for a stream.
-// The matcher has already buffered the body, so this reads and restores it.
+// Only a JSON body is buffered by the matcher (others stream), so only a JSON
+// body is read here and restored.
 func wantsStream(req *http.Request) bool {
-	if req.Method != http.MethodPost || req.URL.Path != "/v1/chat/completions" || req.Body == nil {
+	if req.Method != http.MethodPost || req.URL.Path != "/v1/chat/completions" || req.Body == nil ||
+		!strings.Contains(req.Header.Get("Content-Type"), "application/json") {
 		return false
 	}
 	body, err := io.ReadAll(req.Body)
