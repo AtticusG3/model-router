@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/jpeg"
 	_ "image/png"
@@ -65,6 +66,10 @@ type ActivityEntry struct {
 	TTFTMs     int        `json:"ttft_ms,omitempty"`
 	Tokens     TokenStats `json:"tokens"`
 	HasCapture bool       `json:"has_capture"`
+	// ThumbIssue says why an image response has no thumbnail — a decode or
+	// size failure. Empty when the row is not an image request or a thumbnail
+	// was stored, so operators can tell a failure from "not an image".
+	ThumbIssue string `json:"thumb_issue,omitempty"`
 }
 
 // ActivityCapture is the request/response pair for one activity id.
@@ -189,8 +194,9 @@ type activityWriter struct {
 	scan      bytes.Buffer
 	// img keeps a full copy of an image response (up to imgMax) so the
 	// thumbnail can be decoded before the capture body is clipped.
-	img    bytes.Buffer
-	imgMax int
+	img          bytes.Buffer
+	imgMax       int
+	imgTruncated bool
 }
 
 func (w *activityWriter) WriteHeader(code int) {
@@ -207,12 +213,17 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 		w.WriteHeader(http.StatusOK)
 	}
 	w.noteFirstToken(p)
-	if w.imgMax > w.img.Len() {
+	if w.imgMax > 0 {
 		n := w.imgMax - w.img.Len()
 		if n > len(p) {
 			n = len(p)
 		}
-		w.img.Write(p[:n])
+		if n > 0 {
+			w.img.Write(p[:n])
+		}
+		if n < len(p) {
+			w.imgTruncated = true
+		}
 	}
 	remain := w.max - w.body.Len()
 	switch {
@@ -363,10 +374,12 @@ func clipBody(b []byte) (string, bool) {
 
 // thumbFromImageResponse returns a downscaled JPEG thumbnail decoded from the
 // first image in an image-generation response — sd.cpp's images[] or the
-// OpenAI data[].b64_json. It returns nil when the body holds no image.
-func thumbFromImageResponse(body []byte) []byte {
+// OpenAI data[].b64_json. The second return says why no thumbnail was made, so
+// a decode failure is not mistaken for a body that never held an image; it is
+// empty when a thumbnail was made or the body simply has no image.
+func thumbFromImageResponse(body []byte) ([]byte, string) {
 	if len(body) == 0 {
-		return nil
+		return nil, ""
 	}
 	var obj struct {
 		Images []string `json:"images"`
@@ -376,7 +389,7 @@ func thumbFromImageResponse(body []byte) []byte {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &obj); err != nil {
-		return nil
+		return nil, "response is not complete JSON: " + err.Error()
 	}
 	var enc string
 	for _, s := range obj.Images {
@@ -401,21 +414,26 @@ func thumbFromImageResponse(body []byte) []byte {
 		enc = enc[i+len(";base64,"):]
 	}
 	if enc == "" {
-		return nil
+		return nil, ""
 	}
 	raw, err := base64.StdEncoding.DecodeString(enc)
 	if err != nil {
-		return nil
+		// An OpenAI response_format:"url" body carries a link, not bytes; the
+		// UI reads that URL straight from the capture, so it is not a failure.
+		if strings.HasPrefix(enc, "http") {
+			return nil, ""
+		}
+		return nil, "image base64 decode failed: " + err.Error()
 	}
 	src, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
-		return nil
+		return nil, "image decode failed: " + err.Error()
 	}
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, downscale(src, maxThumbEdge), &jpeg.Options{Quality: 80}); err != nil {
-		return nil
+		return nil, "thumbnail encode failed: " + err.Error()
 	}
-	return buf.Bytes()
+	return buf.Bytes(), ""
 }
 
 // downscale returns src scaled so its long edge is at most max pixels, sampling
@@ -645,13 +663,18 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	}
 	reqStr, clipped := clipBody(reqBody)
 	respStr := rec.body.String()
+	thumb, issue := thumbFromImageResponse(rec.img.Bytes())
+	if rec.imgTruncated {
+		thumb, issue = nil, fmt.Sprintf("response exceeds the %d MB image buffer", maxImageBody>>20)
+	}
+	entry.ThumbIssue = issue
 	r.activity.record(entry, ActivityCapture{
 		ReqHeaders:  copyHeaderMap(req.Header),
 		ReqBody:     reqStr,
 		RespHeaders: copyHeaderMap(rec.Header()),
 		RespBody:    respStr,
 		Truncated:   reqTrunc || clipped || rec.truncated,
-	}, thumbFromImageResponse(rec.img.Bytes()))
+	}, thumb)
 }
 
 func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, target string) (http.ResponseWriter, func()) {
