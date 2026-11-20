@@ -76,7 +76,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/logs/{model_id}` | one model's ring as JSON, for the Logs page when a proxy buffers the live stream |
-| `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb` | in-memory generation request log, request/response captures, and the image thumbnail |
+| `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb`, `/_router/activity/{id}/audio` | in-memory generation request log, request/response captures, and the image thumbnail or speech audio |
 | `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
 
@@ -129,7 +129,11 @@ click a row for request/response). Captures live in memory only (256 KB per
 body, 8 MB total) and reset on restart. Image responses also keep a downscaled
 thumbnail (long edge 160 px, JPEG), counted in that 8 MB. A media response
 (`audio/*`, `video/*`, `application/octet-stream`) keeps only its content type,
-byte count and a body hash. Hard-refresh `/ui/`
+byte count and a body hash; a speech response of at most 256 KB is also kept
+for a player. Audio, video, realtime and voice library rows show a media
+summary instead of token stats (characters and voice, file name and transcript
+preview, job id and state, or one row per realtime session with frame counts
+and close code). Hard-refresh `/ui/`
 after deploying a new binary.
 
 ## Config
@@ -151,7 +155,8 @@ one request body. Over the cap the client gets `413` before any model is
 loaded. A multipart upload is streamed or spooled to a temp file, not held in
 RAM. Media responses (`audio/*`, `video/*`, `application/octet-stream`) are
 flushed per chunk and their Activity row keeps the content type, byte count and
-a body hash instead of the body.
+a body hash instead of the body (a speech response of at most 256 KB is kept
+for the Activity player).
 
 `stream_load_progress: true` (top level, default off) writes "loading model… N%"
 chunks into the reasoning stream of a `stream: true` chat completion while its

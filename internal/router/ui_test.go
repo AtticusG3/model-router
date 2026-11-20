@@ -84,6 +84,13 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 		// The row state commits only once the image decodes; a failed GET retries the
 		// captured body. A decode failure on the server is surfaced as thumb_issue.
 		"function showThumb", "im.onload=", "im.onerror=", "e.thumb_issue",
+		// Media rows swap token stats for a per-kind summary, and the dialog has a
+		// renderer per kind: player or "not captured", transcript, job link, session.
+		"function mediaCells", "function capMedia", "e.media?mediaCells(e.media,e)",
+		"case 'speech':", "case 'transcription':", "case 'video':case 'audio_gen':", "case 'realtime':",
+		"m.playable?'<audio controls", "/_router/activity/'+esc(e.id)+'/audio", ", not captured.",
+		"m.input_chars", "m.voice", "m.file_name", "m.text", "m.job_id", "/content", "m.state==='completed'",
+		"m.frames_in", "m.frames_out", "m.close_code", "Voice library",
 		// A model shows on every GPU it occupies.
 		"m.gpus&&m.gpus.length?m.gpus:[m.gpu]",
 	} {

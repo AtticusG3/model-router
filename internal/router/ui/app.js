@@ -5,7 +5,7 @@
   // Skips the write when the markup is unchanged, so a poll does not rebuild nodes (flicker, lost hover, lost selection).
   const setHTML=(el,html)=>{if(el._h!==html){el._h=html;el.innerHTML=html}};
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
-  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Try a streaming chat, an image, an embeddings, a rerank, a speech, a transcription request or a load test against this router.'],activity:['Observability','Activity','Generation requests on this node, with token stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
+  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Try a streaming chat, an image, an embeddings, a rerank, a speech, a transcription request or a load test against this router.'],activity:['Observability','Activity','Generation, audio, video and realtime requests on this node, with token or media stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
   document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart()});
   async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok)throw new Error(data.error||text||('HTTP '+r.status));return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
@@ -506,18 +506,30 @@
   function actCells(e){
     const tok=e.tokens||{};
     const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"'+(e.thumb_issue?' title="'+esc(e.thumb_issue)+'"':'')+'></span>':'';
+    const io=e.media?mediaCells(e.media,e).map(esc):[fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':''),fmtTok(tok.completion_tokens)];
     return [
       ['mono',esc(fmtTime(e.timestamp))],
       ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.target||'')+'</div></div></div>'],
       ['mono',esc(e.method||'')+' '+esc(e.path||'')],
       [e.status>=400?'status-bad':'status-ok',esc(e.status)],
-      ['mono',fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':'')],
-      ['mono',fmtTok(tok.completion_tokens)],
+      ['mono',io[0]],
+      ['mono',io[1]],
       ['mono',esc(fmtSpeed(tok.prompt_per_second))],
       ['mono',esc(fmtSpeed(tok.tokens_per_second))],
       ['mono',esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')],
       ['mono',esc(fmtDur(e.duration_ms))]
     ];
+  }
+  // mediaCells fills the Prompt and Generated columns of an audio, video, realtime or voice row.
+  const fmtSec=v=>Number(v)>0?Number(v).toFixed(1)+' s':'—';
+  function mediaCells(m,e){
+    switch(m.kind){
+      case 'speech':return [(m.input_chars||0)+' chars'+(m.voice?' · '+m.voice:''),fmtSec(m.seconds)+' · '+fmtBytes(e.resp_bytes)];
+      case 'transcription':return [(m.file_name||'upload')+' · '+fmtBytes(m.input_bytes),(m.output_chars||0)+' chars'+(m.language?' · '+m.language:'')];
+      case 'video':case 'audio_gen':return ['job '+(m.job_id||'—'),(m.state||'—')+' · '+fmtSec(m.seconds)];
+      case 'realtime':return [(m.frames_in||0)+' frames in',(m.frames_out||0)+' out · close '+(m.close_code||'—')];
+      default:return ['voice library','—'];
+    }
   }
   function paintRow(tr,e){
     tr.toggleAttribute('data-empty',!e.has_capture);
@@ -623,7 +635,10 @@
     const tok=e.tokens||{},req=parseJSON(cap.req_body);
     let html='<dl class="cap-summary">'+capStat('Model',e.model||'—')+capStat('Target',e.target||'—')+capStat('Request',(e.method||'')+' '+(e.path||''))+capStat('Status',e.status)+capStat('Duration',fmtDur(e.duration_ms))+capStat('Time to first token',e.ttft_ms?fmtDur(e.ttft_ms):'—')+capStat('Tokens',fmtTok(tok.prompt_tokens)+' in, '+fmtTok(tok.completion_tokens)+' out'+(tok.cached_tokens?', '+fmtTok(tok.cached_tokens)+' cached':''))+capStat('Speed',fmtSpeed(tok.prompt_per_second)+' prompt, '+fmtSpeed(tok.tokens_per_second)+' generation')+capStat('Content type',e.content_type||'—')+capStat('Size',fmtBytes(e.resp_bytes))+'</dl>';
     let ok=false;
-    if(IMG_PATH.test(e.path||'')){
+    if(e.media){
+      ok=true;
+      html+=capMedia(e,e.media,req);
+    }else if(IMG_PATH.test(e.path||'')){
       const resp=parseJSON(cap.resp_body),imgs=imgSrcs(resp),r=req||{};
       ok=!!(req||imgs.length);
       const size=r.size||(r.width&&r.height?r.width+'×'+r.height:'—');
@@ -638,6 +653,27 @@
       html+=capBlock('Response',reply?(reply.think?'<details class="cap-think"><summary>Reasoning</summary>'+capText(reply.think)+'</details>':'')+(reply.text?capText(reply.text):'<p class="subtle">No text in the response.</p>')+'<p class="subtle">Finish reason: '+esc(reply.finish||'—')+'</p>':'<p class="subtle">The response is not a chat completion; the raw view has the body.</p>');
     }
     return {html,ok};
+  }
+  // capMedia renders one media row: a player for captured speech, the transcript preview, the
+  // job with a link to its finished content, or the realtime session.
+  function capMedia(e,m,req){
+    const dl=s=>'<dl class="cap-summary">'+s+'</dl>';
+    switch(m.kind){
+      case 'speech':{
+        const player=m.playable?'<audio controls preload="none" aria-label="Speech response" src="/_router/activity/'+esc(e.id)+'/audio"></audio>':'<p class="subtle">'+esc(fmtBytes(e.resp_bytes))+', not captured.</p>';
+        return capBlock('Speech',dl(capStat('Voice',m.voice||'—')+capStat('Characters',m.input_chars||0)+capStat('Length',fmtSec(m.seconds))+capStat('Size',fmtBytes(e.resp_bytes)))+(req&&typeof req.input==='string'?capText(req.input):'')+player);
+      }
+      case 'transcription':
+        return capBlock('Transcription',dl(capStat('File',m.file_name||'—')+capStat('Upload',fmtBytes(m.input_bytes))+capStat('Characters',m.output_chars||0)+capStat('Language',m.language||'—')+capStat('Length',fmtSec(m.seconds)))+(m.text?capText(m.text+(m.output_chars>m.text.length?'…':'')):'<p class="subtle">No transcript text.</p>'));
+      case 'video':case 'audio_gen':{
+        const done=m.state==='completed'&&m.job_id;
+        return capBlock('Job',dl(capStat('Job id',m.job_id||'—')+capStat('State',m.state||'—')+capStat('Duration',fmtSec(m.seconds)))+(done?'<p><a href="'+esc(e.path+'/'+encodeURIComponent(m.job_id)+'/content')+'" target="_blank" rel="noopener">Open the finished '+(m.kind==='video'?'video':'audio')+'</a></p>':'<p class="subtle">This is the submit response; the job finishes on the backend.</p>'));
+      }
+      case 'realtime':
+        return capBlock('Realtime session',dl(capStat('Opened',fmtTime(e.timestamp))+capStat('Duration',fmtDur(e.duration_ms))+capStat('Frames in',m.frames_in||0)+capStat('Frames out',m.frames_out||0)+capStat('Close code',m.close_code||'—')));
+      default:
+        return capBlock('Voice library',dl(capStat('Change',(e.method||'')+' '+(e.path||''))));
+    }
   }
 
   let capView='parsed';
