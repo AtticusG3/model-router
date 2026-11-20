@@ -207,7 +207,9 @@ func readMatchBody(r *http.Request, ceiling int64) (*matchBody, error) {
 
 // modelID extracts the model id from the body and query.
 func (mb *matchBody) modelID(r *http.Request, cfg *config.Config) (string, error) {
-	if r.Method == http.MethodGet {
+	// GET and DELETE carry no request body to carry a model, so the query
+	// parameter is the only place it can be (e.g. DELETE /v1/audio/voices/{id}).
+	if r.Method == http.MethodGet || r.Method == http.MethodDelete {
 		return r.URL.Query().Get("model"), nil
 	}
 	ct := r.Header.Get("Content-Type")
