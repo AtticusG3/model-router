@@ -216,6 +216,23 @@ media response (`audio/*`, `video/*`, `application/octet-stream`) is flushed per
 chunk and never captured; its Activity row keeps the content type, byte count
 and a body hash prefix.
 
+`filters` (on a stanza or a peer): `stripParams` drops top-level fields,
+`setParams` sets them (a key ending in `?` only fills a field the client
+omitted), and a stanza's `setParamsByID` mints alias ids with their own set.
+They apply to JSON object bodies and to the text fields of
+`application/x-www-form-urlencoded` and `multipart/form-data` bodies; file
+parts are never touched. In a form, a non-string value is sent as its JSON text
+(`0`, `true`). `model` and the `body_field` cannot be filtered.
+
+Before a request goes to a peer, its model field (the peer's `body_field`) is
+set to the peer's id in JSON, urlencoded and multipart bodies, and so is a
+`model` query param on any method, so a `peer/model` id or an alias reaches the
+peer as an id it serves. A multipart body that a filter or this rewrite touches
+keeps its boundary and is streamed part by part, never buffered, so it goes out
+chunked (no `Content-Length`). If such a body turns out not to be valid
+multipart partway through (a bad part header, no closing boundary), the client
+gets 400, not a 502.
+
 ## Request flow
 
 1. The client hits this node's HTTP API.

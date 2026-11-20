@@ -34,7 +34,7 @@ type Match struct {
 // Filters rewrite a JSON request body before the backend (or peer) sees it,
 // as in llama-swap. The model id field can never be stripped or set.
 type Filters struct {
-	// StripParams are top-level JSON keys removed from the request.
+	// StripParams are top-level JSON keys (or form fields) removed from the request.
 	StripParams []string `yaml:"stripParams"`
 	// SetParams are keys set on the request, overwriting the client's value.
 	// A key ending in "?" is set only when the client omitted it.
