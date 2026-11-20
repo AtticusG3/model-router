@@ -216,8 +216,8 @@ is spooled to a temp file (deleted when the request ends) instead of RAM. A
 `?model=` query skips that spool, so it wins over a `model` part past the
 first 64 KB. A
 media response (`audio/*`, `video/*`, `application/octet-stream`) is flushed per
-chunk and never captured; its Activity row keeps the content type, byte count
-and a body hash prefix.
+chunk and never captured as text; its Activity row keeps the content type,
+byte count and a body hash prefix (see Operator UI for the speech player).
 
 `filters` (on a stanza or a peer): `stripParams` drops top-level fields,
 `setParams` sets them (a key ending in `?` only fills a field the client
@@ -544,7 +544,7 @@ the peer admits against its own budget.
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
 | `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
-| `GET /_router/activity`, `GET /_router/activity/{id}`, `GET /_router/activity/{id}/thumb` | In-memory generation log, request/response captures, and the image thumbnail (404 when the response held no image). |
+| `GET /_router/activity`, `GET /_router/activity/{id}`, `GET /_router/activity/{id}/thumb`, `GET /_router/activity/{id}/audio` | In-memory generation log, request/response captures, and the image thumbnail or speech audio kept for the row (404 when nothing was kept). |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
 | `GET /health` | `OK`. |
@@ -566,7 +566,17 @@ spills or proxies. Activity keeps the last 200 proxied requests, with at
 most 256 KB per body and 8 MB of captures, in memory only. An image response
 also keeps a downscaled thumbnail (160 px long edge, JPEG) in that budget. A
 media response (`audio/*`, `video/*`, `application/octet-stream`) is not
-captured; its row keeps the content type, byte count and a body hash prefix.
+captured as text; its row keeps the content type, byte count and a body hash
+prefix, and a generation response of at most 256 KB is kept whole in the
+budget for the speech player. Audio, video, realtime and voice library rows
+carry a `media` summary instead of token stats: speech (characters, voice,
+length from the WAV header), transcription (file name, upload bytes, output
+characters, language, first 200 characters), video and audio_gen jobs (job
+id, state, length; the submit response only), realtime (one row per session,
+written when the websocket closes, with frames each way and the close code),
+and `admin` for `POST /v1/audio/voices` and `DELETE /v1/audio/voices/{id}`.
+`/metrics` adds `model_router_media_requests_total` and
+`model_router_media_seconds_total` per `api_type`.
 It resets on restart. Authorization and cookie headers are not stored.
 
 ## Still out of scope

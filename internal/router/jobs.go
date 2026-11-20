@@ -194,7 +194,7 @@ func (r *Router) endJob(j *job, state string) {
 			Timestamp: j.created, Model: j.model, Target: j.target,
 			Method: http.MethodPost, Path: "/v1/videos", Status: j.code,
 			DurationMs: int(took.Milliseconds()), JobID: j.id, JobState: state,
-		}, ActivityCapture{}, nil)
+		}, ActivityCapture{}, nil, "")
 	}
 }
 
