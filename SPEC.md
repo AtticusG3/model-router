@@ -404,7 +404,7 @@ the peer admits against its own budget.
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
 | `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
-| `GET /_router/activity`, `GET /_router/activity/{id}` | In-memory generation log and request/response captures. |
+| `GET /_router/activity`, `GET /_router/activity/{id}`, `GET /_router/activity/{id}/thumb` | In-memory generation log, request/response captures, and the image thumbnail (404 when the response held no image). |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
 | `GET /health` | `OK`. |
@@ -419,8 +419,9 @@ the Playground Chat and Image tabs offer. Routing is only the matcher plus the c
 Unload start and stop this node's stanzas only. Choosing a remote `model_id`
 in the Playground is an ordinary `/v1/...` request, so this node
 spills or proxies. Activity keeps the last 200 proxied requests, with at
-most 256 KB per body and 8 MB of captures, in memory only. It resets on
-restart. Authorization and cookie headers are not stored.
+most 256 KB per body and 8 MB of captures, in memory only. An image response
+also keeps a downscaled thumbnail (160 px long edge, JPEG) in that budget. It
+resets on restart. Authorization and cookie headers are not stored.
 
 ## Still out of scope
 

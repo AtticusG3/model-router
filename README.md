@@ -71,7 +71,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/load`, `/_router/unload` | local-only control (this node's admission; peers call these) |
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
-| `/_router/activity`, `/_router/activity/{id}` | in-memory generation request log and request/response captures |
+| `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb` | in-memory generation request log, request/response captures, and the image thumbnail |
 | `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
 
@@ -121,8 +121,9 @@ protocol of its own. A browser sends its UI sign-in key on the handshake.
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
 click a row for request/response). Captures live in memory only (256 KB per
-body, 8 MB total) and reset on restart. Hard-refresh `/ui/` after deploying a
-new binary.
+body, 8 MB total) and reset on restart. Image responses also keep a downscaled
+thumbnail (long edge 160 px, JPEG), counted in that 8 MB. Hard-refresh `/ui/`
+after deploying a new binary.
 
 ## Config
 
