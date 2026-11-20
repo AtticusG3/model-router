@@ -95,7 +95,7 @@ listen: 0.0.0.0:18080
 start_port: 5800          # base for auto-allocated ports
 reserved_ports: [8081, 6333]
 headroom_mb: 0            # MB left unbooked on every GPU; default 0
-preload: [intent-model]
+preload: [intent-model]   # load at startup; restored in config order if evicted
 
 telemetry:
   poll_seconds: 2         # nvidia-smi
@@ -322,6 +322,17 @@ Two mechanisms:
   and runs only the gentlest plan: lowest eviction kind, then fewest MB,
   then device order. A split model walks every listed card until each share
   fits.
+
+**Preload restore.** A model listed in `preload` that was evicted to make
+room comes back on its own. The node remembers the eviction (stale, idle or
+resident) with the instance that caused it, and when a model stops — the
+idle sweep, or `POST /_router/unload` — starts the preload models again in
+config order. A restore runs only when the model fits without evicting
+anything (`CanAdmit`) and is not already starting, so it never evicts to
+bring a preload back and never competes with a load in flight; a model that
+still has no room keeps its mark and is retried on a later free. A preload
+the operator unloaded itself, or one a reload dropped from `preload`, stays
+down. Each restore logs `restoring preload <id> after eviction by <id>`.
 
 ## Supervisor
 

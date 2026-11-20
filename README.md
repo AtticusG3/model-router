@@ -15,6 +15,10 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
   TTL passes and nothing is in flight. `0` is resident and is never swept.
   A load that needs the VRAM can still evict stale models, then other idle
   models, then residents, as long as they are not mid-generation.
+- A `preload` model evicted to make room comes back on its own: the node
+  remembers it and starts it again, in config order, once it fits without
+  evicting anything. A preload the operator unloaded, or one a reload
+  dropped from `preload`, stays down.
 - Admission uses live nvidia-smi free VRAM, with a per-GPU reservation ledger
   so concurrent loads cannot double-book during spin-up. A node is the sole
   authority over its own GPUs (no split-brain).

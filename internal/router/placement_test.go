@@ -190,7 +190,7 @@ func TestBusyModelGetsSecondInstanceOnFreeCard(t *testing.T) {
 	if !ok || key != "agents-a1#1" {
 		t.Fatalf("acquire = %q, %v; want a second instance agents-a1#1", key, ok)
 	}
-	if g, err := r.load(t.Context(), key, true); err != nil || g != 2 {
+	if g, err := r.load(t.Context(), key, true, true); err != nil || g != 2 {
 		t.Fatalf("second instance on GPU %d (err %v), want 2", g, err)
 	}
 	if got, want := strings.Join(log.visible(), ","), "1,2"; got != want {

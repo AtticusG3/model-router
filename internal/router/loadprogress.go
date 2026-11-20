@@ -81,7 +81,7 @@ func (l *loadStream) fail(err error) {
 func (r *Router) loadReportingProgress(lw *loadStream, req *http.Request, key string) error {
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.load(req.Context(), key, true)
+		_, err := r.load(req.Context(), key, true, true)
 		done <- err
 	}()
 	tick := time.NewTicker(loadProgressInterval)

@@ -551,7 +551,7 @@ func TestLoadDoesNotRetryHardStartForever(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	start := time.Now()
-	_, err := r.load(ctx, "a", true)
+	_, err := r.load(ctx, "a", true, true)
 	if err == nil || !hardStartFailure(err) {
 		t.Fatalf("err = %v, want a hard start failure", err)
 	}
@@ -595,7 +595,7 @@ func TestLoadRetriesAfterExitDuringStart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if _, err := r.load(ctx, "a", true); err != nil {
+	if _, err := r.load(ctx, "a", true, true); err != nil {
 		t.Fatalf("should retry after exit during start: %v", err)
 	}
 	if n.Load() < 2 {
@@ -633,7 +633,7 @@ func TestLoadWaitsForInFlightThenEvicts(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := r.load(ctx, "b", true)
+		_, err := r.load(ctx, "b", true, true)
 		done <- err
 	}()
 
@@ -667,7 +667,7 @@ func TestLoadWaitCanceled(t *testing.T) {
 	r.holdOccupancy("a")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := r.load(ctx, "b", true); err == nil {
+	if _, err := r.load(ctx, "b", true, true); err == nil {
 		t.Fatal("canceled wait must fail")
 	}
 }
@@ -679,7 +679,7 @@ func TestLoadWaitDoesNotWaitForTooSmallGPU(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if _, err := r.load(ctx, "a", true); err == nil {
+	if _, err := r.load(ctx, "a", true, true); err == nil {
 		t.Fatal("22000 MB model must not fit a 10000 MB GPU")
 	}
 	if time.Since(start) > 200*time.Millisecond {
@@ -693,7 +693,7 @@ func TestLoadAlreadyRunningIgnoresLiveFree(t *testing.T) {
 		t.Fatalf("Load a: %v", err)
 	}
 	r.ledger.SetGPUs([]*GPUState{{Index: 0, TotalMB: 10000, FreeMB: 500}})
-	if _, err := r.load(context.Background(), "a", true); err != nil {
+	if _, err := r.load(context.Background(), "a", true, true); err != nil {
 		t.Fatalf("already-running idle model must serve when smi free is 500: %v", err)
 	}
 }
