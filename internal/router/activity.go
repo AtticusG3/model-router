@@ -91,6 +91,10 @@ type ActivityEntry struct {
 	// Media replaces the token stats on an audio, video, realtime or voice
 	// library row; nil on every other row.
 	Media *MediaStats `json:"media,omitempty"`
+	// JobID and JobState are set on an async job's row, written when the job
+	// ends: DurationMs then runs from submit to that end state.
+	JobID    string `json:"job_id,omitempty"`
+	JobState string `json:"job_state,omitempty"`
 }
 
 // voiceAdminKind is the MediaStats kind of a voice library write or delete.
@@ -217,7 +221,10 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []by
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
 		a.dropOldestCapture()
 	}
-	if size > 0 && a.captureSz+size <= maxCaptureBytes {
+	// A capture worth keeping holds bytes or flags a truncated request: an
+	// undrained upload with an empty response must still be visible as partial,
+	// not dropped as an empty capture.
+	if (size > 0 || cap.Truncated) && a.captureSz+size <= maxCaptureBytes {
 		entry.HasCapture = true
 		a.captures[entry.ID] = storedCapture{cap: cap, blob: blob, blobType: blobType, size: size}
 		a.captureSz += size

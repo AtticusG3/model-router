@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -77,13 +78,149 @@ func TestFiltersStripAndSet(t *testing.T) {
 	}
 }
 
-func TestFiltersLeaveNonJSONAlone(t *testing.T) {
+func TestFiltersUrlencoded(t *testing.T) {
 	_, send := filterRouter(t, `
       stripParams: [temperature]
-      setParams: {top_p: 0.5}`)
-	form := "model=chat-a&temperature=1"
-	if got := send("/v1/audio/transcriptions", "application/x-www-form-urlencoded", form); got != form {
-		t.Errorf("form body changed: %q", got)
+      setParams: {top_p: 0.5, "language?": en}`)
+	got := send("/v1/audio/transcriptions", "application/x-www-form-urlencoded", "model=chat-a&temperature=1&language=fr")
+	if got != "language=fr&model=chat-a&top_p=0.5" {
+		t.Errorf("form body = %q", got)
+	}
+	// A body that is neither JSON nor a form is forwarded as sent.
+	req := httptest.NewRequest("POST", "/x", strings.NewReader("RIFF"))
+	req.Header.Set("Content-Type", "audio/wav")
+	if err := applyFilters(req, []string{"a"}, map[string]any{"b": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := io.ReadAll(req.Body); string(b) != "RIFF" {
+		t.Errorf("raw body became %q", b)
+	}
+}
+
+// clipBytes is a fictional upload that contains CRLFs and dashes, so a part
+// that was re-encoded rather than copied would show.
+var clipBytes = bytes.Repeat([]byte("\r\n--RIFF\x00\xff fictional audio\r\n"), 8000)
+
+// transcriptionBody is a multipart form: the given fields, then a file part.
+func transcriptionBody(t *testing.T, fields ...[2]string) string {
+	t.Helper()
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	if err := w.SetBoundary("fictionalboundary"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range fields {
+		if err := w.WriteField(f[0], f[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fw, err := w.CreateFormFile("file", "clip.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = fw.Write(clipBytes)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.String()
+}
+
+const transcriptionCT = "multipart/form-data; boundary=fictionalboundary"
+
+// formFields parses a multipart body sent with transcriptionCT into its field
+// values; it fails the test if the file part is not byte-identical.
+func formFields(t *testing.T, body string) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	mr := multipart.NewReader(strings.NewReader(body), "fictionalboundary")
+	for {
+		p, err := mr.NextRawPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("parse multipart: %v (body %.200q)", err, body)
+		}
+		b, _ := io.ReadAll(p)
+		if p.FileName() != "" {
+			if !bytes.Equal(b, clipBytes) {
+				t.Errorf("file part changed: %d bytes, want %d", len(b), len(clipBytes))
+			}
+			continue
+		}
+		got[p.FormName()] = string(b)
+	}
+	return got
+}
+
+func TestFiltersMultipart(t *testing.T) {
+	_, send := filterRouter(t, `
+      stripParams: [prompt]
+      setParams: {"response_format?": verbose_json, temperature: 0}`)
+	const p = "/v1/audio/transcriptions"
+	got := formFields(t, send(p, transcriptionCT, transcriptionBody(t, [2]string{"model", "chat-a"}, [2]string{"prompt", "x"})))
+	want := map[string]string{"model": "chat-a", "response_format": "verbose_json", "temperature": "0"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("fields = %v, want %v", got, want)
+	}
+	got = formFields(t, send(p, transcriptionCT, transcriptionBody(t,
+		[2]string{"model", "chat-a"}, [2]string{"response_format", "text"}, [2]string{"temperature", "1"})))
+	want = map[string]string{"model": "chat-a", "response_format": "text", "temperature": "0"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("fields = %v, want %v", got, want)
+	}
+}
+
+func TestFilterFormPrecedence(t *testing.T) {
+	e, err := newFormEdit([]string{"a"}, map[string]any{"a?": "x", "b": true}, map[string]any{"b?": "y"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		key     string
+		present bool
+		want    string
+		ok      bool
+	}{
+		{"a", false, "x", true},   // stripped, so the "?" value fills it
+		{"b", true, "true", true}, // a forced value beats the client
+		{"b", false, "y", true},   // a later "?" wins when the client omitted it
+	} {
+		if v, ok := e.set[tc.key].value(tc.present); v != tc.want || ok != tc.ok {
+			t.Errorf("%s present=%v: got %q %v, want %q %v", tc.key, tc.present, v, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// The JSON path agrees with the form path: a later "?" set fills a field the
+// client omitted even after an earlier bare set of the same key.
+func TestFilterJSONPrecedenceMatchesForm(t *testing.T) {
+	req := httptest.NewRequest("POST", "/x", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	if err := applyFilters(req, nil, map[string]any{"b": true}, map[string]any{"b?": "y"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := io.ReadAll(req.Body); string(got) != `{"b":"y"}` {
+		t.Errorf("body = %s, want {\"b\":\"y\"}", got)
+	}
+}
+
+// A body that is not declared as JSON or a form (here JSON with no
+// Content-Type, or as text/plain) is forwarded byte for byte, not re-encoded.
+func TestApplyFiltersLeavesUndeclaredBodyAlone(t *testing.T) {
+	const body = `{"model":"chat-a","prompt":"fictional"}`
+	for _, ct := range []string{"", "text/plain"} {
+		req := httptest.NewRequest("POST", "/x", bytes.NewBufferString(body))
+		req.Header.Del("Content-Type")
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		if err := applyFilters(req, []string{"prompt"}, map[string]any{"temperature": 0}); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := io.ReadAll(req.Body); string(got) != body {
+			t.Errorf("content type %q: body = %s, want %s", ct, got, body)
+		}
 	}
 }
 
@@ -153,5 +290,40 @@ peers:
 	NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || strings.Contains(got, "temperature") || !strings.Contains(got, `"model":"remote-model"`) {
 		t.Errorf("status=%d peer body=%s", rec.Code, got)
+	}
+}
+
+// A multipart body to a peer gets the peer's id and the peer's filters in the
+// same single re-stream.
+func TestFiltersPeerMultipart(t *testing.T) {
+	var got string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		b, _ := io.ReadAll(req.Body)
+		if req.URL.Path != "/_router/load" {
+			got = string(b)
+		}
+		_, _ = w.Write([]byte(`{"text":"fictional"}`))
+	}))
+	defer peer.Close()
+	cfg, err := config.Parse([]byte(`
+peers:
+  - name: far
+    base_url: ` + peer.URL + `
+    models: [whisper-x]
+    filters:
+      stripParams: [prompt]
+      setParams: {"response_format?": verbose_json}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/v1/audio/transcriptions", strings.NewReader(transcriptionBody(t,
+		[2]string{"model", "far/whisper-x"}, [2]string{"prompt", "x"})))
+	req.Header.Set("Content-Type", transcriptionCT)
+	rec := httptest.NewRecorder()
+	NewHandler(New(cfg, NewLogger(io.Discard, false), "test"), NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+	want := map[string]string{"model": "whisper-x", "response_format": "verbose_json"}
+	if f := formFields(t, got); rec.Code != http.StatusOK || fmt.Sprint(f) != fmt.Sprint(want) {
+		t.Errorf("status=%d peer fields=%v, want %v", rec.Code, f, want)
 	}
 }
