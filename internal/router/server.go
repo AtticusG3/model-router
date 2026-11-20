@@ -48,6 +48,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 				"backend_metrics": r.BackendMetrics(),
 			})
 		}},
+		{"/_router/logs/{model_id...}", handleModelLogSnapshot(r, logger)},
 		{"/logs", handleLogs(logger)},
 		{"/logs/stream", handleLogStream(logger, "", "")},
 		{"/logs/stream/proxy", handleLogStream(logger, streamProxy, "")},
@@ -391,6 +392,23 @@ func handleModelLogStream(r *Router, logger *Logger) http.HandlerFunc {
 			return
 		}
 		handleLogStream(logger, "", id)(w, req)
+	}
+}
+
+// handleModelLogSnapshot serves one model's log history as JSON for the UI's
+// polling fallback: a proxy that buffers chunked text/plain never answers
+// /logs/stream/{model_id}, and the combined snapshot has no per-model lines.
+// Ids may contain slashes, same as the stream path.
+func handleModelLogSnapshot(r *Router, logger *Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		id := req.PathValue("model_id")
+		if r.cfg().Stanza(id) == nil {
+			http.Error(w, "unknown model id: "+id, http.StatusNotFound)
+			return
+		}
+		lines, _, cancel := logger.Subscribe("", id)
+		cancel()
+		writeJSON(w, map[string]any{"model": id, "lines": lines})
 	}
 }
 

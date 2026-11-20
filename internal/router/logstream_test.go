@@ -2,6 +2,7 @@ package router
 
 import (
 	"bufio"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -203,6 +204,74 @@ func TestRouterLogsJSONStillServed(t *testing.T) {
 		if !strings.Contains(string(body), key) {
 			t.Fatalf("missing %s in %s", key, body)
 		}
+	}
+}
+
+// The Logs page polls this snapshot when a proxy holds the live stream open;
+// it carries what /logs/stream/{model_id} would replay, and keeps up.
+func modelLogSnapshot(t *testing.T, url string) (string, []string) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("%s: status %d", url, resp.StatusCode)
+	}
+	var body struct {
+		Model string   `json:"model"`
+		Lines []string `json:"lines"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body.Model, body.Lines
+}
+
+func TestModelLogSnapshot(t *testing.T) {
+	srv, l := logTestServer(t)
+	seedLogs(l)
+	model, lines := modelLogSnapshot(t, srv.URL+"/_router/logs/agents-a1")
+	if model != "agents-a1" {
+		t.Fatalf("model = %q", model)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "up-a1") || strings.Contains(joined, "up-embed") {
+		t.Fatalf("lines = %q", lines)
+	}
+	l.Upstreamf("agents-a1", "%s", "a1-later")
+	if _, lines := modelLogSnapshot(t, srv.URL+"/_router/logs/agents-a1"); !strings.Contains(strings.Join(lines, "\n"), "a1-later") {
+		t.Fatalf("later lines = %q", lines)
+	}
+}
+
+func TestModelLogSnapshotUnknownModel(t *testing.T) {
+	srv, _ := logTestServer(t)
+	resp, err := http.Get(srv.URL + "/_router/logs/no-such-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusNotFound || !strings.Contains(string(body), "unknown model id: no-such-model") {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+	}
+}
+
+// Ids may contain slashes, same as the stream path.
+func TestModelLogSnapshotSlashID(t *testing.T) {
+	cfg, err := config.Parse([]byte("stanzas:\n  - model_id: org/slash\n    command: \"x --port {port}\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := NewLogger(io.Discard, false)
+	logger.Upstreamf("org/slash", "%s", "slash-line")
+	srv := httptest.NewServer(NewHandler(New(cfg, logger, "router-a"), logger))
+	t.Cleanup(srv.Close)
+	model, lines := modelLogSnapshot(t, srv.URL+"/_router/logs/org/slash")
+	if model != "org/slash" || !strings.Contains(strings.Join(lines, "\n"), "slash-line") {
+		t.Fatalf("model = %q lines = %q", model, lines)
 	}
 }
 
