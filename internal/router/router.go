@@ -1822,6 +1822,14 @@ func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) e
 	return nil
 }
 
+// originMatchesHost reports whether an Origin header addresses host. Only
+// that origin (plus a request with no Origin) may have its site-context
+// headers stripped; a malformed or opaque "null" origin never matches.
+func originMatchesHost(origin, host string) bool {
+	u, err := url.Parse(origin)
+	return err == nil && u.Host != "" && strings.EqualFold(u.Host, host)
+}
+
 // transcriptionWriter gives a text transcript the type the OpenAI API
 // specifies. whisper-server answers text as text/html and srt as
 // application/x-subrip, which clients and browsers would treat as markup.
@@ -1902,6 +1910,20 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 				r.URL.Path, r.URL.RawPath = p, ""
 			}
 			r.URL.RawQuery = req.URL.RawQuery
+			// This router is the browser trust boundary. It vouches only for a
+			// request with no Origin (a non-browser client) or one from its own
+			// /ui/ page (Origin host equals the request host). Those lose the
+			// site-context headers, so a backend or peer does not read the
+			// proxied call as cross-site. Any other Origin stays in place, so a
+			// backend still refuses a foreign page. r is ReverseProxy's clone,
+			// so the Activity capture records the headers as received.
+			if origin := r.Header.Get("Origin"); origin == "" || originMatchesHost(origin, req.Host) {
+				for h := range r.Header {
+					if h == "Origin" || h == "Referer" || strings.HasPrefix(h, "Sec-Fetch-") {
+						r.Header.Del(h)
+					}
+				}
+			}
 		},
 		// Flush every chunk: SSE, streamed TTS audio and other media start
 		// reaching the client before the backend ends.

@@ -251,7 +251,9 @@ func TestJobLifecycleHoldsModelUntilDone(t *testing.T) {
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "video/mp4" || rec.Body.String() != "fake-mp4-bytes" {
 		t.Fatalf("content = %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
-	row, ok := jobRow(r, id)
+	var row ActivityEntry
+	var ok bool
+	waitJob(t, "completed job wrote its activity row", func() bool { row, ok = jobRow(r, id); return ok })
 	if !ok || row.JobState != "completed" || row.Path != "/v1/videos" || row.DurationMs < 500 {
 		t.Fatalf("activity row = %+v (found %v), want one completed row spanning the job", row, ok)
 	}
@@ -288,11 +290,15 @@ func TestJobSurvivesSubmittingClientDisconnect(t *testing.T) {
 	waitJob(t, "job recorded", func() bool { return r.RunningJobs()["vid"] == 1 })
 	waitJob(t, "job completed", func() bool { return r.RunningJobs()["vid"] == 0 })
 	var row ActivityEntry
-	for _, e := range r.Activity().List() {
-		if e.JobID != "" {
-			row = e
+	waitJob(t, "job row written", func() bool {
+		row = ActivityEntry{}
+		for _, e := range r.Activity().List() {
+			if e.JobID != "" {
+				row = e
+			}
 		}
-	}
+		return row.JobID != ""
+	})
 	if row.JobState != "completed" {
 		t.Fatalf("job row = %+v, want completed", row)
 	}
@@ -325,7 +331,10 @@ func TestJobOnPeerIsPolledOnThatPeer(t *testing.T) {
 	if b.polls.Load() == 0 {
 		t.Fatal("the backend behind the peer was never polled")
 	}
-	if row, ok := jobRow(origin, id); !ok || row.Target != "alpha" || row.JobState != "completed" {
+	var row ActivityEntry
+	var ok bool
+	waitJob(t, "origin wrote the completed job's row", func() bool { row, ok = jobRow(origin, id); return ok })
+	if !ok || row.Target != "alpha" || row.JobState != "completed" {
 		t.Fatalf("origin activity row = %+v (found %v), want completed on alpha", row, ok)
 	}
 }
@@ -378,7 +387,10 @@ func TestJobRemixRecordsAndHoldsChild(t *testing.T) {
 	}
 	waitJob(t, "child completed", func() bool { return jobStatus(t, h, v.ID) == "completed" })
 	waitJob(t, "holds released", func() bool { return r.occupancyOf("vid") == 0 })
-	if row, ok := jobRow(r, v.ID); !ok || row.JobState != "completed" {
+	var row ActivityEntry
+	var ok bool
+	waitJob(t, "child wrote its activity row", func() bool { row, ok = jobRow(r, v.ID); return ok })
+	if !ok || row.JobState != "completed" {
 		t.Fatalf("child activity row = %+v (found %v), want completed", row, ok)
 	}
 }
