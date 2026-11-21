@@ -41,6 +41,7 @@ code,.mono{font:12px/1.5 "SFMono-Regular",Consolas,"Liberation Mono",monospace}
 .chip{border:1px solid var(--line);background:#0e1622;color:var(--muted);padding:6px 11px;border-radius:999px;font-size:12px;cursor:pointer}
 .chip:hover{color:var(--text);border-color:var(--line-strong);background:var(--panel-hover)}
 .chip.active{border-color:rgba(88,214,230,.45);background:var(--cyan-soft);color:var(--cyan)}
+a.chip{text-decoration:none}
 .log-search{flex:1 1 220px;min-width:170px}
 .section-heading .right select{width:auto}
 .pause-toggle{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;white-space:nowrap;user-select:none;cursor:pointer}

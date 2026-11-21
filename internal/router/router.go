@@ -76,6 +76,8 @@ type Router struct {
 
 	// meta is the last good catalog.metadata_url file; nil when off or not yet fetched.
 	meta atomic.Pointer[metadataFile]
+	// hub is the last good catalog.hub data by "<hub>:<repo>"; nil when off.
+	hub atomic.Pointer[map[string]hubEntry]
 }
 
 // New builds a Router from parsed config.
@@ -2426,7 +2428,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 				freshness = "stale"
 			}
 		}
-		fam, info := catalogInfo(md, id, s)
+		fam, info := r.catalogInfo(md, id, s)
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
@@ -2454,8 +2456,8 @@ func (r *Router) catalogStatuses() []ModelStatus {
 				continue
 			}
 			seen[m] = true
-			// A remote id has no stanza here; the shared metadata file is what fills it in.
-			fam, info := catalogInfo(md, m, nil)
+			// A remote id has no stanza here; the metadata file and the peer's advertised hf_repo fill it in.
+			fam, info := r.catalogInfo(md, m, remoteStanza(t, m))
 			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available", Family: fam, Info: info})
 		}
 	}
@@ -2555,6 +2557,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		LoadedModels: loaded,
 		Models:       models,
 		Catalog:      r.localModelIDs(),
+		HFRepos:      r.localHFRepos(),
 		Timestamp:    now.Unix(),
 	}
 	if r.activity != nil {

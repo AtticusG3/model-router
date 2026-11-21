@@ -112,9 +112,16 @@ telemetry:
   peer_sync_seconds: 5    # pull GET /_router/telemetry
   peer_stale_seconds: 15  # older than this → peer is not a candidate
 
-catalog:
-  metadata_url: ""        # one JSON file of model metadata (see Operator UI); empty = built-in data only
-  refresh_seconds: 3600   # fetch again this often; default 3600
+catalog:                  # see "Catalog metadata" under Operator UI; all optional
+  hub: off                # off | huggingface | modelscope | both (Hugging Face first, ModelScope fallback)
+  hf_base: https://huggingface.co
+  modelscope_base: https://modelscope.cn
+  modelscope_fallback: false  # also try a stanza's Hugging Face id on ModelScope
+  hub_token_env: HF_TOKEN # name of an env var only; its value goes to Hugging Face only and is never logged
+  hub_refresh_seconds: 86400
+  cache_file: ""          # e.g. /var/lib/model-router/hub-metadata.json; empty = memory only
+  metadata_url: ""        # optional hand-kept override file; empty = none
+  refresh_seconds: 3600   # metadata_url refresh; default 3600
 
 stanzas:
   - model_id: qwopus-27b-fusion
@@ -131,8 +138,10 @@ stanzas:
     api_type: chat         # see api_type below; empty means chat
     capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning; video: duration, resolution, seed
     family: qwen           # optional: catalog family icon; default is the metadata file, then a guess from the id, then the name
-    params: 27B            # optional: catalog parameter count; wins over the metadata file
-    owner: Example Labs    # optional: catalog owner; default is the metadata file, then the family's owner
+    params: 27B            # optional: catalog parameter count; wins over the metadata file and the hub
+    owner: Example Labs    # optional: catalog owner; default is the metadata file, then the hub, then the family's owner
+    hf_repo: Example-Org/Qwopus-27B-GGUF  # optional: Hugging Face repo for catalog.hub
+    modelscope_repo: ""    # optional: ModelScope repo for catalog.hub
     match:
       body_field: model    # XOR path_prefix
     health_check: /health
@@ -1014,9 +1023,40 @@ and `admin` for `POST /v1/audio/voices` and `DELETE /v1/audio/voices/{id}`.
 `model_router_media_seconds_total` per `api_type`.
 It resets on restart. Authorization and cookie headers are not stored.
 
-**Catalog metadata.** `catalog.metadata_url` names one JSON file (for example
-a raw file in a git repo) that fills in catalog rows; see
-`configs/model-metadata.example.json`:
+**Catalog metadata.** Catalog rows are filled from the model's own repo on
+Hugging Face, with ModelScope as the alternative, when `catalog.hub` is on
+(it is off by default, which makes no hub request). Each row's repo is the
+stanza's `hf_repo:` / `modelscope_repo:`, else the metadata file's `hf_repo`,
+else one read from the command line only where it is clear: a llama.cpp
+`--hf-repo` / `-hfr` value, a path in a Hugging Face cache
+(`.../models--<owner>--<name>/snapshots/...`), or a `--model <owner>/<name>`
+value. A bare GGUF file name maps to no repo. With `modelscope_fallback: true`
+a Hugging Face id is also tried on ModelScope.
+
+- Hugging Face: `GET {hf_base}/api/models/{repo}` gives `author` (owner),
+  `pipeline_tag` (modality), `cardData.license` (licence), `safetensors.total`
+  or `gguf.total` (params, shown as `27B` / `0.6B`) and `gguf.context_length`.
+  A repo with no parameter count looks up its `cardData.base_model` once. The
+  owner's avatar (`/api/organizations/{author}/avatar`, then
+  `/api/users/{author}/avatar`) is the row's icon when its family has none.
+  The token in the env var named by `hub_token_env` is sent as a Bearer token
+  to Hugging Face only.
+- ModelScope: `GET {modelscope_base}/api/v1/models/{owner}/{name}`, reading
+  owner, licence, task and parameter count from `Data`. Used when
+  `hub: modelscope`, or with `hub: both` when the Hugging Face lookup fails
+  or answers 404 and a ModelScope id is known.
+
+The router looks up each distinct repo in the background after startup
+(startup never waits), one request at a time with a short pause, a 15 s
+timeout and a 1 MB body cap, then again after `hub_refresh_seconds`. A
+failed lookup, a body over 1 MB or invalid JSON keeps the last good copy,
+logs one warning per repo for the run of failures and retries with backoff
+(30 s, doubling, up to `hub_refresh_seconds`). `cache_file`, when set, keeps
+the last good data (with each repo's fetch time) so a restart with no
+network still shows it. Unknown or missing fields are ignored.
+
+`catalog.metadata_url` is an optional hand-kept override: one JSON file served
+from any URL; see `configs/model-metadata.example.json`:
 
 ```json
 {"families": {"qwen": {"name": "Qwen", "owner": "Alibaba", "homepage": "https://...", "icon_url": "https://..."}},
@@ -1025,20 +1065,24 @@ a raw file in a git repo) that fills in catalog rows; see
 ```
 
 `match` is a model id or a glob (`*`, `?`, `[...]`); the first matching entry
-wins, so list exact ids before globs. `homepage` and `hf_repo` are accepted but
-not shown yet. The router fetches the file in the background at startup (startup
-never waits for it) and every `refresh_seconds`. A failed fetch, a non-200, a body
-over 1 MB or invalid JSON keeps the last good copy, logs one warning for the
-run of failures and retries with backoff (30 s, doubling, up to
-`refresh_seconds`). Each field is taken from the stanza first, then the
-metadata file, then the built-in family table. `/_router/status` and
-`/v1/models` rows carry `family` and `info`: the family's `icon_url`, `owner`,
-`params`, `licence`, `context_length`, `modality`, plus what the local command
-line shows: `quant` (from a `--model` GGUF name) and `context_length` (from
-`--ctx-size`) for non-image models, `size` (`-W`/`-H`) and `steps` for image
-models. The catalog draws `icon_url` only as an `<img>` and only when it is
-an http(s), relative or `data:image/` URL. Remote rows have no stanza here,
-so the metadata file is how they get detail.
+wins, so list exact ids before globs. `homepage` is accepted but not shown
+yet. The router fetches the file in the background at startup and every
+`refresh_seconds`, with the same failure handling as hub lookups (backoff up
+to `refresh_seconds`).
+
+Each field is taken from the stanza first, then the metadata file, then the
+hub, then the built-in family table. `/_router/status` and `/v1/models` rows
+carry `family` and `info`: `icon_url`, `owner`, `params`, `licence`,
+`context_length`, `modality`, `hub` and `hub_url` (a link to
+`https://huggingface.co/<id>` or `https://modelscope.cn/models/<id>`, shown
+as "from Hugging Face" / "from ModelScope" whenever a repo id is known), plus
+what the local command line shows: `quant` (from a `--model` GGUF name) and
+`context_length` (from `--ctx-size`) for non-image models, `size` (`-W`/`-H`)
+and `steps` for image models. The catalog draws `icon_url` only as an `<img>`
+and only when it is an http(s), relative or `data:image/` URL, and the hub
+link only when it passes the same check. Remote rows have no stanza here:
+they get the metadata file and the `hf_repo` the peer advertises in its
+telemetry (`hf_repos`).
 
 ## Still out of scope
 

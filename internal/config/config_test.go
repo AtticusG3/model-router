@@ -950,3 +950,18 @@ func TestDiscoveryDefaultsAndDisable(t *testing.T) {
 		t.Fatal("bad port must fail")
 	}
 }
+
+// catalog.hub is off by default with the public hub bases; an unknown mode fails.
+func TestCatalogHubDefaults(t *testing.T) {
+	cfg, err := Parse([]byte("stanzas: []\ncatalog: {hf_base: \"http://hub.example.test/\"}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := cfg.Catalog
+	if c.Hub != HubOff || c.HFBase != "http://hub.example.test" || c.ModelScopeBase != "https://modelscope.cn" || c.HubRefreshSeconds != 86400 {
+		t.Errorf("defaults: %+v", c)
+	}
+	if _, err := Parse([]byte("stanzas: []\ncatalog: {hub: github}\n")); err == nil {
+		t.Error("unknown catalog.hub accepted")
+	}
+}

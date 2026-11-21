@@ -1,8 +1,8 @@
 {
   "families": {
     "qwen": {"name": "Qwen", "owner": "Alibaba", "homepage": "https://huggingface.co/Qwen"},
-    "jina": {"name": "Jina", "owner": "Jina", "icon_url": "https://git.example.com/model-metadata/raw/branch/main/icons/jina.svg"},
-    "zimage": {"name": "Z-Image", "owner": "Example Image Lab", "icon_url": "https://git.example.com/model-metadata/raw/branch/main/icons/zimage.svg"}
+    "jina": {"name": "Jina", "owner": "Jina", "icon_url": "https://example.com/icons/jina.svg"},
+    "zimage": {"name": "Z-Image", "owner": "Example Image Lab", "icon_url": "https://example.com/icons/zimage.svg"}
   },
   "models": [
     {"match": "qwen38-flash-next", "params": "125B-A6B", "modality": "text", "context_length": 262144},
