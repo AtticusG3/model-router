@@ -76,6 +76,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/logs/{model_id}` | one model's ring as JSON, for the Logs page when a proxy buffers the live stream |
+| `/_router/activity/stream` | SSE feed for the Activity page: a `snapshot` event shaped like `/_router/activity`, then an `entry` event per finished request |
 | `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb`, `/_router/activity/{id}/audio` | in-memory generation request log, request/response captures, and the image thumbnail or speech audio |
 | `/v1/videos`, `/v1/videos/{id}[/content]` | async video jobs: create (JSON or multipart with `input_reference`), poll, fetch, delete |
 | `/v1/audio/generations`, `/v1/audio/generations/{id}[/content]` | async music and sound-effect jobs, same job shape as video: create (JSON, or multipart with a reference clip), poll, fetch, delete |

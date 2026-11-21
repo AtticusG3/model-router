@@ -206,6 +206,25 @@ func TestEmbeddedUILogsPollFallback(t *testing.T) {
 	}
 }
 
+// The Activity view follows the live stream only while it is showing, and polls
+// every 3 s when the stream never delivers its snapshot or the browser gives up.
+func TestEmbeddedUIActivityStreamWithPollFallback(t *testing.T) {
+	for _, want := range []string{
+		"new EventSource('/_router/activity/stream')", "addEventListener('snapshot'", "addEventListener('entry'",
+		"actWait=setTimeout(actPoll,ACT_STREAM_WAIT)", "es.readyState===EventSource.CLOSED)return actPoll()",
+		// A live stream that drops says so instead of still reading "Live".
+		"$('activity-hint').textContent='Reconnecting to the live stream…'",
+		"actPollTimer=setInterval(activity,3000)", "if(view!=='activity')actStop();else if(!wasAct)actStart()",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if strings.Contains(webUIHTML, "refresh();activity();") {
+		t.Error("Activity still polls from page load on every view")
+	}
+}
+
 // The fallback reads these keys, so the snapshot must keep them.
 func TestRouterLogsSnapshotFeedsUIFallback(t *testing.T) {
 	srv, logger := logTestServer(t)
