@@ -123,7 +123,7 @@ stanzas:
     slots: 2               # 0 = read --parallel / -np from command, else 1
     spin_up_seconds: 60    # 0 = default 60
     api_type: chat         # see api_type below; empty means chat
-    capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning
+    capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning; video: duration, resolution, seed
     match:
       body_field: model    # XOR path_prefix
     health_check: /health
@@ -186,7 +186,9 @@ by `-check` instead of silently hiding the model. `-check` prints the type per
 stanza.
 
 `capabilities` is an optional list per stanza from `vision`, `audio_in`,
-`audio_out`, `tools`, `reasoning`; an unknown flag is a load error. It is
+`audio_out`, `tools`, `reasoning`; an unknown flag is a load error. Video
+models add `duration`, `resolution` and `seed` when they accept those request
+fields; one of those flags on another `api_type` is a load error. It is
 published in `/v1/models` and `/_router/status`. A vision chat model (started
 with an `--mmproj`) stays `api_type: chat` and adds `capabilities: [vision]`.
 

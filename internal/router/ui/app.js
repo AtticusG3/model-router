@@ -5,9 +5,9 @@
   // Skips the write when the markup is unchanged, so a poll does not rebuild nodes (flicker, lost hover, lost selection).
   const setHTML=(el,html)=>{if(el._h!==html){el._h=html;el.innerHTML=html}};
   const icon=s=>{const paths={model:'<path d="M6 4.5 12 2l6 2.5v6L12 13l-6-2.5v-6Z"/><path d="m6 10.5 6 2.5 6-2.5M12 13v5"/>',peer:'<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.5-3.6M8.2 13.2l7.5 3.6"/>'};return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">'+(paths[s]||paths.model)+'</svg>'};
-  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Try a streaming chat, an image, an embeddings, a rerank, a speech, a transcription, a music or sound effect request or a load test against this router.'],activity:['Observability','Activity','Generation, audio, video and realtime requests on this node, with token or media stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
+  const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Try a streaming chat, an image, an embeddings, a rerank, a speech, a transcription, a video, a music or sound effect request, or a load test against this router.'],activity:['Observability','Activity','Generation, audio, video and realtime requests on this node, with token or media stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
   document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart()});
-  async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok)throw new Error(data.error||text||('HTTP '+r.status));return data}
+  async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok){const e=new Error(data.error||text||('HTTP '+r.status));e.status=r.status;throw e}return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
   window.refresh=async function(){try{status=await json('/_router/status');const node=status.node||'unknown';const now=new Date();$('side-node').textContent=node;$('updated').textContent='Updated '+now.toLocaleTimeString();setHealth(true,'Router healthy');renderSummary();renderGPUs();renderModels();renderPeers();fillSelectors()}catch(e){setHealth(false,e.message);$('updated').textContent='Snapshot unavailable'}};
   function renderSummary(){const gs=status.telemetry&&status.telemetry.gpus||[];const models=status.models||[];const running=models.filter(m=>m.state==='running').length;const peers=status.peers||{};$('stat-gpus').textContent=gs.length;$('stat-running').textContent=running;$('stat-models').textContent=models.length;$('stat-peers').textContent=Object.keys(peers).length;$('model-summary').textContent=models.length+' entries · '+running+' online'}
@@ -16,7 +16,9 @@
   function renderPeers(){const ps=status.peers||{};const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+(m.gpus&&m.gpus.length?m.gpus.join(','):m.gpu):'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');setHTML($('peers'),cards||'<div class="panel empty">No fresh peer telemetry.</div>')}
   function sameOptions(sel,ids){return sel.options.length===ids.length&&ids.every((id,i)=>sel.options[i].value===id)}
   function fillSelect(sel,ids,html){const prev=sel.value;if(sameOptions(sel,ids))return;sel.innerHTML=html;if([...sel.options].some(o=>o.value===prev))sel.value=prev}
-  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));const ags=(status.models||[]).filter(m=>m.api_type==='audio_gen');fillSelect($('audiogen-model'),[''].concat(ags.map(m=>m.id)),'<option value="">Path default</option>'+ags.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''))}
+  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));const vids=(status.models||[]).filter(m=>m.api_type==='video');fillSelect($('video-model'),vids.length?vids.map(m=>m.id):[''],vids.length?vids.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No video models available</option>');const ags=(status.models||[]).filter(m=>m.api_type==='audio_gen');fillSelect($('audiogen-model'),[''].concat(ags.map(m=>m.id)),'<option value="">Path default</option>'+ags.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));videoOptions()}
+  // Duration, resolution and seed are opt-in per video model through its capabilities list.
+  function videoOptions(){const m=(status.models||[]).find(x=>x.id===$('video-model').value)||{};const caps=m.capabilities||[];for(const k of ['duration','resolution','seed'])$('video-opt-'+k).hidden=!caps.includes(k)}
   window.loadModel=async function(id){try{await json('/_router/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Load failed: '+e.message)}};
   window.unloadModel=async function(id){try{await json('/_router/unload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Unload failed: '+e.message)}};
   $('models').onclick=e=>{const b=e.target.closest('[data-act]');if(!b)return;if(b.dataset.act==='load')loadModel(b.dataset.id);else if(b.dataset.act==='unload')unloadModel(b.dataset.id)};
@@ -190,6 +192,7 @@
     const next=tabs[(tabs.indexOf(document.activeElement)+(ev.key==='ArrowRight'?1:tabs.length-1))%tabs.length];
     next.focus();next.click();
   });
+  $('video-model').addEventListener('change',videoOptions);
 
   window.sendChat=async function(){
     const out=$('chat-output');
@@ -443,6 +446,144 @@
     const a=document.createElement('a');a.href=url;a.download='transcript.'+transcript.format;a.click();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
+
+  // Video jobs outlive the tab and the page: the id stays in sessionStorage so a
+  // reload resumes the same poll, and the router keeps the job running.
+  const VIDEO_JOB_KEY='router.video.job';
+  let videoJob=null,videoTimer=0,videoURL=null,videoDelay=1000;
+  // A Cancel invalidates a status check already in flight so it cannot repaint or reschedule.
+  let videoCheckEpoch=0,videoFailures=0;
+  function videoError(d){
+    const e=d&&d.error;
+    return (e&&e.message)||(typeof e==='string'&&e)||(d&&(d.failure_reason||d.detail))||'The job failed without a message.';
+  }
+  // shortcut: progress is the backend's number when it sends one; add an indeterminate bar if a backend never reports it.
+  function videoPaint(state,progress){
+    videoFailures=0;
+    const p=progress===null||progress===undefined?'':Number(progress);
+    const out=$('video-output');
+    out.className='output';
+    out.innerHTML='<div><strong>State:</strong> <span class="mono">'+esc(state||'queued')+'</span>'+(p===''?'':' · <strong>'+esc(p)+'%</strong>')+'</div>';
+    $('video-status').textContent=(state||'queued')+(p===''?'':' · '+p+'%');
+  }
+  function videoFail(message){
+    clearTimeout(videoTimer);
+    videoJob=null;sessionStorage.removeItem(VIDEO_JOB_KEY);
+    $('video-generate').disabled=false;$('video-cancel').disabled=true;
+    $('video-status').textContent='Failed';
+    const out=$('video-output');out.className='output error';out.textContent=message;
+  }
+  function videoCancelled(){
+    clearTimeout(videoTimer);
+    videoJob=null;sessionStorage.removeItem(VIDEO_JOB_KEY);
+    $('video-generate').disabled=false;$('video-cancel').disabled=true;$('video-status').textContent='Cancelled';
+    const out=$('video-output');out.className='output muted';out.textContent='Cancelled.';
+  }
+  async function videoShow(id){
+    const r=await fetch('/v1/videos/'+encodeURIComponent(id)+'/content');
+    if(!r.ok){const e=new Error('HTTP '+r.status+': '+(await r.text()).trim());e.status=r.status;throw e}
+    const blob=await r.blob();
+    if(videoURL)URL.revokeObjectURL(videoURL);
+    videoURL=URL.createObjectURL(blob);
+    const ext=(blob.type.split('/')[1]||'mp4').split(';')[0].replace('quicktime','mov').replace('x-matroska','mkv');
+    const out=$('video-output');out.className='output';
+    out.innerHTML='<video controls src="'+esc(videoURL)+'" style="width:100%"></video><p><a href="'+esc(videoURL)+'" download="video.'+esc(ext)+'">Download video</a></p>';
+    clearTimeout(videoTimer);videoJob=null;sessionStorage.removeItem(VIDEO_JOB_KEY);
+    $('video-generate').disabled=false;$('video-cancel').disabled=true;$('video-status').textContent='Completed';
+  }
+  async function videoCheck(){
+    if(!videoJob)return;
+    const id=videoJob,epoch=videoCheckEpoch;
+    try{
+      const d=await json('/v1/videos/'+encodeURIComponent(id));
+      if(videoJob!==id||epoch!==videoCheckEpoch)return;
+      if(d.status==='completed'){
+        // Only the content download gives up after repeated errors; a status
+        // poll that keeps failing never ends the job.
+        try{await videoShow(id);return}catch(e){
+          if(videoJob!==id||epoch!==videoCheckEpoch)return;
+          if(++videoFailures>=10){videoFail(e.message);return}
+          $('video-status').textContent='Retrying: '+e.message;
+        }
+      }else if(d.status==='cancelled'){videoCancelled();return}
+      else if(d.status==='failed'){videoFail(videoError(d));return}
+      else{
+        const p=Number(d.progress);
+        videoPaint(d.status||'queued',d.progress===undefined||d.progress===null||!Number.isFinite(p)?null:p);
+      }
+    }catch(e){
+      if(videoJob!==id||epoch!==videoCheckEpoch)return;
+      if(e.status===404){videoFail(e.message);return}
+      // A slow, restarting or unreachable backend does not end the job: keep
+      // polling until it reports a final state or the router forgets the id.
+      $('video-status').textContent='Retrying: '+e.message;
+    }
+    videoDelay=Math.min(videoDelay*1.5,5000);
+    clearTimeout(videoTimer);
+    videoTimer=setTimeout(videoCheck,videoDelay);
+  }
+  window.sendVideo=async function(){
+    if(videoJob)return;
+    const out=$('video-output'),model=$('video-model').value,prompt=$('video-prompt').value.trim(),ref=$('video-reference').files[0];
+    const fail=m=>{out.className='output error';out.textContent=m};
+    if(!model)return fail('No video model is available. Add a catalog entry with api_type: video.');
+    if(!prompt)return fail('Enter a prompt.');
+    const body={model,prompt};
+    if(!$('video-opt-duration').hidden)body.seconds=Number($('video-seconds').value)||4;
+    if(!$('video-opt-resolution').hidden)body.size=$('video-resolution').value;
+    if(!$('video-opt-seed').hidden){const seed=$('video-seed').value.trim();if(/^\d+$/.test(seed))body.seed=seed.length>15?seed:Number(seed)}
+    out.className='output muted';out.textContent='Submitting…';
+    $('video-generate').disabled=true;$('video-cancel').disabled=true;$('video-status').textContent='Submitting…';
+    try{
+      let r;
+      if(ref){
+        const fd=new FormData();for(const k of Object.keys(body))fd.append(k,String(body[k]));fd.append('input_reference',ref);
+        r=await fetch('/v1/videos',{method:'POST',body:fd});
+      }else{
+        r=await fetch('/v1/videos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      }
+      const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){d=null}
+      if(!r.ok){const e=d&&d.error;throw new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))}
+      if(!d||!d.id)throw new Error('The response had no job id.');
+      videoJob=d.id;videoDelay=1000;sessionStorage.setItem(VIDEO_JOB_KEY,d.id);
+      $('video-cancel').disabled=false;
+      videoPaint(d.status||'queued',d.progress===undefined?0:Number(d.progress)||0);
+      videoTimer=setTimeout(videoCheck,videoDelay);
+    }catch(e){
+      $('video-generate').disabled=false;$('video-status').textContent='';
+      fail(e.message);
+    }
+  };
+  window.cancelVideo=async function(){
+    if(!videoJob)return;
+    const id=videoJob;
+    videoCheckEpoch++;
+    clearTimeout(videoTimer);
+    $('video-cancel').disabled=true;$('video-status').textContent='Cancelling…';
+    try{
+      await json('/v1/videos/'+encodeURIComponent(id),{method:'DELETE'});
+    }catch(e){
+      if(videoJob!==id)return;
+      // The router ends a job only when DELETE succeeds, so keep it and poll on.
+      $('video-cancel').disabled=false;$('video-status').textContent='Cancel failed';
+      const out=$('video-output');out.className='output error';out.textContent='Cancel failed: '+e.message;
+      videoDelay=Math.min(videoDelay*1.5,5000);
+      clearTimeout(videoTimer);
+      videoTimer=setTimeout(videoCheck,videoDelay);
+      return;
+    }
+    if(videoJob!==id)return;
+    videoCancelled();
+  };
+  function resumeVideo(){
+    const id=sessionStorage.getItem(VIDEO_JOB_KEY);
+    if(!id)return;
+    videoJob=id;videoDelay=1000;
+    $('video-generate').disabled=true;$('video-cancel').disabled=false;
+    const out=$('video-output');out.className='output muted';out.textContent='Resuming the job…';
+    $('video-status').textContent='Resuming…';
+    videoTimer=setTimeout(videoCheck,0);
+  }
 
   // Load test: the browser drives /v1/chat/completions like any other client, so nothing here touches backends directly.
   // State is module-level, so a run keeps going while the operator is on another tab.
@@ -1013,5 +1154,5 @@
     if(!logPause)logPaint();
   });
 
-  refresh();activity();setInterval(refresh,3000);setInterval(activity,3000);
+  resumeVideo();refresh();activity();setInterval(refresh,3000);setInterval(activity,3000);
 })();

@@ -151,8 +151,9 @@ var APITypes = []string{
 	APITypeSpeech, APITypeTranscription, APITypeRealtime, APITypeVideo, APITypeAudioGen,
 }
 
-// Capabilities are the optional capability flags a stanza may declare.
-var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning"}
+// Capabilities are the optional capability flags a stanza may declare. The
+// video flags describe the optional video playground fields the model accepts.
+var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning", "duration", "resolution", "seed"}
 
 // ImagePipeline is a stanza's image request pipeline. The YAML value is either
 // a preset name (sd-server or ideogram4, see SPEC.md) or a map; a preset is
@@ -248,9 +249,10 @@ type Stanza struct {
 	// that names a model, or an explicit match.path_prefix, still wins.
 	APIType string `yaml:"api_type"`
 	// Capabilities lists what the backend supports (vision, audio_in,
-	// audio_out, tools, reasoning). Published in /v1/models and
-	// /_router/status. A vision chat model (started with an --mmproj) is
-	// still api_type: chat plus capabilities: [vision].
+	// audio_out, tools, reasoning, and for video models duration, resolution,
+	// seed). Published in /v1/models and /_router/status. A vision chat model
+	// (started with an --mmproj) is still api_type: chat plus
+	// capabilities: [vision].
 	Capabilities []string `yaml:"capabilities"`
 	Match        Match    `yaml:"match"`
 	// HealthCheck is the URL path polled for readiness. Default "/health".
@@ -796,6 +798,9 @@ func Parse(raw []byte) (*Config, error) {
 			if !slices.Contains(Capabilities, c) {
 				return nil, fmt.Errorf("stanza %q: capability %q is not valid; must be one of %s",
 					s.ModelID, c, strings.Join(Capabilities, ", "))
+			}
+			if (c == "duration" || c == "resolution" || c == "seed") && s.APIType != APITypeVideo {
+				return nil, fmt.Errorf("stanza %q: capability %q is only valid with api_type: video", s.ModelID, c)
 			}
 		}
 		if s.Job != nil {

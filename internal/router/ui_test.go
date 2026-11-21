@@ -58,6 +58,8 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		"window.startLoad", "window.cancelLoad", "AbortController",
 		`id="pg-tab-realtime"`, `id="pg-realtime"`, `id="rt-model"`, `id="rt-output"`, `id="rt-close"`,
 		"window.openRealtime", "window.sendRealtime", "/v1/realtime", "api_type==='realtime'",
+		`id="pg-tab-video"`, `id="pg-video"`, `id="video-model"`, `id="video-output"`, `id="video-cancel"`,
+		"window.sendVideo", "window.cancelVideo", "/v1/videos", "api_type==='video'",
 		`id="chat-output"`, `id="image-output"`, "window.sendChat", "window.generateImage",
 		`id="image-cancel"`, "window.cancelImage", "Retry-After",
 	} {
@@ -103,6 +105,29 @@ func TestEmbeddedUITranscriptionOptions(t *testing.T) {
 		"fd.append('response_format',format)", "if(language)fd.append('language',language)",
 		`id="transcribe-actions" hidden`, "format==='srt'||format==='vtt'",
 		"window.copyTranscript", "navigator.clipboard.writeText", "window.downloadTranscript", "a.download='transcript.'+",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
+
+// The Video tab submits JSON or multipart to /v1/videos, resumes the job id
+// from sessionStorage after a reload, polls with backoff, and ends it with
+// DELETE. Optional fields depend on the model's capabilities.
+func TestEmbeddedUIVideoTab(t *testing.T) {
+	for _, want := range []string{
+		`id="video-opt-duration" hidden`, `id="video-opt-resolution" hidden`, `id="video-opt-seed" hidden`,
+		`id="video-seconds"`, `id="video-resolution"`, `id="video-seed"`,
+		"['duration','resolution','seed']", `$('video-opt-'+k).hidden=!caps.includes(k)`,
+		"body.seconds=", "body.size=", "body.seed=", "input_reference",
+		"'Content-Type':'application/json'", "method:'DELETE'", "encodeURIComponent(id)",
+		"VIDEO_JOB_KEY='router.video.job'", "sessionStorage.getItem(VIDEO_JOB_KEY)",
+		"sessionStorage.setItem(VIDEO_JOB_KEY,d.id)", "sessionStorage.removeItem(VIDEO_JOB_KEY)",
+		"videoDelay=Math.min(videoDelay*1.5,5000)", "videoFail(videoError(d))", "e.status===404",
+		"Cancel failed: ",
+		"d.status==='completed'", `'<video controls`, `download="video.'`, "Download video",
+		"resumeVideo();refresh()", "Cancelled.",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)

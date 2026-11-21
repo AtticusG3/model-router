@@ -712,10 +712,14 @@ func TestPeerSpillValidation(t *testing.T) {
 }
 
 func TestCapabilityValidation(t *testing.T) {
-	if _, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: chat, capabilities: [vision, tools]}\n")); err != nil {
+	if _, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: video, capabilities: [vision, tools, duration, resolution, seed]}\n")); err != nil {
 		t.Fatalf("known capabilities rejected: %v", err)
 	}
-	_, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, capabilities: [telepathy]}\n"))
+	_, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: chat, capabilities: [seed]}\n"))
+	if err == nil || !strings.Contains(err.Error(), `capability "seed" is only valid with api_type: video`) {
+		t.Fatalf("chat seed capability err = %v, want it rejected", err)
+	}
+	_, err = Parse([]byte("stanzas:\n  - {model_id: a, command: x, capabilities: [telepathy]}\n"))
 	if err == nil || !strings.Contains(err.Error(), `capability "telepathy" is not valid`) || !strings.Contains(err.Error(), "vision") {
 		t.Fatalf("telepathy err = %v, want it named with the vocabulary listed", err)
 	}
