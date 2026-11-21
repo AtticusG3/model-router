@@ -27,6 +27,8 @@ global.document = {
   addEventListener() {}, activeElement: null,
 };
 global.window = global;
+global.location = { hash: '', protocol: 'http:', host: 'localhost' };
+global.history = { replaceState() {} };
 global.scrollTo = () => {};
 global.alert = () => {};
 global.sessionStorage = { getItem() { return null; }, setItem() {}, removeItem() {} };

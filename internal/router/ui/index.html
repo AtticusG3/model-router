@@ -77,6 +77,21 @@ A cat sat on the mat.</textarea></label><button class="primary" id="rerank-submi
     </main>
 
     <main id="activity" class="view">
+      <div class="log-toolbar" role="region" aria-label="Activity filter">
+        <div class="chips" id="act-filter" role="group" aria-label="Show requests by path">
+          <button class="chip active" data-group="chat" aria-pressed="true">Chat</button>
+          <button class="chip active" data-group="sdapi" aria-pressed="true">SD API</button>
+          <button class="chip" data-group="images" aria-pressed="false">OpenAI images</button>
+          <button class="chip" data-group="embed" aria-pressed="false">Embeddings and rerank</button>
+          <button class="chip" data-group="completions" aria-pressed="false">Completions and responses</button>
+          <button class="chip" data-group="audio" aria-pressed="false">Audio</button>
+          <button class="chip" data-group="video" aria-pressed="false">Video</button>
+          <button class="chip" data-group="realtime" aria-pressed="false">Realtime</button>
+          <button class="chip" data-group="other" aria-pressed="false">Other</button>
+          <button class="chip" id="act-all" aria-pressed="false">All</button>
+        </div>
+        <span class="subtle" id="act-hidden" role="status"></span>
+      </div>
       <section class="overview" aria-label="Generation summary">
         <div class="stat-card"><div class="stat-top"><span>Requests</span></div><div class="stat-value" id="act-count">0</div></div>
         <div class="stat-card"><div class="stat-top"><span>Avg generation</span></div><div class="stat-value" id="act-avg-gen">—<small> tok/s</small></div></div>
