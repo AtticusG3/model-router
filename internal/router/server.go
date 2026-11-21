@@ -207,9 +207,82 @@ func handleActivity(r *Router) http.HandlerFunc {
 	}
 }
 
+// activityProgressEvery is how often the Activity stream sends the running
+// requests, here and on peers. A var so tests can shorten it.
+var activityProgressEvery = time.Second
+
+// liveRow is a running request on the Activity stream. Node names the peer
+// running it; empty for this node.
+type liveRow struct {
+	InProgressEntry
+	Node string `json:"node,omitempty"`
+}
+
+// peerRow is a peer request the stream showed running, now finished, built
+// from the summary in the peer's telemetry recent list.
+type peerRow struct {
+	ActivityEntry
+	Node    string `json:"node"`
+	PeerURL string `json:"peer_url,omitempty"`
+}
+
+// streamProgress returns the requests running here and on fresh peers, plus a
+// finished row for each peer request in seen that has moved to the peer's
+// recent list. seen is left holding the peer requests running now.
+func (r *Router) streamProgress(seen map[string]liveRow) ([]liveRow, []peerRow) {
+	rows := []liveRow{}
+	for _, e := range r.activity.InProgress() {
+		rows = append(rows, liveRow{InProgressEntry: e})
+	}
+	var done []peerRow
+	now := map[string]liveRow{}
+	peers := r.PeerList()
+	tel := map[string]*Telemetry{}
+	for _, p := range peers {
+		if t, _, fresh := r.peers.Entry(p.Name); fresh {
+			tel[p.Name] = t
+		}
+	}
+	for _, p := range peers {
+		t := tel[p.Name]
+		if t == nil {
+			// A stale peer's rows drop out without a finish; the page marks them lost.
+			continue
+		}
+		key := func(id int) string { return p.Name + "/" + strconv.Itoa(id) }
+		for _, e := range t.InProgress {
+			// A request forwarded between this node and the peer already has
+			// its local row, and one a fresh peer forwarded has that peer's
+			// row, so it shows once.
+			if e.FromPeer == r.node || e.Target == r.node || tel[e.FromPeer] != nil {
+				continue
+			}
+			row := liveRow{InProgressEntry: e, Node: p.Name}
+			rows = append(rows, row)
+			now[key(e.ID)] = row
+		}
+		for _, e := range t.Recent {
+			was, ok := seen[key(e.ID)]
+			if _, running := now[key(e.ID)]; !ok || running {
+				continue
+			}
+			done = append(done, peerRow{ActivityEntry: ActivityEntry{
+				ID: e.ID, Timestamp: was.Started, Model: e.Model, Target: e.Target, Method: was.Method,
+				Path: e.Path, Status: e.Status, DurationMs: e.DurationMs, TTFTMs: was.TTFTMs,
+				Tokens: TokenStats{CompletionTokens: e.Tokens}, FromPeer: e.FromPeer,
+			}, Node: p.Name, PeerURL: p.BaseURL})
+		}
+	}
+	clear(seen)
+	maps.Copy(seen, now)
+	return rows, done
+}
+
 // handleActivityStream is the Activity page's live feed (SSE): a snapshot
-// event shaped like GET /_router/activity, then one entry event per recorded
-// row. Event names leave room for in-progress updates on the same stream.
+// event shaped like GET /_router/activity, a done event per recorded row, and
+// a progress event with the running requests here and on peers whenever that
+// list changes. A peer request seen running gets a done event when it shows in
+// the peer's recent list.
 func handleActivityStream(r *Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
@@ -222,7 +295,7 @@ func handleActivityStream(r *Router) http.HandlerFunc {
 			return
 		}
 		a := r.Activity()
-		// Subscribe first: a request that finishes after it arrives as an entry
+		// Subscribe first: a request that finishes after it arrives as a done
 		// event, so nothing in the snapshot's in_progress list is left running.
 		rows, live, cancel := a.Subscribe()
 		defer cancel()
@@ -236,15 +309,40 @@ func handleActivityStream(r *Router) http.HandlerFunc {
 			fl.Flush()
 		}
 		send("snapshot", map[string]any{"entries": rows, "in_progress": running})
+		seen := map[string]liveRow{}
+		var last []byte
+		progress := func() {
+			// Read the running list, then send the rows recorded so far: record
+			// drops a running entry and queues its row under one lock, so a
+			// request that finishes in between goes out as done first and never
+			// looks lost for a moment.
+			rows, done := r.streamProgress(seen)
+			for len(live) > 0 {
+				send("done", <-live)
+			}
+			for _, d := range done {
+				send("done", d)
+			}
+			if b, _ := json.Marshal(map[string]any{"in_progress": rows}); string(b) != string(last) {
+				last = b
+				fmt.Fprintf(w, "event: progress\ndata: %s\n\n", b)
+				fl.Flush()
+			}
+		}
+		progress()
+		tick := time.NewTicker(activityProgressEvery)
+		defer tick.Stop()
 		for {
 			select {
 			case <-req.Context().Done():
 				return
+			case <-tick.C:
+				progress()
 			case e, ok := <-live:
 				if !ok {
 					return
 				}
-				send("entry", e)
+				send("done", e)
 			}
 		}
 	}

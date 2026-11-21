@@ -85,6 +85,9 @@ button.primary:active:not(:disabled){transform:none;box-shadow:var(--elev-1)}
 .capture-dialog[open]::backdrop{animation:fade .22s ease}
 .activity-table tbody tr.row-in{animation:row-in .45s var(--ease)}
 .activity-table tbody tr{transition:opacity .22s ease,background .16s ease}
+.activity-table tbody tr.running{cursor:default}.activity-table tbody tr.lost{opacity:.55}
+.spinner{display:inline-block;width:10px;height:10px;margin-right:6px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;vertical-align:-1px;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .activity-table tbody tr.leaving{opacity:0;pointer-events:none}
 /* Sparklines: the line and its end dot glide to the new points. */
 .spark-line{transition:d .5s var(--ease)}
