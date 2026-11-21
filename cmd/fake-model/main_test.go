@@ -239,6 +239,131 @@ func TestVideoJobReachesCompleted(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestVideoSDCppJobAPI(t *testing.T) {
+	srv := newTestFake(t, func(f *fakeModel) { f.bigBytes = 5000 })
+	resp, err := http.Post(srv.URL+"/sdcpp/v1/vid_gen", "application/json", strings.NewReader(`{"prompt":"a kite"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted || created.ID == "" || created.Status != "queued" {
+		t.Fatalf("create = %d %+v, want 202 queued", resp.StatusCode, created)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	var final struct {
+		Status string `json:"status"`
+		Result struct {
+			MimeType string `json:"mime_type"`
+			B64JSON  string `json:"b64_json"`
+		} `json:"result"`
+	}
+	for {
+		resp, err := http.Get(srv.URL + "/sdcpp/v1/jobs/" + created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		json.NewDecoder(resp.Body).Decode(&final)
+		resp.Body.Close()
+		if final.Status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job never completed; last = %+v", final)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if final.Result.MimeType != "video/webm" || final.Result.B64JSON == "" {
+		t.Fatalf("result = %+v, want a WebM clip", final.Result)
+	}
+
+	resp, _ = http.Post(srv.URL+"/sdcpp/v1/vid_gen", "application/json", strings.NewReader(`{}`))
+	json.NewDecoder(resp.Body).Decode(&created)
+	resp.Body.Close()
+	resp, _ = http.Post(srv.URL+"/sdcpp/v1/jobs/"+created.ID+"/cancel", "application/json", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+// TestSDCppCancelIsAuthoritative replays the reported sequence: a job is
+// cancelled, then polled after its normal finish time, and must still read
+// cancelled with no result. Cancelling a completed job must keep its result.
+func TestSDCppCancelIsAuthoritative(t *testing.T) {
+	srv := newTestFake(t, func(f *fakeModel) { f.bigBytes = 200 })
+	create := func() string {
+		resp, err := http.Post(srv.URL+"/sdcpp/v1/vid_gen", "application/json", strings.NewReader(`{"prompt":"a kite"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		json.NewDecoder(resp.Body).Decode(&created)
+		resp.Body.Close()
+		if created.ID == "" {
+			t.Fatal("create returned no id")
+		}
+		return created.ID
+	}
+	poll := func(id string) (string, bool) {
+		resp, err := http.Get(srv.URL + "/sdcpp/v1/jobs/" + id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rec struct {
+			Status string         `json:"status"`
+			Result map[string]any `json:"result"`
+		}
+		json.NewDecoder(resp.Body).Decode(&rec)
+		resp.Body.Close()
+		return rec.Status, rec.Result != nil
+	}
+
+	// Cancelled while running: the goroutine must not overwrite the state.
+	id := create()
+	resp, err := http.Post(srv.URL+"/sdcpp/v1/jobs/"+id+"/cancel", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// Well past jobSeconds (30ms) so both goroutine transitions would have fired.
+	time.Sleep(150 * time.Millisecond)
+	status, hasResult := poll(id)
+	if status != "cancelled" || hasResult {
+		t.Fatalf("after cancel and finish time: status=%q result=%v, want cancelled with no result", status, hasResult)
+	}
+
+	// Completed first, then cancelled: the result must survive.
+	id = create()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		status, _ = poll(id)
+		if status == "completed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job never completed; last status %q", status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	resp, err = http.Post(srv.URL+"/sdcpp/v1/jobs/"+id+"/cancel", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	status, hasResult = poll(id)
+	if status != "completed" || !hasResult {
+		t.Fatalf("cancel of a completed job: status=%q result=%v, want completed with its result", status, hasResult)
+	}
+}
+
 func TestAudioGenerationsUseSameJobShape(t *testing.T) {
 	srv := newTestFake(t, nil)
 	resp, err := http.Post(srv.URL+"/v1/audio/generations", "application/json", strings.NewReader(`{}`))

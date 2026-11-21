@@ -219,6 +219,12 @@ pipeline step rewrites it; a step can attach notes (for example the rewritten
 prompt) that are listed with the capture. A response step may add headers or
 ask for one retry.
 
+`job` selects the adapter in front of a stanza's async job API. It is only
+valid on `api_type: video`. `adapter` is `openai` (the default, the backend
+speaks `/v1/videos` itself) or `sdcpp` (sd-server's `/sdcpp/v1` job routes).
+An unknown adapter is a load error that lists the valid values. See Async
+jobs.
+
 An `api_type` gives a model-less request a default route. The type serves these
 API paths:
 
@@ -369,11 +375,24 @@ another copy.
 Video generation runs for minutes, longer than clients and fronting proxies
 hold a connection, so its backends answer a submit at once and run the job in
 the background. The router speaks one job API for this, the OpenAI-style
-`/v1/videos` (create, retrieve, content, delete), to clients and to backends. A
-backend with its own job shape (`sd-server`, ComfyUI) sits behind a small
-adapter in the stanza `command`; `docs/research/video-backends.md` §5.4 lists
-the translation. The router learns no backend-specific job shape and has no
-per-stanza job config.
+`/v1/videos` (create, retrieve, content, delete), to clients and to backends.
+A backend that already speaks that job API is proxied unchanged. A stanza
+whose backend has its own job shape sets `job.adapter`:
+
+```yaml
+job:
+  adapter: openai   # default: the backend speaks /v1/videos
+  adapter: sdcpp    # sd-server /sdcpp/v1/vid_gen + /sdcpp/v1/jobs/{id}
+```
+
+The adapter translates the same four calls; no backend-specific code lives
+outside it. `openai` is the default for a stanza with no `job` block. The
+`sdcpp` adapter maps JSON or multipart submits onto `vid_gen` fields and
+statuses (`generating` → `in_progress`, `cancelled` → `failed` with an error
+code), serves `result.b64_json` from `GET /v1/videos/{id}/content`, and sends
+`DELETE` to the cancel route. Remix is not available through the `sdcpp`
+adapter. A multipart `input_reference` becomes `init_image`; a 20 MB image
+rides the normal streaming upload path.
 
 - **Submit.** A `2xx` answer to `POST /v1/videos` whose JSON has an `id`
   records the job: id, model, the local instance or peer that took it, and the

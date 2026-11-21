@@ -699,6 +699,31 @@ func TestCapabilityValidation(t *testing.T) {
 	}
 }
 
+func TestJobAdapterValidation(t *testing.T) {
+	cfg, err := Parse([]byte("stanzas:\n  - {model_id: v, command: x, api_type: video, job: {adapter: sdcpp}}\n"))
+	if err != nil {
+		t.Fatalf("sdcpp adapter rejected: %v", err)
+	}
+	if got := cfg.Stanza("v").Job.Adapter; got != JobAdapterSDCpp {
+		t.Fatalf("adapter = %q, want %q", got, JobAdapterSDCpp)
+	}
+	cfg, err = Parse([]byte("stanzas:\n  - {model_id: v, command: x, api_type: video, job: {}}\n"))
+	if err != nil {
+		t.Fatalf("empty adapter rejected: %v", err)
+	}
+	if got := cfg.Stanza("v").Job.Adapter; got != JobAdapterOpenAI {
+		t.Fatalf("empty adapter = %q, want %q", got, JobAdapterOpenAI)
+	}
+	_, err = Parse([]byte("stanzas:\n  - {model_id: v, command: x, api_type: video, job: {adapter: comfyui}}\n"))
+	if err == nil || !strings.Contains(err.Error(), `job.adapter "comfyui" is not valid`) || !strings.Contains(err.Error(), JobAdapterSDCpp) {
+		t.Fatalf("comfyui err = %v, want it named with the vocabulary listed", err)
+	}
+	_, err = Parse([]byte("stanzas:\n  - {model_id: i, command: x, api_type: image, job: {adapter: sdcpp}}\n"))
+	if err == nil || !strings.Contains(err.Error(), "job is only valid with api_type: video") {
+		t.Fatalf("job on image err = %v, want api_type restriction", err)
+	}
+}
+
 func TestCPUDeviceParses(t *testing.T) {
 	cfg, err := Parse([]byte(`
 stanzas:

@@ -243,6 +243,12 @@ stanzas:
     idle_ttl_seconds: 300
     port: 5954
 
+  # Video stanzas use the router's /v1/videos async job API through the
+  # sdcpp adapter. Client calls to the old /sdapi/v1 video routes no longer
+  # match; use /v1/videos and poll /v1/videos/{id}. The adapter speaks
+  # sd-server's native /sdcpp/v1/vid_gen + /jobs routes; update the installed
+  # sd-server if those routes are missing. The adapter path was verified
+  # against the fake backend; this node's real models were not run.
   - model_id: ltx-2.3-video
     name: "LTX-2.3 video"
     command: >
@@ -261,8 +267,10 @@ stanzas:
     vram_mb: 22000
     device: 0
     spin_up_seconds: 120
-    api_type: image
-    match: {path_prefix: /sdapi/v1}
+    api_type: video
+    capabilities: [audio_out]
+    job: {adapter: sdcpp}
+    match: {path_default: true}
     health_check: /sdapi/v1/sd-models
     idle_ttl_seconds: 0
     port: 5955
@@ -290,8 +298,10 @@ stanzas:
     vram_mb: 22000
     device: 0
     spin_up_seconds: 120
-    api_type: image
-    match: {path_prefix: /sdapi/v1}
+    api_type: video
+    capabilities: [audio_out]
+    job: {adapter: sdcpp}
+    match: {body_field: model}
     health_check: /sdapi/v1/sd-models
     idle_ttl_seconds: 0
     port: 5956

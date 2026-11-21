@@ -3,7 +3,8 @@
 // enough of the API surface: /health, /v1/models, /v1/chat/completions
 // (streaming + non-streaming), /v1/embeddings, /v1/rerank, /sdapi/v1/txt2img,
 // /v1/audio/* (speech, transcriptions, translations, voices, generations),
-// /v1/realtime (websocket echo), and the /v1/videos job API.
+// /v1/realtime (websocket echo), and the /v1/videos job API (plus the same
+// jobs through sd-server's /sdcpp/v1 shape).
 package main
 
 import (
@@ -41,12 +42,20 @@ type fakeModel struct {
 }
 
 type job struct {
-	ID       string `json:"id"`
-	Object   string `json:"object"`
-	Model    string `json:"model"`
-	Status   string `json:"status"`
-	Progress int    `json:"progress"`
-	Created  int64  `json:"created_at"`
+	ID       string       `json:"id"`
+	Object   string       `json:"object"`
+	Model    string       `json:"model"`
+	Status   string       `json:"status"`
+	Progress int          `json:"progress"`
+	Created  int64        `json:"created_at"`
+	Result   *sdcppResult `json:"-"`
+}
+
+// sdcppResult is the sd-server vid_gen result shape the router's sdcpp adapter reads.
+type sdcppResult struct {
+	Kind     string `json:"kind"`
+	MimeType string `json:"mime_type"`
+	B64JSON  string `json:"b64_json"`
 }
 
 func main() {
@@ -94,6 +103,9 @@ func (f *fakeModel) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/videos/{id}", f.getJob)
 	mux.HandleFunc("GET /v1/videos/{id}/content", f.jobContent("video/mp4"))
 	mux.HandleFunc("DELETE /v1/videos/{id}", f.deleteJob)
+	mux.HandleFunc("POST /sdcpp/v1/vid_gen", f.sdcppCreate)
+	mux.HandleFunc("GET /sdcpp/v1/jobs/{id}", f.sdcppJob)
+	mux.HandleFunc("POST /sdcpp/v1/jobs/{id}/cancel", f.sdcppCancel)
 	mux.HandleFunc("POST /v1/audio/generations", f.createJob("audio.generation"))
 	mux.HandleFunc("GET /v1/audio/generations/{id}", f.getJob)
 	mux.HandleFunc("GET /v1/audio/generations/{id}/content", f.jobContent("audio/mpeg"))
@@ -311,6 +323,55 @@ func (f *fakeModel) deleteVoice(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// startJob creates a queued -> in_progress -> completed job that finishes
+// after jobSeconds. The returned snapshot is safe to encode.
+func (f *fakeModel) startJob(kind, model string) job {
+	f.mu.Lock()
+	// Random ids, as real backends make: two instances never share one.
+	j := &job{
+		ID: kind + "-" + rand.Text(), Object: kind,
+		Model: model, Status: "queued", Created: time.Now().Unix(),
+	}
+	f.jobs[j.ID] = j
+	snapshot := *j
+	f.mu.Unlock()
+
+	go func() {
+		half := f.jobSeconds / 2
+		if half < 10*time.Millisecond {
+			half = 10 * time.Millisecond
+		}
+		time.Sleep(half)
+		f.mu.Lock()
+		if j.Status != "cancelled" {
+			j.Status, j.Progress = "in_progress", 50
+		}
+		f.mu.Unlock()
+		time.Sleep(f.jobSeconds - half)
+		f.mu.Lock()
+		if j.Status != "cancelled" {
+			j.Status, j.Progress = "completed", 100
+			if kind == "video" {
+				j.Result = &sdcppResult{
+					Kind: "vid_gen", MimeType: "video/webm",
+					B64JSON: base64.StdEncoding.EncodeToString(f.videoPayload()),
+				}
+			}
+		}
+		f.mu.Unlock()
+	}()
+	return snapshot
+}
+
+// videoPayload is the clip the sdcpp job result carries.
+func (f *fakeModel) videoPayload() []byte {
+	n := f.bigBytes
+	if n == 0 {
+		n = 4096
+	}
+	return make([]byte, n)
+}
+
 // createJob returns a handler starting a queued -> in_progress -> completed
 // job that finishes after jobSeconds.
 func (f *fakeModel) createJob(kind string) http.HandlerFunc {
@@ -319,33 +380,75 @@ func (f *fakeModel) createJob(kind string) http.HandlerFunc {
 			Model string `json:"model"`
 		}
 		json.NewDecoder(r.Body).Decode(&body)
-
-		f.mu.Lock()
-		// Random ids, as real backends make: two instances never share one.
-		j := &job{
-			ID: kind + "-" + rand.Text(), Object: kind,
-			Model: body.Model, Status: "queued", Created: time.Now().Unix(),
-		}
-		f.jobs[j.ID] = j
-		snapshot := *j
-		f.mu.Unlock()
-
-		go func() {
-			half := f.jobSeconds / 2
-			if half < 10*time.Millisecond {
-				half = 10 * time.Millisecond
-			}
-			time.Sleep(half)
-			f.mu.Lock()
-			j.Status, j.Progress = "in_progress", 50
-			f.mu.Unlock()
-			time.Sleep(f.jobSeconds - half)
-			f.mu.Lock()
-			j.Status, j.Progress = "completed", 100
-			f.mu.Unlock()
-		}()
-		writeJSON(w, snapshot)
+		writeJSON(w, f.startJob(kind, body.Model))
 	}
+}
+
+// sdcppCreate starts the same video job for sd-server's native vid_gen route.
+func (f *fakeModel) sdcppCreate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Model string `json:"model"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	j := f.startJob("video", body.Model)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	writeJSON(w, map[string]any{"id": j.ID, "status": "queued", "poll_url": "/sdcpp/v1/jobs/" + j.ID})
+}
+
+// sdcppJob renders the job record in sd-server's shape, including the result
+// once completed. The adapter maps in_progress back to "in_progress" itself.
+func (f *fakeModel) sdcppJob(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	j, ok := f.jobs[r.PathValue("id")]
+	var snapshot job
+	if ok {
+		snapshot = *j
+	}
+	f.mu.Unlock()
+	if !ok {
+		http.Error(w, "no such job", http.StatusNotFound)
+		return
+	}
+	rec := map[string]any{
+		"id": snapshot.ID, "created": snapshot.Created,
+		"progress": map[string]int{"completed": snapshot.Progress, "total": 100},
+	}
+	switch snapshot.Status {
+	case "in_progress":
+		rec["status"] = "generating"
+	case "cancelled":
+		rec["status"] = "cancelled"
+	default:
+		rec["status"] = snapshot.Status
+	}
+	if snapshot.Status == "completed" && snapshot.Result != nil {
+		rec["result"] = snapshot.Result
+	}
+	writeJSON(w, rec)
+}
+
+// sdcppCancel ends a queued or running job, as sd-server's cancel route does.
+// Cancellation is authoritative only for jobs that have not finished: a
+// completed job keeps its result, and a cancelled job never moves on, because
+// the startJob goroutine checks the status under the lock before every
+// transition.
+func (f *fakeModel) sdcppCancel(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	j, ok := f.jobs[r.PathValue("id")]
+	status := "cancelled"
+	if ok {
+		if j.Status == "queued" || j.Status == "in_progress" {
+			j.Status, j.Result = "cancelled", nil
+		}
+		status = j.Status
+	}
+	f.mu.Unlock()
+	if !ok {
+		http.Error(w, "no such job", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, map[string]any{"id": r.PathValue("id"), "status": status})
 }
 
 func (f *fakeModel) getJob(w http.ResponseWriter, r *http.Request) {

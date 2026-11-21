@@ -77,8 +77,34 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/logs/{model_id}` | one model's ring as JSON, for the Logs page when a proxy buffers the live stream |
 | `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb`, `/_router/activity/{id}/audio` | in-memory generation request log, request/response captures, and the image thumbnail or speech audio |
+| `/v1/videos`, `/v1/videos/{id}[/content]` | async video jobs: create (JSON or multipart with `input_reference`), poll, fetch, delete |
 | `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness, tokens by kind incl. prompt cache hits, prefill/decode phase tokens and seconds) |
+
+## Video
+
+Video generation is served through the same async job API as the OpenAI video
+shape. `POST /v1/videos` returns a job id at once; poll `GET /v1/videos/{id}`
+until `completed`, fetch the clip from `GET /v1/videos/{id}/content`, and end
+it with `DELETE /v1/videos/{id}`. JSON and multipart submits both work; a
+multipart `input_reference` is image-to-video input. A request with no `model`
+reaches the `api_type: video` stanza marked `path_default`, or the only video
+stanza. Video models advertise `capabilities` such as `audio_out` in
+`/v1/models`.
+
+A backend that speaks `/v1/videos` needs no config beyond `api_type: video`. A
+backend with its own job shape names an adapter:
+
+```yaml
+api_type: video
+job: {adapter: sdcpp}   # sd-server /sdcpp/v1; openai is the default
+```
+
+The `sdcpp` adapter maps submit/poll/content/cancel onto sd-server's native
+`vid_gen` and `jobs` routes; the router still records, holds and routes the job
+itself, and an unknown id is always a local `404`. If the backend exits while a
+job runs, the job ends `failed` immediately instead of polling until
+`job_ttl_minutes`.
 
 ## API keys for public clients
 
@@ -198,6 +224,10 @@ per stanza.
 `audio_out`, `tools`, `reasoning`. An unknown flag fails load. Capabilities are
 published in `/v1/models` and `/_router/status`, so a vision chat model (started
 with an `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`.
+
+`job` (only on `api_type: video`) picks the adapter in front of the backend's
+async job API: `openai` (default, the backend speaks `/v1/videos`) or `sdcpp`
+(sd-server's `/sdcpp/v1`). An unknown adapter fails load with the valid list.
 
 `image_pipeline` (only on `api_type: image`) runs the image request handling
 on the node that owns the stanza, for local clients and for requests proxied

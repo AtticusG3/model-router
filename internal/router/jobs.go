@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"model-router/internal/config"
 )
 
 // jobPollInterval is how often the router asks a backend (or peer) whether a
@@ -68,7 +70,15 @@ func (r *Router) proxyJobAwareWriter(w http.ResponseWriter, req *http.Request, t
 	// that drops mid-submit must not leave a job running that nothing holds.
 	req = req.WithContext(context.WithoutCancel(req.Context()))
 	hw := &holdBackWriter{ResponseWriter: w}
-	r.proxyToWriter(hw, req, baseURL, model, target)
+	adapter := r.videoJobAdapter(t)
+	switch {
+	case adapter == "":
+		r.proxyToWriter(hw, req, baseURL, model, target)
+	case strings.HasSuffix(req.URL.Path, "/remix"):
+		http.Error(hw, "remix is not supported by the sdcpp adapter", http.StatusNotImplemented)
+	default:
+		r.sdcppCreate(hw, req, baseURL, model)
+	}
 	if !hw.pass && hw.status()/100 == 2 {
 		var v struct {
 			ID string `json:"id"`
@@ -125,12 +135,14 @@ func (r *Router) watchJob(j *job) {
 		}
 		r.mu.Lock()
 		done := j.done
-		lost := j.tgt.Local != "" && r.managed[j.tgt.Local] == nil
+		m := r.managed[j.tgt.Local]
 		r.mu.Unlock()
 		switch {
 		case done: // a DELETE ended it
 			return
-		case lost: // unloaded under the job; the job went with it
+		case j.tgt.Local != "" && (m == nil || m.State() != StateRunning):
+			// The process that held the job is gone (or restarting): its memory
+			// held the job too, so end the hold now instead of polling until TTL.
 			r.endJob(j, "failed")
 			return
 		}
@@ -153,6 +165,9 @@ func (r *Router) watchJob(j *job) {
 func (r *Router) pollJob(j *job) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if r.videoJobAdapter(j.tgt) == config.JobAdapterSDCpp {
+		return r.pollSDCppJob(ctx, j.base, j.id)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.base+"/v1/videos/"+url.PathEscape(j.id), nil)
 	if err != nil {
 		return "", err
@@ -219,12 +234,25 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 	if key := j.tgt.Local; key != "" {
 		r.mu.Lock()
 		m := r.managed[key]
+		done, state := j.done, j.state
 		ok := m != nil && !r.draining[key] && m.State() == StateRunning
 		if ok {
 			r.occupancy[key]++
 		}
 		r.mu.Unlock()
 		if !ok {
+			// The process held a finished job's record in memory too, so a status
+			// poll answers from the router's own record: a 404 reads as "no such
+			// job", not "the job failed".
+			if done && req.Method == http.MethodGet && !strings.HasSuffix(req.URL.Path, "/content") {
+				doc := map[string]any{"id": id, "object": "video", "status": videoStatus(state)}
+				if doc["status"] != "completed" {
+					doc["status"] = "failed"
+					doc["error"] = map[string]any{"message": fmt.Sprintf("job %q ended as %s; its model %s is no longer loaded", id, state, key)}
+				}
+				writeJSON(w, doc)
+				return
+			}
 			http.Error(w, fmt.Sprintf("job %q: its model %s is no longer loaded", id, key), http.StatusNotFound)
 			return
 		}
@@ -233,6 +261,21 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 		defer m.markUsed()
 	} else {
 		req.Header.Set("X-Model-Router-Peer", r.node)
+	}
+	if adapter := r.videoJobAdapter(j.tgt); adapter == config.JobAdapterSDCpp {
+		if req.Method == http.MethodDelete {
+			if r.serveSDCppFollow(w, req, j.base, j.model, id) {
+				r.endJob(j, "cancelled")
+				r.mu.Lock()
+				if r.jobs[id] == j {
+					delete(r.jobs, id)
+				}
+				r.mu.Unlock()
+			}
+			return
+		}
+		r.serveSDCppFollow(w, req, j.base, j.model, id)
+		return
 	}
 	if req.Method == http.MethodPost { // remix makes a child job, recorded and held like a submit
 		r.proxyJobAware(w, req, j.tgt, j.base, j.model, j.target)
