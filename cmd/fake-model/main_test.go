@@ -69,17 +69,40 @@ func TestSpeechWAVAndFormats(t *testing.T) {
 		t.Fatalf("not a WAV header: %x", body[:12])
 	}
 
-	for _, tc := range []struct{ format, ct string }{{"pcm", "audio/pcm"}, {"mp3", "audio/mpeg"}, {"opus", "audio/opus"}} {
+	for _, tc := range []struct{ format, ct, magic string }{
+		{"pcm", "audio/pcm", ""}, {"mp3", "audio/mpeg", "ID3"}, {"opus", "audio/opus", "OggS"},
+		{"aac", "audio/aac", "\xff\xf1"}, {"flac", "audio/flac", "fLaC"}, {"wav", "audio/wav", "RIFF"},
+	} {
 		resp, err := http.Post(srv.URL+"/v1/audio/speech", "application/json",
 			strings.NewReader(fmt.Sprintf(`{"response_format":%q}`, tc.format)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.Copy(io.Discard, resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if ct := resp.Header.Get("Content-Type"); ct != tc.ct {
 			t.Fatalf("%s: content type = %q, want %q", tc.format, ct, tc.ct)
 		}
+		if len(body) != 1200 || !strings.HasPrefix(string(body), tc.magic) {
+			t.Fatalf("%s: %d bytes starting %q, want 1200 starting %q", tc.format, len(body), body[:min(len(body), 4)], tc.magic)
+		}
+	}
+}
+
+// Stock voices from -voices are listed ahead of uploaded ones.
+func TestVoicesListsStockVoices(t *testing.T) {
+	srv := newTestFake(t, func(f *fakeModel) { f.stockVoices = []string{"alto", "bass"} })
+	resp, err := http.Get(srv.URL + "/v1/audio/voices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Data []string `json:"data"`
+	}
+	json.NewDecoder(resp.Body).Decode(&list)
+	if fmt.Sprint(list.Data) != "[alto bass]" {
+		t.Fatalf("voices = %v, want [alto bass]", list.Data)
 	}
 }
 

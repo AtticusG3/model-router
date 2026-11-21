@@ -89,11 +89,44 @@ func TestFiltersUrlencoded(t *testing.T) {
 	// A body that is neither JSON nor a form is forwarded as sent.
 	req := httptest.NewRequest("POST", "/x", strings.NewReader("RIFF"))
 	req.Header.Set("Content-Type", "audio/wav")
-	if err := applyFilters(req, []string{"a"}, map[string]any{"b": 1}); err != nil {
+	if err := applyFilters(req, map[string]string{"c": "d"}, []string{"a"}, map[string]any{"b": 1}); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := io.ReadAll(req.Body); string(b) != "RIFF" {
 		t.Errorf("raw body became %q", b)
+	}
+}
+
+// A rename chain or swap gives one stable result for JSON and urlencoded
+// bodies, whatever order the map is walked in, and an identity rename keeps
+// the field in both.
+func TestFiltersRenameChainSwapAndIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		rename     string
+		json, form [2]string // body, body the backend gets
+	}{
+		{"chain", "{a: b, b: c}",
+			[2]string{`{"model":"chat-a","a":1,"b":2}`, `{"b":1,"c":2,"model":"chat-a"}`},
+			[2]string{"model=chat-a&a=1&b=2", "b=1&c=2&model=chat-a"}},
+		{"swap", "{a: b, b: a}",
+			[2]string{`{"model":"chat-a","a":1,"b":2}`, `{"a":2,"b":1,"model":"chat-a"}`},
+			[2]string{"model=chat-a&a=1&b=2", "a=2&b=1&model=chat-a"}},
+		{"identity", "{x: x}",
+			[2]string{`{"model":"chat-a","x":1}`, `{"model":"chat-a","x":1}`},
+			[2]string{"model=chat-a&x=1", "model=chat-a&x=1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, send := filterRouter(t, "\n      renameParams: "+tc.rename)
+			for range 20 { // repeat: map order must not decide the result
+				if got := send("/v1/audio/speech", "application/json", tc.json[0]); got != tc.json[1] {
+					t.Fatalf("JSON body = %s, want %s", got, tc.json[1])
+				}
+				if got := send("/v1/audio/speech", "application/x-www-form-urlencoded", tc.form[0]); got != tc.form[1] {
+					t.Fatalf("form body = %q, want %q", got, tc.form[1])
+				}
+			}
+		})
 	}
 }
 
@@ -171,8 +204,54 @@ func TestFiltersMultipart(t *testing.T) {
 	}
 }
 
+// renameParams moves a field to the backend's name in JSON, urlencoded and
+// multipart bodies (a file part too), before strip and set run.
+func TestFiltersRename(t *testing.T) {
+	_, send := filterRouter(t, `
+      renameParams: {ref_audio: speaker_ref_b64, language: lang, file: audio}
+      setParams: {"lang?": en}`)
+	got := send("/v1/audio/speech", "application/json", `{"model":"chat-a","ref_audio":"QUJD","language":"fr"}`)
+	for _, want := range []string{`"speaker_ref_b64":"QUJD"`, `"lang":"fr"`, `"model":"chat-a"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("JSON body %s missing %s", got, want)
+		}
+	}
+	if strings.Contains(got, "ref_audio") || strings.Contains(got, `"language"`) {
+		t.Errorf("JSON body kept a client name: %s", got)
+	}
+
+	if got := send("/v1/audio/speech", "application/x-www-form-urlencoded", "model=chat-a&language=fr"); got != "lang=fr&model=chat-a" {
+		t.Errorf("form body = %q", got)
+	}
+
+	body := send("/v1/audio/transcriptions", transcriptionCT, transcriptionBody(t, [2]string{"model", "chat-a"}, [2]string{"language", "fr"}))
+	parts := map[string]string{} // form name -> value, or file name for a file part
+	mr := multipart.NewReader(strings.NewReader(body), "fictionalboundary")
+	for {
+		p, err := mr.NextRawPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		b, _ := io.ReadAll(p)
+		parts[p.FormName()] = string(b)
+		if p.FileName() != "" {
+			parts[p.FormName()] = p.FileName()
+			if !bytes.Equal(b, clipBytes) {
+				t.Errorf("renamed file part changed: %d bytes, want %d", len(b), len(clipBytes))
+			}
+		}
+	}
+	want := map[string]string{"audio": "clip.wav", "lang": "fr", "model": "chat-a"}
+	if fmt.Sprint(parts) != fmt.Sprint(want) {
+		t.Errorf("multipart parts = %v, want %v", parts, want)
+	}
+}
+
 func TestFilterFormPrecedence(t *testing.T) {
-	e, err := newFormEdit([]string{"a"}, map[string]any{"a?": "x", "b": true}, map[string]any{"b?": "y"})
+	e, err := newFormEdit(nil, []string{"a"}, map[string]any{"a?": "x", "b": true}, map[string]any{"b?": "y"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +276,7 @@ func TestFilterFormPrecedence(t *testing.T) {
 func TestFilterJSONPrecedenceMatchesForm(t *testing.T) {
 	req := httptest.NewRequest("POST", "/x", bytes.NewBufferString(`{}`))
 	req.Header.Set("Content-Type", "application/json")
-	if err := applyFilters(req, nil, map[string]any{"b": true}, map[string]any{"b?": "y"}); err != nil {
+	if err := applyFilters(req, nil, nil, map[string]any{"b": true}, map[string]any{"b?": "y"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := io.ReadAll(req.Body); string(got) != `{"b":"y"}` {
@@ -215,7 +294,7 @@ func TestApplyFiltersLeavesUndeclaredBodyAlone(t *testing.T) {
 		if ct != "" {
 			req.Header.Set("Content-Type", ct)
 		}
-		if err := applyFilters(req, []string{"prompt"}, map[string]any{"temperature": 0}); err != nil {
+		if err := applyFilters(req, nil, []string{"prompt"}, map[string]any{"temperature": 0}); err != nil {
 			t.Fatal(err)
 		}
 		if got, _ := io.ReadAll(req.Body); string(got) != body {
@@ -228,7 +307,7 @@ func TestApplyFiltersIgnoresNonObjectJSON(t *testing.T) {
 	for _, body := range []string{`[1,2]`, `null`, `not json`} {
 		req := httptest.NewRequest("POST", "/x", bytes.NewBufferString(body))
 		req.Header.Set("Content-Type", "application/json")
-		if err := applyFilters(req, []string{"a"}, map[string]any{"b": 1}); err != nil {
+		if err := applyFilters(req, nil, []string{"a"}, map[string]any{"b": 1}); err != nil {
 			t.Fatal(err)
 		}
 		if got, _ := io.ReadAll(req.Body); string(got) != body {

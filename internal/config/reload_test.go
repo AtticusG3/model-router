@@ -132,6 +132,13 @@ func TestWatchFileChangeAndSIGHUP(t *testing.T) {
 		}
 	}
 
+	// An empty file (a write caught between truncate and write) is not applied.
+	os.WriteFile(path, nil, 0o644)
+	time.Sleep(50 * time.Millisecond)
+	if count() != 0 {
+		t.Fatalf("empty file applied: applied = %d", count())
+	}
+
 	// A valid write triggers apply.
 	writeAtomic(t, path, "stanzas: []\nlisten: 127.0.0.1:19003\n")
 	wait(1)

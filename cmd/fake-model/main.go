@@ -35,6 +35,8 @@ type fakeModel struct {
 	healthDelay time.Duration
 	start       time.Time
 
+	stockVoices []string // listed before uploaded voices
+
 	mu      sync.Mutex
 	voices  map[string]string // id -> file name
 	voiceID int
@@ -76,13 +78,18 @@ func newFakeModelFromFlags() *fakeModel {
 		jobSeconds = flag.Duration("job-seconds", time.Second, "time for video/audio jobs to complete")
 		bigBytes   = flag.Int("big-bytes", 0, "size in bytes of speech and video content responses")
 		healthD    = flag.Duration("health-delay", 0, "/health returns 503 for this long after start")
+		stock      = flag.String("voices", "", "comma-separated stock voices listed by GET /v1/audio/voices")
 	)
 	flag.Parse()
-	return &fakeModel{
+	f := &fakeModel{
 		model: *model, delay: *delay, jobSeconds: *jobSeconds,
 		bigBytes: *bigBytes, healthDelay: *healthD, start: time.Now(),
 		voices: map[string]string{}, jobs: map[string]*job{},
 	}
+	if *stock != "" {
+		f.stockVoices = strings.Split(*stock, ",")
+	}
+	return f
 }
 
 func (f *fakeModel) routes(mux *http.ServeMux) {
@@ -172,7 +179,19 @@ func (f *fakeModel) txt2img(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"images": []string{"iVBORw0KGgo="}, "parameters": map[string]any{"model": f.model}})
 }
 
-// speech renders a minimal valid WAV, or raw bytes for pcm/mp3/opus formats.
+// speechFormats maps each response_format to its Content-Type and the
+// magic bytes the fake body starts with, so a test can tell the formats apart.
+var speechFormats = map[string]struct{ ct, magic string }{
+	"mp3":  {"audio/mpeg", "ID3"},
+	"opus": {"audio/opus", "OggS"},
+	"aac":  {"audio/aac", "\xff\xf1"},
+	"flac": {"audio/flac", "fLaC"},
+	"wav":  {"audio/wav", "RIFF"},
+	"pcm":  {"audio/pcm", ""},
+}
+
+// speech renders a minimal valid WAV (the default), or the format's magic bytes
+// plus filler for the other formats.
 func (f *fakeModel) speech(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Model          string `json:"model"`
@@ -184,9 +203,7 @@ func (f *fakeModel) speech(w http.ResponseWriter, r *http.Request) {
 	json.NewDecoder(r.Body).Decode(&body)
 
 	payload := f.audioPayload(body.ResponseFormat)
-	ct := map[string]string{
-		"pcm": "audio/pcm", "mp3": "audio/mpeg", "opus": "audio/opus",
-	}[body.ResponseFormat]
+	ct := speechFormats[body.ResponseFormat].ct
 	if ct == "" {
 		ct = "audio/wav"
 	}
@@ -208,15 +225,18 @@ func (f *fakeModel) speech(w http.ResponseWriter, r *http.Request) {
 	w.Write(payload)
 }
 
-// audioPayload builds the response body: a WAV header plus data (or raw filler
-// for non-WAV formats), sized to bigBytes when set.
+// audioPayload builds the response body: a WAV header plus data, or the
+// format's magic bytes plus filler for the other formats, sized to bigBytes
+// when set.
 func (f *fakeModel) audioPayload(format string) []byte {
 	n := f.bigBytes
 	if n == 0 {
 		n = 2048
 	}
-	if format == "pcm" || format == "mp3" || format == "opus" {
-		return make([]byte, n)
+	if sf, ok := speechFormats[format]; ok && format != "wav" {
+		buf := make([]byte, max(n, len(sf.magic)))
+		copy(buf, sf.magic)
+		return buf
 	}
 	if n < 44 {
 		n = 44
@@ -280,7 +300,7 @@ func (f *fakeModel) audioUpload(w http.ResponseWriter, r *http.Request) {
 
 func (f *fakeModel) listVoices(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
-	ids := make([]string, 0, len(f.voices))
+	ids := append([]string{}, f.stockVoices...)
 	for id := range f.voices {
 		ids = append(ids, id)
 	}

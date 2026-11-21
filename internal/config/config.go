@@ -43,6 +43,10 @@ type Filters struct {
 	// ("${MODEL_ID}" is the stanza id); its value is applied after SetParams
 	// when a request names that alias.
 	SetParamsByID map[string]map[string]any `yaml:"setParamsByID"`
+	// RenameParams maps a client field name to the name the backend takes
+	// (JSON keys, form fields, multipart parts including files). Renames run
+	// before strip and set, so those use the backend's names.
+	RenameParams map[string]string `yaml:"renameParams"`
 }
 
 // validate rejects empty keys and any attempt to touch a protected field.
@@ -74,6 +78,14 @@ func (f *Filters) validate(owner string, protected ...string) error {
 			if err := check(k); err != nil {
 				return err
 			}
+		}
+	}
+	for from, to := range f.RenameParams {
+		if err := check(from); err != nil {
+			return err
+		}
+		if err := check(to); err != nil {
+			return err
 		}
 	}
 	return nil
