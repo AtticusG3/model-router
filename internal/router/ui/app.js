@@ -850,17 +850,16 @@
     history.replaceState(null,'','#paths='+[...actShow].join(','));
     actFilterPaint();actRender();
   });
-  // actPaint takes newest-first finished rows; actRender draws the ones the filter shows.
-  function actPaint(rows){
+  // actPaint takes newest-first finished rows and, when given, the latest in-progress list.
+  function actPaint(rows,live){
     actRows=rows;
-    acts=new Map(rows.map(e=>[String(e.id),e]));
-    thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
+    if(live)actProgress(live);
     actRender();
   }
   // actRender redraws the stat cards, sparklines and rows for the ticked path groups
-  // and the selected peer filter.
+  // and the selected peer filter, with the running rows above the finished ones.
   function actRender(){
-    const rows=actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch),hid=actRows.length-rows.length;
+    let rows=actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch),hid=actRows.length-rows.length;
     $('act-hidden').textContent=hid?hid+' hidden':'';
     $('act-count').textContent=rows.length;
     const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
@@ -875,34 +874,64 @@
     spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
     spark($('chart-ttft'), chrono.map(e=>Number(e.ttft_ms)||0).filter(v=>v>0), '#f1bb62');
     $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
+    const running=[...actLive.values()].filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch).sort((a,b)=>Date.parse(b.started)-Date.parse(a.started));
+    rows=running.concat(rows);
+    acts=new Map(rows.map(e=>[actKey(e),e]));
+    thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
     // Rows only animate in once the first paint is done and the tab is showing.
     syncRows(rows,!actFirst&&$('activity').classList.contains('active'));
     actFirst=false;
   }
+  // A row's key is its node and id: a running row and its finished row share it, so one DOM row turns
+  // into the other. Local rows key on the id alone, which is also their capture id.
+  const actKey=e=>(e.node?e.node+'/':'')+e.id;
+  // A snapshot or poll holds local rows only; peer rows reach the page as done events, so keep them, merged by time.
+  const actWithPeers=rows=>rows.concat(actRows.filter(e=>e.node)).sort((a,b)=>Date.parse(b.timestamp)-Date.parse(a.timestamp)).slice(0,ACT_MAX);
+  // actProgress takes the latest in-progress list. A running row that leaves it without its finished row
+  // (a peer gone stale) is marked lost and fades out ACT_LOST_MS later.
+  // A peer that restarted numbers its requests from 1 again, so a running peer entry that started after
+  // the finished row with its key is a new request: that old row is dropped and the entry shows as running.
+  function actProgress(list){
+    const old=new Map(actRows.filter(e=>e.node).map(e=>[actKey(e),e]));
+    const reused=new Set(list.filter(e=>e.node&&old.has(actKey(e))&&Date.parse(e.started)>Date.parse(old.get(actKey(e)).timestamp)).map(actKey));
+    if(reused.size)actRows=actRows.filter(e=>!reused.has(actKey(e)));
+    const now=new Set(list.map(actKey)),fin=new Set(actRows.map(actKey));
+    actLive.forEach((e,k)=>{
+      if(now.has(k)||e.lost)return;
+      if(fin.has(k)){actLive.delete(k);return}
+      e.lost=true;
+      setTimeout(()=>{if(actLive.get(k)===e){actLive.delete(k);actPaint(actRows)}},ACT_LOST_MS);
+    });
+    list.forEach(e=>{const k=actKey(e);if(!fin.has(k))actLive.set(k,Object.assign(e,{running:true}))});
+  }
   async function activity(){
     try{
-      actPaint((await json('/_router/activity')).entries||[]);
-      $('activity-hint').textContent='Polling every 3 s · in-memory on this node';
+      const d=await json('/_router/activity');
+      // A poll lists local running requests only: peer running rows need the live stream, so they are
+      // left out here rather than marked lost while the peer still runs them.
+      actLive.forEach((e,k)=>{if(e.node)actLive.delete(k)});
+      actPaint(actWithPeers(d.entries||[]),d.in_progress||[]);
+      $('activity-hint').textContent='Polling every 3 s · in-memory on this node · peer requests show live only';
     }catch(e){
       // Keep the rows already on screen; a failed poll should not wipe the table.
       $('activity-hint').textContent=e.message;
       if(!$('activity-rows').querySelector('tr[data-id]'))setNote(e.message);
     }
   }
-  let actFirst=true,acts=new Map(),actRows=[];
-  // The peer filter: Local is served here for a local client; a peer matches rows it served or sent.
+  let actFirst=true,acts=new Map(),actRows=[],actLive=new Map();
+  // The peer filter: Local is served here for a local client; a peer matches rows it ran, served or sent.
   function actMatch(e){
     const f=$('act-peer').value;
     if(!f)return true;
-    if(f==='local')return !e.from_peer&&(!e.target||e.target===status.node);
-    return e.target===f.slice(2)||e.from_peer===f.slice(2);
+    if(f==='local')return !e.node&&!e.from_peer&&(!e.target||e.target===status.node);
+    return e.node===f.slice(2)||e.target===f.slice(2)||e.from_peer===f.slice(2);
   }
   $('act-peer').onchange=()=>actPaint(actRows);
 
   // The Activity view listens on /_router/activity/stream only while it is showing.
   // A proxy that holds the stream back sends no snapshot, so after ACT_STREAM_WAIT
   // (or on an error before the first snapshot) the view polls every 3 s instead.
-  const ACT_STREAM_WAIT=5000,ACT_MAX=200; // ACT_MAX is the server's ring size.
+  const ACT_STREAM_WAIT=5000,ACT_MAX=200,ACT_LOST_MS=60000; // ACT_MAX is the server's ring size.
   let actES=null,actWait=0,actPollTimer=0;
   function actStop(){
     if(actES)actES.close();
@@ -922,12 +951,17 @@
     actWait=setTimeout(actPoll,ACT_STREAM_WAIT);
     es.addEventListener('snapshot',ev=>{
       live=true;clearTimeout(actWait);
-      actPaint(JSON.parse(ev.data).entries||[]);
+      const d=JSON.parse(ev.data);
+      actLive.clear();
+      actPaint(actWithPeers(d.entries||[]),d.in_progress||[]);
       $('activity-hint').textContent='Live · in-memory on this node';
     });
-    es.addEventListener('entry',ev=>{
-      const e=JSON.parse(ev.data);
-      actPaint([e,...actRows.filter(r=>r.id!==e.id)].slice(0,ACT_MAX));
+    // progress lists what runs here and on peers; done is a finished row that takes over its running row.
+    es.addEventListener('progress',ev=>actPaint(actRows,JSON.parse(ev.data).in_progress||[]));
+    es.addEventListener('done',ev=>{
+      const e=JSON.parse(ev.data),k=actKey(e);
+      actLive.delete(k);
+      actPaint([e,...actRows.filter(r=>actKey(r)!==k)].slice(0,ACT_MAX));
     });
     // A dropped live stream reconnects by itself and resends the snapshot; poll only
     // when it never went live or the browser has given up.
@@ -937,6 +971,9 @@
       $('activity-hint').textContent='Reconnecting to the live stream…';
     };
   }
+  // Running rows tick their elapsed time here, between updates from the server. Clamped at 0 for a clock running ahead.
+  const elapsed=t=>fmtDur(Math.max(0,Date.now()-t));
+  setInterval(()=>$('activity-rows').querySelectorAll('[data-started]').forEach(n=>{n.textContent=elapsed(n.dataset.started)}),1000);
 
   // Rows are matched by id and updated in place; see syncRows.
   const IMG_PATH=/\/(images\/(generations|edits|variations)|txt2img|img2img)$/;
@@ -948,7 +985,7 @@
     const io=e.media?mediaCells(e.media,e).map(esc):[fmtTok(tok.prompt_tokens)+(tok.cached_tokens?' <span class="subtle">('+fmtTok(tok.cached_tokens)+' cached)</span>':''),fmtTok(tok.completion_tokens)];
     return [
       ['mono',esc(fmtTime(e.timestamp))],
-      ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(e.from_peer?'← '+e.from_peer:e.target&&e.target!==status.node?'→ '+e.target:e.target||'')+'</div></div></div>'],
+      ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(actWhere(e))+'</div></div></div>'],
       ['mono',esc(e.method||'')+' '+esc(e.path||'')],
       [e.status>=400?'status-bad':'status-ok',esc(e.status)],
       ['mono',io[0]],
@@ -957,6 +994,24 @@
       ['mono',esc(fmtSpeed(tok.tokens_per_second))],
       ['mono',esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')],
       ['mono',esc(fmtDur(e.duration_ms))]
+    ];
+  }
+  // actWhere is the node line under the model: the peer that ran the row, or where this node sent it from or to.
+  const actWhere=e=>e.node?'on '+e.node:e.from_peer?'← '+e.from_peer:e.target&&e.target!==status.node?'→ '+e.target:e.target||'';
+  // liveCells fills a running row. The Duration cell's data-started lets the timer below actStart tick it.
+  function liveCells(e){
+    const t=Date.parse(e.started);
+    return [
+      ['mono',esc(fmtTime(e.started))],
+      ['','<div class="model-line"><div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(actWhere(e))+'</div></div></div>'],
+      ['mono',esc(e.method||'')+' '+esc(e.path||'')],
+      e.lost?['status-bad','Lost']:['','<span class="spinner" aria-hidden="true"></span>Running'],
+      ['mono','—'],
+      ['mono',esc(fmtTok(e.tokens))],
+      ['mono','—'],
+      ['mono','—'],
+      ['mono',esc(e.ttft_ms?fmtDur(e.ttft_ms):'—')],
+      ['mono',e.lost?'—':'<span data-started="'+t+'">'+esc(elapsed(t))+'</span>']
     ];
   }
   // mediaCells fills the Prompt and Generated columns of an audio, video, realtime or voice row.
@@ -972,7 +1027,9 @@
   }
   function paintRow(tr,e){
     tr.toggleAttribute('data-empty',!e.has_capture);
-    actCells(e).forEach((c,i)=>{
+    // A running row has no capture to open yet, so it leaves the tab order until it finishes.
+    tr.classList.toggle('running',!!e.running);tr.classList.toggle('lost',!!e.lost);tr.tabIndex=e.running?-1:0;
+    (e.running?liveCells(e):actCells(e)).forEach((c,i)=>{
       const td=tr.cells[i];
       if(td.className!==c[0])td.className=c[0];
       if(tr._c[i]!==c[1]){tr._c[i]=c[1];td.innerHTML=c[1]}
@@ -981,7 +1038,7 @@
   }
   const liveRow=n=>{while(n&&n.classList.contains('leaving'))n=n.nextElementSibling;return n};
   function syncRows(entries,animate){
-    const tb=$('activity-rows'),have=new Map(),keep=new Set(entries.map(e=>String(e.id)));
+    const tb=$('activity-rows'),have=new Map(),keep=new Set(entries.map(actKey));
     tb.querySelectorAll('.act-note').forEach(n=>n.remove());
     [...tb.children].forEach(tr=>{if(tr.dataset.id&&!tr.classList.contains('leaving'))have.set(tr.dataset.id,tr)});
     have.forEach((tr,id)=>{
@@ -991,7 +1048,7 @@
     });
     let ref=liveRow(tb.firstElementChild);
     entries.forEach(e=>{
-      const id=String(e.id);
+      const id=actKey(e);
       let tr=have.get(id);
       if(!tr){
         tr=document.createElement('tr');tr.tabIndex=0;tr.dataset.id=id;tr._c=[];
@@ -1153,6 +1210,7 @@
   },true);
   async function openCapture(id, row){
     const dlg=$('activity-dialog'),e=acts.get(String(id))||{};
+    if(e.running)return;
     $('capture-title').textContent='Request '+id;
     $('capture-meta').textContent='Loading capture…';
     $('capture-parsed').innerHTML='';
@@ -1165,8 +1223,10 @@
       if(!e.has_capture){
         // Nothing was stored for this row (a media response with no request
         // body, or a capture over the ring budget): show the row summary.
-        $('capture-meta').textContent='No captured body.';
-        $('capture-parsed').innerHTML=capParsed(e,{req_body:'',resp_body:''}).html;
+        // A peer row is the summary from the peer's telemetry; its capture stays on the peer.
+        const peerUI=e.node&&/^https?:\/\//i.test(e.peer_url||'')?'<p><a href="'+esc(e.peer_url.replace(/\/+$/,'')+'/ui/')+'" target="_blank" rel="noopener">Open the UI on '+esc(e.node)+'</a></p>':'';
+        $('capture-meta').textContent=e.node?'Summary from '+e.node+'. The capture stays on that peer.':'No captured body.';
+        $('capture-parsed').innerHTML=capParsed(e,{req_body:'',resp_body:''}).html+peerUI;
         setCapView('parsed');
         return;
       }

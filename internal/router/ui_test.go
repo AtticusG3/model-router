@@ -288,7 +288,7 @@ func TestEmbeddedUILogsPollFallback(t *testing.T) {
 // every 3 s when the stream never delivers its snapshot or the browser gives up.
 func TestEmbeddedUIActivityStreamWithPollFallback(t *testing.T) {
 	for _, want := range []string{
-		"new EventSource('/_router/activity/stream')", "addEventListener('snapshot'", "addEventListener('entry'",
+		"new EventSource('/_router/activity/stream')", "addEventListener('snapshot'", "addEventListener('done'",
 		"actWait=setTimeout(actPoll,ACT_STREAM_WAIT)", "es.readyState===EventSource.CLOSED)return actPoll()",
 		// A live stream that drops says so instead of still reading "Live".
 		"$('activity-hint').textContent='Reconnecting to the live stream…'",
@@ -331,10 +331,10 @@ func TestEmbeddedUIActivityPeerFilter(t *testing.T) {
 		`<select class="chip" id="act-peer" aria-label="Filter activity by peer"><option value="">All</option><option value="local">Local</option></select>`,
 		"const peers=Object.keys(status.peers||{}).sort()",
 		`peers.map(p=>'<option value="p:'+esc(p)+'">'+esc(p)+'</option>')`,
-		"$('act-peer').onchange=()=>actPaint(actRows)",
-		"return !e.from_peer&&(!e.target||e.target===status.node)",
-		"return e.target===f.slice(2)||e.from_peer===f.slice(2)",
-		"'← '+e.from_peer", "'→ '+e.target",
+		"actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch)", "$('act-peer').onchange=()=>actPaint(actRows)",
+		"return !e.node&&!e.from_peer&&(!e.target||e.target===status.node)",
+		"return e.node===f.slice(2)||e.target===f.slice(2)||e.from_peer===f.slice(2)",
+		"'on '+e.node", "'← '+e.from_peer", "'→ '+e.target",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)
@@ -373,6 +373,46 @@ func TestUIPathGroupsCoverGenerationSuffixes(t *testing.T) {
 				t.Errorf("%s (%s) comes before %s (%s) and shadows it", a, group[a], b, group[b])
 			}
 		}
+	}
+}
+
+// Running requests, here and on peers, show as in-progress rows above the
+// history. The finished row shares the running row's node and id key, so the
+// same DOM row is repainted in place; a row that drops out without finishing is
+// marked lost and fades a minute later.
+func TestEmbeddedUIActivityInProgressRows(t *testing.T) {
+	for _, want := range []string{
+		// Markup: spinner, model, path, node, tokens so far, and a ticking elapsed time.
+		"function liveCells", `'<span class="spinner" aria-hidden="true"></span>Running'`, "['status-bad','Lost']",
+		"esc(actWhere(e))", "esc(fmtTok(e.tokens))", `'<span data-started="'+t+'">'`,
+		"const elapsed=t=>fmtDur(Math.max(0,Date.now()-t))", "querySelectorAll('[data-started]').forEach(n=>{n.textContent=elapsed(n.dataset.started)})",
+		".spinner{", "@keyframes spin", "tr.running{cursor:default}", "tr.lost{opacity:.55}",
+		"(e.running?liveCells(e):actCells(e))", "tr.classList.toggle('running',!!e.running)", "tr.tabIndex=e.running?-1:0",
+		// In-place swap: one key for both rows, the done event drops the running entry and
+		// the reconcile reuses the DOM row with that key.
+		"const actKey=e=>(e.node?e.node+'/':'')+e.id", "keep=new Set(entries.map(actKey))", "const id=actKey(e);",
+		"addEventListener('progress',ev=>actPaint(actRows,JSON.parse(ev.data).in_progress||[]))",
+		"actLive.delete(k);\n      actPaint([e,...actRows.filter(r=>actKey(r)!==k)].slice(0,ACT_MAX))",
+		"rows=running.concat(rows)",
+		// A snapshot or poll (local rows only) keeps the finished peer rows, merged by time.
+		"rows.concat(actRows.filter(e=>e.node)).sort((a,b)=>Date.parse(b.timestamp)-Date.parse(a.timestamp))",
+		"actLive.clear();\n      actPaint(actWithPeers(d.entries||[]),d.in_progress||[])",
+		// A peer restart reuses ids: a running entry newer than the finished row with its key replaces it.
+		"Date.parse(e.started)>Date.parse(old.get(actKey(e)).timestamp)", "actRows=actRows.filter(e=>!reused.has(actKey(e)))",
+		// A poll has no peer running list, so peer running rows leave quietly instead of being marked lost.
+		"actLive.forEach((e,k)=>{if(e.node)actLive.delete(k)});\n      actPaint(actWithPeers(d.entries||[]),d.in_progress||[])",
+		// Lost rows.
+		"ACT_LOST_MS=60000", "e.lost=true;", "if(actLive.get(k)===e){actLive.delete(k);actPaint(actRows)}",
+		// A peer row's dialog shows the summary and links to the peer's UI.
+		"if(e.running)return;", "'Summary from '+e.node+'. The capture stays on that peer.'",
+		"esc(e.peer_url.replace(/\\/+$/,'')+'/ui/')", "Open the UI on '+esc(e.node)",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if strings.Contains(uiJS, "addEventListener('entry'") {
+		t.Error("the Activity view still listens for the old entry event")
 	}
 }
 

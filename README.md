@@ -80,7 +80,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/status`, `/_router/telemetry`, `/_router/logs` | status, peer telemetry, router/upstream/mesh rings, backend `/metrics` scrapes |
 | `/logs`, `/logs/stream[/proxy\|/upstream\|/mesh\|/{model_id}]` | plain-text logs: `/logs` is the buffer, the stream paths stay open (history first unless `?no-history`) |
 | `/_router/logs/{model_id}` | one model's ring as JSON, for the Logs page when a proxy buffers the live stream |
-| `/_router/activity/stream` | SSE feed for the Activity page: a `snapshot` event shaped like `/_router/activity`, then an `entry` event per finished request |
+| `/_router/activity/stream` | SSE feed for the Activity page: a `snapshot` event shaped like `/_router/activity`, then a `done` event per finished request (local, or a peer request it showed running) and a `progress` event listing the requests running here and on peers whenever that list changes |
 | `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb`, `/_router/activity/{id}/audio`, `/_router/activity/{id}/image/{side}/{n}` | in-memory generation request log, request/response captures, the image thumbnail or speech audio, and request (`req`) or response (`resp`) image previews |
 | `/v1/videos`, `/v1/videos/{id}[/content]` | async video jobs: create (JSON or multipart with `input_reference`), poll, fetch, delete |
 | `/v1/audio/generations`, `/v1/audio/generations/{id}[/content]` | async music and sound-effect jobs, same job shape as video: create (JSON, or multipart with a reference clip), poll, fetch, delete |
@@ -204,7 +204,13 @@ localhost, Download works anywhere.
 
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
-click a row for request/response). Captures live in memory only (256 KB per
+click a row for request/response). Requests still running, here or on a
+router peer, show above the history with a spinner, elapsed time and tokens so
+far, and turn into the finished row in place. A peer's finished row is the
+summary from its telemetry, with a link to that peer's UI; a request this node
+sent to a peer shows once. A running row that drops out without finishing
+(the peer went stale) is marked lost and fades after a minute. Peer rows need the live stream: when a proxy
+buffers it and the page falls back to polling, only this node's requests show. Captures live in memory only (256 KB per
 body, 8 MB total) and reset on restart. A longer JSON body or SSE stream is
 clipped inside so it still parses: the longest strings are shortened, base64
 images become `[image 0: png 1.3 MB]`, the middle of a long stream becomes one
