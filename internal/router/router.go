@@ -73,6 +73,9 @@ type Router struct {
 	// voiceMu serialises voice library writes so two uploads of one id cannot
 	// interleave their clip and sidecar.
 	voiceMu sync.Mutex
+
+	// meta is the last good catalog.metadata_url file; nil when off or not yet fetched.
+	meta atomic.Pointer[metadataFile]
 }
 
 // New builds a Router from parsed config.
@@ -2272,6 +2275,8 @@ type ModelStatus struct {
 	GPUs []int `json:"gpus,omitempty"`
 	// Family is the model's family and maker; nil when unknown.
 	Family *Family `json:"family,omitempty"`
+	// Info is the owner, parameter count and per-type detail; nil when unknown.
+	Info *ModelInfo `json:"info,omitempty"`
 	// Peers lists every configured peer that serves this id, in config order.
 	Peers []PeerModelStatus `json:"peers,omitempty"`
 }
@@ -2335,6 +2340,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 	seen := map[string]bool{}
 	now := time.Now()
 	cfg := r.cfg()
+	md := r.meta.Load()
 	for _, id := range cfg.StanzaIDs() {
 		s := cfg.Stanza(id)
 		var insts []*Managed
@@ -2368,10 +2374,11 @@ func (r *Router) catalogStatuses() []ModelStatus {
 				freshness = "stale"
 			}
 		}
+		fam, info := catalogInfo(md, id, s)
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
-			Capabilities: s.Capabilities, GPUs: gpus, Family: modelFamily(s.Family, id, s.Name),
+			Capabilities: s.Capabilities, GPUs: gpus, Family: fam, Info: info,
 		})
 		seen[id] = true
 		// A filter-set id is a catalog row of its own, sharing the stanza's state.
@@ -2395,8 +2402,9 @@ func (r *Router) catalogStatuses() []ModelStatus {
 				continue
 			}
 			seen[m] = true
-			// A remote id has no stanza here, so an owning node's family: override is not visible; #132 shares it.
-			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available", Family: modelFamily("", m, "")})
+			// A remote id has no stanza here; the shared metadata file is what fills it in.
+			fam, info := catalogInfo(md, m, nil)
+			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available", Family: fam, Info: info})
 		}
 	}
 	for i := range out {

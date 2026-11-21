@@ -112,6 +112,10 @@ telemetry:
   peer_sync_seconds: 5    # pull GET /_router/telemetry
   peer_stale_seconds: 15  # older than this → peer is not a candidate
 
+catalog:
+  metadata_url: ""        # one JSON file of model metadata (see Operator UI); empty = built-in data only
+  refresh_seconds: 3600   # fetch again this often; default 3600
+
 stanzas:
   - model_id: qwopus-27b-fusion
     name: "Qwopus 27B fusion"
@@ -126,7 +130,9 @@ stanzas:
     spin_up_seconds: 60    # 0 = default 60
     api_type: chat         # see api_type below; empty means chat
     capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning; video: duration, resolution, seed
-    family: qwen           # optional: catalog family icon; default is guessed from the id, then the name
+    family: qwen           # optional: catalog family icon; default is the metadata file, then a guess from the id, then the name
+    params: 27B            # optional: catalog parameter count; wins over the metadata file
+    owner: Example Labs    # optional: catalog owner; default is the metadata file, then the family's owner
     match:
       body_field: model    # XOR path_prefix
     health_check: /health
@@ -990,6 +996,32 @@ and `admin` for `POST /v1/audio/voices` and `DELETE /v1/audio/voices/{id}`.
 `/metrics` adds `model_router_media_requests_total` and
 `model_router_media_seconds_total` per `api_type`.
 It resets on restart. Authorization and cookie headers are not stored.
+
+**Catalog metadata.** `catalog.metadata_url` names one JSON file (for example
+a raw file in a git repo) that fills in catalog rows; see
+`configs/model-metadata.example.json`:
+
+```json
+{"families": {"qwen": {"name": "Qwen", "owner": "Alibaba", "homepage": "https://...", "icon_url": "https://..."}},
+ "models": [{"match": "qwen3-*", "family": "qwen", "owner": "...", "params": "4B", "licence": "Apache-2.0",
+             "context_length": 32768, "modality": "text", "hf_repo": "..."}]}
+```
+
+`match` is a model id or a glob (`*`, `?`, `[...]`); the first matching entry
+wins, so list exact ids before globs. `homepage` and `hf_repo` are accepted but
+not shown yet. The router fetches the file in the background at startup (startup
+never waits for it) and every `refresh_seconds`. A failed fetch, a non-200, a body
+over 1 MB or invalid JSON keeps the last good copy, logs one warning for the
+run of failures and retries with backoff (30 s, doubling, up to
+`refresh_seconds`). Each field is taken from the stanza first, then the
+metadata file, then the built-in family table. `/_router/status` and
+`/v1/models` rows carry `family` and `info`: the family's `icon_url`, `owner`,
+`params`, `licence`, `context_length`, `modality`, plus what the local command
+line shows: `quant` (from a `--model` GGUF name) and `context_length` (from
+`--ctx-size`) for non-image models, `size` (`-W`/`-H`) and `steps` for image
+models. The catalog draws `icon_url` only as an `<img>` and only when it is
+an http(s), relative or `data:image/` URL. Remote rows have no stanza here,
+so the metadata file is how they get detail.
 
 ## Still out of scope
 

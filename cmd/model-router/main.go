@@ -90,6 +90,9 @@ func main() {
 	// LAN peer discovery: immediate scan, then a 30s..10min backoff timer.
 	go router.NewDiscoverer(r.Config, r, logger).Run(ctx)
 
+	// Catalog metadata file (catalog.metadata_url), fetched in the background.
+	go r.RunMetadata(ctx)
+
 	// Idle-TTL reaper: actively evict backends whose idle_ttl_seconds has
 	// expired (lazy eviction alone only frees VRAM under admission pressure).
 	go router.IdleTTLReaper(ctx, r, 30*time.Second)
