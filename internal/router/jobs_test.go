@@ -874,3 +874,77 @@ func TestJobHoldBackWriterHoldsHead(t *testing.T) {
 		t.Fatalf("released = %d %q", rec.Code, rec.Body.String())
 	}
 }
+
+// sd-server's vid_gen reads sampling parameters under sample_params. A flat
+// "steps" is accepted and ignored, which silently ran every job at the
+// recipe's default step count instead of the client's.
+func TestVideoAdapterNestsSampleParams(t *testing.T) {
+	out, size, seconds, err := translateVideoFields(map[string]any{
+		"prompt": "a paper kite", "size": "768x512", "seconds": float64(2),
+		"fps": float64(24), "num_inference_steps": float64(8),
+		"cfg_scale": 1.5, "scheduler": "euler",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != "768x512" || seconds != 2 {
+		t.Fatalf("size/seconds = %q/%d, want 768x512/2", size, seconds)
+	}
+	for _, flat := range []string{"steps", "cfg_scale", "scheduler"} {
+		if _, ok := out[flat]; ok {
+			t.Fatalf("%s must not be flat in the backend payload: %v", flat, out[flat])
+		}
+	}
+	sp, ok := out["sample_params"].(map[string]any)
+	if !ok {
+		t.Fatalf("sample_params missing: %v", out)
+	}
+	if sp["sample_steps"] != 8 {
+		t.Fatalf("sample_steps = %v, want 8", sp["sample_steps"])
+	}
+	if sp["scheduler"] != "euler" {
+		t.Fatalf("scheduler = %v, want euler", sp["scheduler"])
+	}
+	g, ok := sp["guidance"].(map[string]any)
+	if !ok || g["txt_cfg"] != 1.5 {
+		t.Fatalf("guidance = %v, want txt_cfg 1.5", sp["guidance"])
+	}
+	if out["video_frames"] != 48 {
+		t.Fatalf("video_frames = %v, want 48 (seconds x fps)", out["video_frames"])
+	}
+}
+
+// The older "steps" spelling lands in the same place as num_inference_steps.
+func TestVideoAdapterStepsAliasNests(t *testing.T) {
+	out, _, _, err := translateVideoFields(map[string]any{"steps": float64(4)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sp, ok := out["sample_params"].(map[string]any)
+	if !ok || sp["sample_steps"] != 4 {
+		t.Fatalf("steps alias = %v, want sample_params.sample_steps 4", out["sample_params"])
+	}
+}
+
+// A client asking for mp4 is asking for a container sd-server cannot write.
+func TestWantsMP4(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target string
+		accept string
+		want   bool
+	}{
+		{"query mp4", "/v1/videos/x/content?format=mp4", "", true},
+		{"query webm", "/v1/videos/x/content?format=webm", "", false},
+		{"accept mp4", "/v1/videos/x/content", "video/mp4", true},
+		{"nothing", "/v1/videos/x/content", "*/*", false},
+	} {
+		req := httptest.NewRequest(http.MethodGet, tc.target, nil)
+		if tc.accept != "" {
+			req.Header.Set("Accept", tc.accept)
+		}
+		if got := wantsMP4(req); got != tc.want {
+			t.Errorf("%s: wantsMP4 = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

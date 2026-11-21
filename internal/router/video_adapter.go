@@ -11,6 +11,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -270,7 +272,7 @@ func translateVideoFields(in map[string]any) (map[string]any, string, int, error
 	out := map[string]any{}
 	for _, key := range []string{"prompt", "negative_prompt", "output_format", "output_compression",
 		"end_image", "ref_images", "control_frames", "vace_strength", "ref_videos",
-		"ref_audios", "ref_video_audios", "cfg_scale", "scheduler"} {
+		"ref_audios", "ref_video_audios"} {
 		if v, ok := in[key]; ok {
 			out[key] = v
 		}
@@ -323,10 +325,24 @@ func translateVideoFields(in map[string]any) (map[string]any, string, int, error
 	if v, ok := in["seed"]; ok {
 		out["seed"] = v
 	}
+	// Sampling parameters live under sample_params in sd-server's /sdcpp/v1
+	// request shape: a flat "steps" is accepted and silently ignored for
+	// vid_gen, so the job runs at the recipe's default step count instead of
+	// the one the client asked for. cfg_scale is guidance.txt_cfg.
+	sp := map[string]any{}
 	if v := intField(in, "num_inference_steps"); v > 0 {
-		out["steps"] = v
+		sp["sample_steps"] = v
 	} else if v := intField(in, "steps"); v > 0 {
-		out["steps"] = v
+		sp["sample_steps"] = v
+	}
+	if v, ok := in["cfg_scale"]; ok {
+		sp["guidance"] = map[string]any{"txt_cfg": v}
+	}
+	if v, ok := in["scheduler"]; ok {
+		sp["scheduler"] = v
+	}
+	if len(sp) > 0 {
+		out["sample_params"] = sp
 	}
 	return out, size, seconds, nil
 }
@@ -458,6 +474,15 @@ func (r *Router) serveSDCppFollow(w http.ResponseWriter, req *http.Request, base
 			http.Error(w, "video adapter: backend completed without content", http.StatusBadGateway)
 			return false
 		}
+		if wantsMP4(req) {
+			// sd-server writes webm/webp/avi only, and a WebM carrying PCM
+			// audio plays silent in browsers (upstream #2233). A client that
+			// asks for mp4 gets H.264 + AAC.
+			if err := writeMP4(ctx, w, rec.Result.B64JSON, videoFPS(req)); err != nil {
+				http.Error(w, "video adapter: "+err.Error(), http.StatusBadGateway)
+			}
+			return false
+		}
 		ct := rec.Result.MimeType
 		if ct == "" {
 			ct = "application/octet-stream"
@@ -487,4 +512,75 @@ func copyBackendError(w http.ResponseWriter, resp *http.Response) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, maxVideoJobBody))
+}
+
+// wantsMP4 reports that the client asked for a browser-playable MP4 instead of
+// the backend's own container: ?format=mp4, or an Accept header naming it.
+func wantsMP4(req *http.Request) bool {
+	switch f := strings.ToLower(strings.TrimSpace(req.URL.Query().Get("format"))); f {
+	case "mp4":
+		return true
+	case "":
+	default:
+		return false
+	}
+	return strings.Contains(strings.ToLower(req.Header.Get("Accept")), "video/mp4")
+}
+
+// videoFPS reads the ?fps= override a client may send with an mp4 fetch.
+func videoFPS(req *http.Request) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(req.URL.Query().Get("fps")))
+	if n < 1 || n > 120 {
+		return 0
+	}
+	return n
+}
+
+// writeMP4 transcodes a backend clip to MP4 (H.264 + AAC) with a
+// Content-Length. The work lands in a temp file first, so an ffmpeg failure
+// still produces an error status instead of a half-written body. fps > 0
+// forces a constant frame rate: sd-server's WebM muxer writes frames without
+// timestamps for some short clips (a 9-frame clip reported 0.001 s and
+// collapsed to one frame), and -fflags +genpts alone does not recover them.
+func writeMP4(ctx context.Context, w http.ResponseWriter, b64 string, fps int) error {
+	bin, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return fmt.Errorf("mp4 requested but ffmpeg is not installed")
+	}
+	tmp, err := os.CreateTemp("", "mr-video-*.mp4")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+	args := []string{"-v", "error", "-fflags", "+genpts", "-i", "pipe:0"}
+	if fps > 0 {
+		args = append(args, "-fps_mode", "cfr", "-r", strconv.Itoa(fps))
+	}
+	// Write to the temp file by path, not pipe:1: ffmpeg treats "pipe:" as a
+	// non-seekable output and then refuses +faststart (and any moov rewrite).
+	args = append(args,
+		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "20",
+		"-c:a", "aac", "-b:a", "128k",
+		"-movflags", "+faststart", "-f", "mp4", "-y", tmp.Name())
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = base64.NewDecoder(base64.StdEncoding, strings.NewReader(b64))
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	st, err := tmp.Stat()
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "video/mp4")
+	w.Header().Set("Content-Length", strconv.FormatInt(st.Size(), 10))
+	_, err = io.Copy(w, tmp)
+	return err
 }

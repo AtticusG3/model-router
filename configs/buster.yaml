@@ -535,6 +535,44 @@ stanzas:
     unlisted: false
     port: 5934
 
+  # #86 video: LTX-2.5 22B distilled (Q5_K_M) with the conv video VAE, the
+  # audio VAE and a Q8_0 Gemma4-12B text encoder. sd.cpp writes webm/webp/avi
+  # only, so the router's sdcpp job adapter serves webm unchanged and remuxes
+  # to H.264+AAC mp4 when a client asks for it (?format=mp4 or Accept:
+  # video/mp4) -- a WebM with PCM audio plays silent in browsers (#2233).
+  - model_id: ltx-2.5-video
+    name: "LTX-2.5 22B distilled (text/image to audio-video, sd.cpp)"
+    command: >
+      /home/kevyn/infra/stable-diffusion.cpp/build-video/bin/sd-server
+      --diffusion-model /opt/ai/models/video/ltx-2.5/distilled/ltx-2.5-22b-distilled-Q5_K_M.gguf
+      --vae /opt/ai/models/video/ltx-2.5/vae/ltx-2.5-video-vae-conv-bf16.safetensors
+      --audio-vae /opt/ai/models/video/ltx-2.5/vae/ltx-2.5-audio-vae-bf16.safetensors
+      --llm /opt/ai/models/video/ltx-2.5/te/gemma4-12b-with-proj-ltx-2.5-Q8_0.gguf
+      --diffusion-fa
+      --offload-to-cpu
+      --vae-tiling
+      --temporal-tiling
+      --mmap
+      --max-pending-jobs 2
+      --completed-ttl-seconds 900
+      --threads 14
+      -l 127.0.0.1 --listen-port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "GGML_CUDA_PDL=0"]
+    vram_mb: 22000
+    device: 0
+    spin_up_seconds: 120
+    api_type: video
+    capabilities: [audio_out]
+    job:
+      adapter: sdcpp
+    match: {path_default: true}
+    health_check: /sdapi/v1/sd-models
+    idle_ttl_seconds: 900
+    hold_seconds: 900
+    slots: 1
+    unlisted: false
+    port: 5938
+
 peers:
   - name: gareths-homelab
     kind: router
