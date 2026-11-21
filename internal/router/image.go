@@ -19,15 +19,11 @@ type imageStep struct {
 	// req.Body. nil is a no-op.
 	Rewrite func(req *http.Request, notes *imageNotes) error
 	// After inspects the backend reply. It may add headers to h and change req
-	// headers for a retry; true sends the same rewritten body once more. A
-	// second reply is not retried. Headers a step sets on the first reply are
-	// carried to the final one unless the retry sets the same name.
+	// headers or the prepared body for a retry; true asks for another attempt.
+	// The step decides when to stop. Headers a step sets on an attempt are
+	// carried to the final reply unless a later attempt sets the same name.
 	After func(req *http.Request, status int, h http.Header, body []byte, notes *imageNotes) bool
 }
-
-// defaultImageSteps builds the steps a stanza's image_pipeline runs. The step
-// list is empty; the LoRA warm-up is built into proxyImage.
-func defaultImageSteps(*config.Stanza) []imageStep { return nil }
 
 // bodyRequestsLoRA reports whether a JSON request body names a non-empty LoRA
 // list. It reads r to the end.
@@ -69,6 +65,15 @@ func (n *imageNotes) all() []string {
 }
 
 type imageNotesKey struct{}
+
+type preparedBodyKey struct{}
+
+// preparedBodyFrom returns the replayable request body of a pipeline exchange,
+// so a response step can rewrite it for a retry.
+func preparedBodyFrom(req *http.Request) *preparedBody {
+	b, _ := req.Context().Value(preparedBodyKey{}).(*preparedBody)
+	return b
+}
 
 // imageNotesFrom returns the notes attached to a pipeline request, if any.
 func imageNotesFrom(req *http.Request) []string {
@@ -205,6 +210,8 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 		return
 	}
 
+	req = req.WithContext(context.WithValue(req.Context(), preparedBodyKey{}, snap))
+
 	// One capture for the whole exchange: a retried attempt must not leave a
 	// second Activity entry or inflight count for the discarded reply.
 	wrapped, done := r.beginProxy(w, req, model, target)
@@ -222,33 +229,36 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 	if held.committed {
 		return
 	}
-	before := held.Header().Clone()
-	retry := false
-	for _, st := range steps {
-		if st.After != nil && st.After(req, held.status(), held.Header(), held.buf.Bytes(), notes) {
+	carried := http.Header{}
+	loraRetried := false
+	for {
+		before := held.Header().Clone()
+		retry := false
+		for _, st := range steps {
+			if st.After != nil && st.After(req, held.status(), held.Header(), held.buf.Bytes(), notes) {
+				retry = true
+			}
+		}
+		// sd-server rejected a LoRA request before the cache was warm. Warm
+		// again and retry once; a second failure goes to the client as is.
+		if lora && !loraRetried && responseIsInvalidLoRA(held.status(), held.buf.Bytes()) {
+			m.warmLoRAs(true)
+			loraRetried = true
 			retry = true
 		}
-	}
-	// sd-server rejected a LoRA request before the cache was warm. Warm again
-	// and retry once; a second failure goes to the client as is.
-	if lora && responseIsInvalidLoRA(held.status(), held.buf.Bytes()) {
-		m.warmLoRAs(true)
-		retry = true
-	}
-	if retry {
-		added := headerDelta(before, held.Header())
+		for k, v := range headerDelta(before, held.Header()) {
+			carried[k] = v
+		}
+		if !retry {
+			break
+		}
 		held.reset()
 		send(held)
 		if held.committed {
 			return
 		}
-		for _, st := range steps {
-			if st.After != nil {
-				st.After(req, held.status(), held.Header(), held.buf.Bytes(), notes)
-			}
-		}
-		carryHeaders(held.Header(), added)
 	}
+	carryHeaders(held.Header(), carried)
 	held.commit()
 }
 
@@ -263,8 +273,8 @@ func headerDelta(before, after http.Header) http.Header {
 	return d
 }
 
-// carryHeaders adds headers a step set on the first reply, keeping any value
-// the retried reply set for the same name.
+// carryHeaders adds headers an earlier attempt set, keeping any value the
+// final reply set for the same name.
 func carryHeaders(h, added http.Header) {
 	for k, v := range added {
 		if _, ok := h[k]; !ok {

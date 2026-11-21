@@ -858,6 +858,7 @@ func TestImagePipelineValidation(t *testing.T) {
 		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid`},
 		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
 		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},
+		{"high retry", "api_type: image\n    image_pipeline: {retry_blocked: 50}", "retry_blocked must be at most 5"},
 		{"empty enhancer", "api_type: image\n    image_pipeline: {enhancer: {timeout_seconds: 5}}", "enhancer needs a model"},
 	}
 	for _, tc := range cases {

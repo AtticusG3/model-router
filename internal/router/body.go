@@ -131,6 +131,13 @@ func (b *preparedBody) cleanup() {
 	}
 }
 
+// replace swaps the replayable body for data, dropping any temp file.
+func (b *preparedBody) replace(data []byte) {
+	b.cleanup()
+	b.mem = data
+	b.size = int64(len(data))
+}
+
 // requestsLoRA reports whether the snapshotted body names a non-empty LoRA
 // list. It streams the spooled copy instead of loading it whole.
 func (b *preparedBody) requestsLoRA() bool {

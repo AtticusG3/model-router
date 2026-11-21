@@ -242,14 +242,20 @@ in from peers. A preset name selects the steps, or a map names them:
   becomes ready and before a request that names a LoRA, and retry once when
   sd-server still answers `invalid lora path`.
 - `ideogram4` — `sd-server` plus ideogram4-format caption enhancement.
-- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: 0|1}`
+- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`
   — the map form; `caption` is a format name (unknown names fail load), the
-  enhancer model and timeout feed the caption step, and `retry_blocked` allows
-  0 or 1 blocked-response retry (the hook retries at most once for now).
+  enhancer model and timeout feed the caption step, and `retry_blocked` resends
+  a blocked `txt2img` request with a new random seed up to N times (default 0;
+  above 5 fails load).
+  The reply's `X-SD-Shim-Blocked-Retries` header says how many retries ran. A
+  blocked card is a desaturated, near-uniform image: the check combines mean
+  channel spread, concentration in a few luminance bins, and a fullest bin in
+  the middle of the range, so plain black or white backgrounds are not cards.
 
-The step list this build ships is empty, so a preset parses and validates but
-changes no request yet beyond the LoRA warm-up. Keep the shim on a stanza that
-needs caption enhancement or a blocked-card retry until #120–#123 land.
+The blocked-card retry and the LoRA warm-up ship in this build; the other
+preset steps parse and validate but change no request yet. Keep the shim on a
+stanza that needs caption enhancement or the img2img body checks until those
+steps land.
 
 A bare sd-server stanza needs no shim: run it with `sd-server --listen-ip
 127.0.0.1 --listen-port {port}` with `health_check: /v1/models` (sd-server has
