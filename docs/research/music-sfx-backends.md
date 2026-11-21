@@ -807,3 +807,51 @@ This repo
 - `internal/router/jobs.go`, `internal/router/matcher.go`, `internal/router/proc.go`,
   `internal/router/router.go`, `cmd/fake-model/main.go`
 - the GPU host's node config under `configs/`
+
+## 7. Deployed on buster (2026-11-21)
+
+`ace-step-music` is live: GPU0, port 5941 (shim) with ACE-Step's REST server on
+the private port 5942 in the same process group, `api_type: audio_gen`,
+`match: {path_default: true}`, `capabilities: [audio_out]`, `vram_mb: 13000`,
+`hold_seconds: 900`, `idle_ttl_seconds: 900`, `spin_up_seconds: 120`.
+
+**What the deployment corrected in this note:**
+
+- **`ACE-Step/acestep-5Hz-lm-1.7B` does not exist** (HF 404). The published LMs
+  are 0.6B and 4B. The 0.6B is what runs here.
+- **The locked torch build is broken on this host.** `uv sync` pins
+  `torch 2.10.0+cu128`, and with it *every* bf16 GEMM fails with
+  `CUBLAS_STATUS_INVALID_VALUE` — a bare `4096³` bfloat16 matmul reproduces it,
+  so it is the wheel, not the model. `torch 2.11.0+cu130` (and a matching
+  `torchvision 0.26.0+cu130`, or the CUDA-version check refuses to import)
+  generates normally. cu130 has **no sm_70**, so this venv cannot serve a V100;
+  a V100 placement needs its own cu128 venv and the fp16 caveats in §4.4.
+- **`ACESTEP_CONFIG_PATH` takes a model name, not a path.** A filesystem path
+  is rejected with `Unknown DiT model: <path>`; names resolve under
+  `ACESTEP_CHECKPOINTS_DIR`.
+- **The router rejects `job:` on anything that is not `api_type: video`.** An
+  `audio_gen` stanza is tracked by the generic job collection as long as its
+  backend speaks the OpenAI job shape, which is what the shim provides — no
+  adapter key.
+- **A quoted `bash -lc '…'` in a YAML folded command reaches the backend as a
+  broken shell word** (`unexpected EOF while looking for matching '`). The
+  launcher is a script in the repo (`deploy/acestep-shim/run.sh`, `PORT` from the
+  router) instead.
+
+**Shim.** `deploy/acestep-shim/server.py` turns `POST /v1/audio/generations`,
+`GET …/{id}` and `GET …/{id}/content` into `/release_task`, `/query_result` and
+`/v1/audio?path=`. Status maps 0 → `in_progress`, 1 → `completed`, 2 → `failed`.
+`DELETE` ends the router's hold only: ACE-Step has no per-task cancel route, so
+the server finishes what it started.
+
+**Measured, 3090, 48 kHz stereo out:**
+
+| request | wall | ratio | file |
+|---|---|---|---|
+| 15 s (cold, model load on first job) | 60 s | 4.0x | 2.7 MB |
+| 30 s | 61 s | 2.0x | 5.8 MB |
+| 180 s (3 min) | 182 s | 1.0x | 34.6 MB |
+
+Peak VRAM **13.4 GB** with the 0.6B LM, against a 4.9 GB host baseline, so the
+stanza books 13 GB of the 24 GB card. Durations accepted 10-600 s; 30 s and
+180 s verified end to end through `:18080`.
