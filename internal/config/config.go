@@ -220,6 +220,9 @@ func (p *ImagePipeline) expand() error {
 type Stanza struct {
 	ModelID string `yaml:"model_id"`
 	Name    string `yaml:"name"`
+	// Family overrides the model family the catalog guesses from the id and
+	// name (a family id such as qwen, mistral or flux). UI metadata only.
+	Family string `yaml:"family"`
 	// Command is the backend command. {port} / ${PORT} are replaced with the
 	// stanza's port; {model} / {model_path} with the stanza's ModelPath.
 	// {gpu} is left in place and filled with the GPU index chosen at spawn
