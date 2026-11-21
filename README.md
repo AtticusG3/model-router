@@ -192,6 +192,24 @@ per stanza.
 published in `/v1/models` and `/_router/status`, so a vision chat model (started
 with an `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`.
 
+`image_pipeline` (only on `api_type: image`) runs the image request handling
+on the node that owns the stanza, for local clients and for requests proxied
+in from peers. A preset name selects the steps, or a map names them:
+
+- `sd-server` — the sd-server checks.
+- `ideogram4` — `sd-server` plus ideogram4-format caption enhancement.
+- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`
+  — the map form; `caption` is a format name (unknown names fail load), the
+  enhancer model and timeout feed the caption step, and `retry_blocked` caps
+  blocked-response retries.
+
+A bare sd-server stanza needs no shim: `sd-server --listen-ip 127.0.0.1
+--listen-port {port}` with `health_check: /v1/models` (sd-server has no
+`/health`) and `image_pipeline: sd-server`. The Python shim in `deploy/` stays
+supported for nodes that still wrap sd-server with it. The Activity capture
+keeps the client's original request body; a pipeline step can attach notes
+(such as a rewritten prompt) shown with it.
+
 A request with no `model` falls back by path: `match.path_prefix` first, then
 the `api_type` that path serves — `/v1/audio/speech` → `speech`,
 `/v1/audio/transcriptions` and `/v1/audio/translations` → `transcription`,

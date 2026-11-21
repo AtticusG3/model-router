@@ -145,6 +145,9 @@ type ActivityCapture struct {
 	RespHeaders map[string][]string `json:"resp_headers"`
 	RespBody    string              `json:"resp_body"`
 	Truncated   bool                `json:"truncated"`
+	// Notes are what an image_pipeline step changed, such as a rewritten
+	// prompt. The request body above stays the client's original.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // storedCapture holds the capture and one optional blob served beside it: an
@@ -1034,6 +1037,7 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		RespHeaders: copyHeaderMap(rec.Header()),
 		RespBody:    respStr,
 		Truncated:   reqTrunc || clipped || (rec.truncated && !rec.media),
+		Notes:       imageNotesFrom(req),
 	}, blob, blobType)
 }
 
@@ -1171,13 +1175,20 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 		rec.imgMax = maxImageBody
 	}
 	// Tee the request body as the proxy streams it, instead of reading it all
-	// into memory first, so a large upload is not buffered a second time.
+	// into memory first, so a large upload is not buffered a second time. An
+	// image pipeline that rewrites the body already kept the client's original
+	// bytes, so the capture keeps those instead.
+	original, isOriginal := req.Context().Value(originalImageBodyKey{}).(*originalImageBody)
 	var cap *captureReader
-	if req.Body != nil && req.Body != http.NoBody {
+	if !isOriginal && req.Body != nil && req.Body != http.NoBody {
 		cap = &captureReader{rc: req.Body, max: maxCaptureBody}
 		req.Body = cap
 	}
 	return rec, func() {
+		if isOriginal {
+			r.recordProxy(req, rec, started, original.body, original.bytes, original.truncated, model, target)
+			return
+		}
 		var reqBody []byte
 		var reqBytes int64
 		var reqTrunc bool

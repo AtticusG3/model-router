@@ -746,3 +746,60 @@ stanzas:
 		t.Fatalf("DefaultStanza = %q %v, want empty id and both candidates", id, cands)
 	}
 }
+
+func TestImagePipelineForms(t *testing.T) {
+	cfg, err := Parse([]byte(`
+stanzas:
+  - model_id: sd-bare
+    command: "sd-server --listen-ip 127.0.0.1 --listen-port {port}"
+    api_type: image
+    health_check: /v1/models
+    image_pipeline: sd-server
+  - model_id: sd-ideo
+    command: "sd-server --listen-port {port}"
+    api_type: image
+    image_pipeline: ideogram4
+  - model_id: sd-custom
+    command: "sd-server --listen-port {port}"
+    api_type: image
+    image_pipeline:
+      caption: ideogram4
+      enhancer: {model: enhancer-a, timeout_seconds: 20}
+      retry_blocked: 2
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	sd := cfg.Stanza("sd-bare")
+	if sd.ImagePipeline == nil || sd.ImagePipeline.Caption != "" || sd.HealthCheck != "/v1/models" {
+		t.Fatalf("sd-server preset = %+v, health %q", sd.ImagePipeline, sd.HealthCheck)
+	}
+	ideo := cfg.Stanza("sd-ideo")
+	if ideo.ImagePipeline == nil || ideo.ImagePipeline.Caption != "ideogram4" {
+		t.Fatalf("ideogram4 preset = %+v, want caption ideogram4", ideo.ImagePipeline)
+	}
+	custom := cfg.Stanza("sd-custom").ImagePipeline
+	if custom == nil || custom.Caption != "ideogram4" || custom.RetryBlocked != 2 ||
+		custom.Enhancer == nil || custom.Enhancer.Model != "enhancer-a" || custom.Enhancer.TimeoutSeconds != 20 {
+		t.Fatalf("map form = %+v", custom)
+	}
+}
+
+func TestImagePipelineValidation(t *testing.T) {
+	cases := []struct{ name, stanza, want string }{
+		{"unknown preset", "api_type: image\n    image_pipeline: stable-diffusion", `unknown image_pipeline preset "stable-diffusion"`},
+		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid`},
+		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
+		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},
+		{"empty enhancer", "api_type: image\n    image_pipeline: {enhancer: {timeout_seconds: 5}}", "enhancer needs a model"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			y := "stanzas:\n  - model_id: a\n    command: x\n    " + tc.stanza + "\n"
+			_, err := Parse([]byte(y))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
