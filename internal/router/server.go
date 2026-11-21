@@ -1,6 +1,7 @@
 package router
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -257,6 +258,8 @@ func (r *Router) streamProgress(seen map[string]liveRow) ([]liveRow, []peerRow) 
 			if e.FromPeer == r.node || e.Target == r.node || tel[e.FromPeer] != nil {
 				continue
 			}
+			// The peer's own clients are "local" there; here they came from that peer.
+			e.Origin = cmp.Or(e.FromPeer, p.Name)
 			row := liveRow{InProgressEntry: e, Node: p.Name}
 			rows = append(rows, row)
 			now[key(e.ID)] = row
@@ -270,6 +273,7 @@ func (r *Router) streamProgress(seen map[string]liveRow) ([]liveRow, []peerRow) 
 				ID: e.ID, Timestamp: was.Started, Model: e.Model, Target: e.Target, Method: was.Method,
 				Path: e.Path, Status: e.Status, DurationMs: e.DurationMs, TTFTMs: was.TTFTMs,
 				Tokens: TokenStats{CompletionTokens: e.Tokens}, FromPeer: e.FromPeer,
+				Origin: cmp.Or(e.FromPeer, p.Name),
 			}, Node: p.Name, PeerURL: p.BaseURL})
 		}
 	}

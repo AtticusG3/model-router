@@ -2,10 +2,17 @@ package router
 
 import (
 	"encoding/json"
+	"io"
+	"maps"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"model-router/internal/config"
 )
 
 // The Logs page is one streamed transcript. The old five-card page and its
@@ -323,26 +330,104 @@ func TestEmbeddedUIActivityPathFilter(t *testing.T) {
 	}
 }
 
-// The Activity peer filter starts on All, offers Local and one option per peer
-// from /_router/status, and filters rows by target or from_peer. It combines
-// with the path-group filter: actRender applies both.
+// The Activity peer filter starts on All and Local, has an Origin column, and
+// combines with the path-group filter: actRender applies both.
 func TestEmbeddedUIActivityPeerFilter(t *testing.T) {
 	for _, want := range []string{
 		`<select class="chip" id="act-peer" aria-label="Filter activity by peer"><option value="">All</option><option value="local">Local</option></select>`,
-		"const peers=Object.keys(status.peers||{}).sort()",
-		`peers.map(p=>'<option value="p:'+esc(p)+'">'+esc(p)+'</option>')`,
+		"<th>Model</th><th>Origin</th><th>Path</th>",
 		"actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch)", "$('act-peer').onchange=()=>actPaint(actRows)",
-		"return !e.node&&!e.from_peer&&(!e.target||e.target===status.node)",
-		"return e.node===f.slice(2)||e.target===f.slice(2)||e.from_peer===f.slice(2)",
-		"'on '+e.node", "'← '+e.from_peer", "'→ '+e.target",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)
 		}
 	}
-	if !strings.Contains(webUIHTML, ".filter(actMatch)") {
-		t.Error("actRender does not apply the peer filter")
+	// target is this node for every row served here, so it must not decide Local again.
+	if strings.Contains(webUIHTML, "e.target===status.node)") {
+		t.Error("the peer filter still reads target")
 	}
+}
+
+// Rows the API builds carry origin, and the Activity view filters them by it
+// (testdata/activity_origin_test.js): a client of this node, a request bravo
+// forwarded here, one this node forwarded out to bravo, charlie's own requests
+// from its telemetry, and a sender that is not a configured peer.
+func TestEmbeddedUIActivityOriginFilter(t *testing.T) {
+	cfg, err := config.Parse([]byte("start_port: 5900\npeers:\n  - name: bravo\n    kind: router\n    base_url: http://bravo.invalid\n    models: [chat]\n  - name: charlie\n    kind: router\n    base_url: http://charlie.invalid\n    models: [chat]\n"))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	r := New(cfg, NewLogger(io.Discard, false), "alpha")
+	a := r.Activity()
+	const chat, img = "/v1/chat/completions", "/sdapi/v1/txt2img"
+	now := time.Now().UTC()
+	for _, e := range []ActivityEntry{
+		{Model: "client-chat", Target: "alpha", Path: chat},
+		{Model: "client-embed", Target: "alpha", Path: "/v1/embeddings"},
+		{Model: "forwarded-in", Target: "alpha", Path: chat, FromPeer: "bravo"},
+		{Model: "unlisted-image", Target: "alpha", Path: img, FromPeer: "outsider"},
+		{Model: "unlisted-image", Target: "alpha", Path: img, FromPeer: "outsider"},
+		{Model: "forwarded-out", Target: "bravo", Path: chat},
+	} {
+		e.Timestamp, e.Method, e.Status = now, http.MethodPost, http.StatusOK
+		a.record(e, ActivityCapture{}, nil, "", [2][]preview{})
+	}
+	a.begin(InProgressEntry{Model: "running-in", Target: "alpha", Method: http.MethodPost, Path: chat, Started: now, FromPeer: "outsider"})
+
+	// charlie runs 4 and 5 for its own clients; 5 then finishes.
+	peerRun := InProgressEntry{ID: 4, Model: "peer-run", Method: http.MethodPost, Path: chat, Started: now, Origin: originLocal}
+	r.peers.Set("charlie", &Telemetry{Node: "charlie", InProgress: []InProgressEntry{peerRun, {ID: 5, Model: "peer-done", Method: http.MethodPost, Path: chat, Started: now, Origin: originLocal}}})
+	seen := map[string]liveRow{}
+	r.streamProgress(seen)
+	r.peers.Set("charlie", &Telemetry{Node: "charlie", InProgress: []InProgressEntry{peerRun}, Recent: []RecentEntry{{ID: 5, Model: "peer-done", Path: chat, Status: http.StatusOK, Origin: originLocal}}})
+	live, done := r.streamProgress(seen)
+
+	snap := doJob(NewHandler(r, NewLogger(io.Discard, false)), http.MethodGet, "/_router/activity", "")
+	var list struct {
+		Entries    []ActivityEntry   `json:"entries"`
+		InProgress []InProgressEntry `json:"in_progress"`
+	}
+	if err := json.Unmarshal(snap.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range list.Entries {
+		got[e.Model] = e.Origin
+	}
+	for _, e := range list.InProgress {
+		got[e.Model] = e.Origin
+	}
+	for _, e := range live {
+		got[e.Model] = e.Origin
+	}
+	for _, e := range done {
+		got[e.Model] = e.Origin
+	}
+	want := map[string]string{
+		"client-chat": "local", "client-embed": "local", "forwarded-in": "bravo", "unlisted-image": "outsider",
+		"forwarded-out": "local", "running-in": "outsider", "peer-run": "charlie", "peer-done": "charlie",
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("origins %v, want %v", got, want)
+	}
+	if rec := r.TelemetrySnapshot().Recent; len(rec) != 6 || rec[0].Origin != "local" || rec[2].Origin != "outsider" {
+		t.Fatalf("telemetry recent = %+v", rec)
+	}
+
+	fx, err := json.Marshal(map[string]any{
+		"status":   map[string]any{"node": "alpha", "peers": map[string]any{"bravo": map[string]any{}, "charlie": map[string]any{}}},
+		"snapshot": json.RawMessage(snap.Body.Bytes()),
+		"progress": map[string]any{"in_progress": live},
+		"done":     done[0],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "fixtures.json")
+	if err := os.WriteFile(path, fx, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runUIScript(t, "activity_origin_test.js", path)
 }
 
 // Every generationPathSuffixes entry has a group in the UI's ACT_PATH_GROUP

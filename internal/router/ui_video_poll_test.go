@@ -8,8 +8,9 @@ import (
 )
 
 // runUIScript runs a regression script from testdata against the real
-// embedded UI script under node, when node is installed.
-func runUIScript(t *testing.T, script string) {
+// embedded UI script under node, when node is installed. args follow the
+// app.js path.
+func runUIScript(t *testing.T, script string, args ...string) {
 	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -19,7 +20,7 @@ func runUIScript(t *testing.T, script string) {
 	if err := os.WriteFile(app, []byte(uiAppJS), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(node, filepath.Join("testdata", script), app).CombinedOutput()
+	out, err := exec.Command(node, append([]string{filepath.Join("testdata", script), app}, args...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s: %v\n%s", script, err, out)
 	}
