@@ -35,14 +35,72 @@ type voiceRecord struct {
 	Language string    `json:"language"`
 }
 
-// isVoiceLibraryPath reports a model-less /v1/audio/voices route the library
-// owns. A ?model= request still goes to that speech stanza's backend.
-func isVoiceLibraryPath(req *http.Request) bool {
+// voiceLibraryRoute reports a /v1/audio/voices route the library owns. A
+// ?model= request still goes to that speech stanza's backend, and so does a
+// POST that names its model in the body (a backend-native upload). answered
+// reports that the 413 for an oversized model-less upload was written here:
+// the body cannot be replayed, so ServeHTTP stops.
+func (r *Router) voiceLibraryRoute(w http.ResponseWriter, req *http.Request) (library, answered bool) {
 	if req.URL.Query().Get("model") != "" {
-		return false
+		return false, false
+	}
+	// A model-less collection GET is the union of library voices and backend
+	// presets, not the library alone.
+	if req.Method == http.MethodGet && req.URL.Path == "/v1/audio/voices" {
+		return false, false
+	}
+	if req.Method == http.MethodPost && req.URL.Path == "/v1/audio/voices" {
+		model, tooBig := r.bodyModel(req)
+		if tooBig {
+			http.Error(w, tooLargeError(r.cfg().MaxRequestBodyBytes()).Error(), http.StatusRequestEntityTooLarge)
+			return false, true
+		}
+		if model != "" {
+			return false, false
+		}
 	}
 	p := req.URL.Path
-	return p == "/v1/audio/voices" || strings.HasPrefix(p, "/v1/audio/voices/")
+	return p == "/v1/audio/voices" || strings.HasPrefix(p, "/v1/audio/voices/"), false
+}
+
+// bodyModel returns the model a POST /v1/audio/voices names in its JSON body
+// or multipart form. The body is snapshotted at the request-body cap, the same
+// cap the matcher applies, so a backend upload is not limited by the library
+// clip cap; it is then installed back on the request unchanged. tooBig reports
+// a body over the request-body cap.
+func (r *Router) bodyModel(req *http.Request) (model string, tooBig bool) {
+	ct := req.Header.Get("Content-Type")
+	if !strings.Contains(ct, "multipart/form-data") && !strings.Contains(ct, "application/json") {
+		return "", false
+	}
+	cfg := r.cfg()
+	if req.ContentLength > cfg.MaxRequestBodyBytes() {
+		return "", true
+	}
+	p, err := r.snapshotBody(req, cfg.MaxRequestBodyBytes())
+	if err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			return "", true
+		}
+		// shortcut: another read error leaves the body partly consumed, so a
+		// model-less upload is answered by the library; spool it like the matcher
+		// does if clients can recover mid-upload.
+		return "", false
+	}
+	// Scan a separate reader so the body snapshotBody installed stays unread.
+	rc, err := p.open()
+	if err != nil {
+		return "", false
+	}
+	defer rc.Close()
+	if strings.Contains(ct, "multipart/form-data") {
+		return multipartModel(ct, rc), false
+	}
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		return "", false
+	}
+	return jsonModelID(raw, cfg), false
 }
 
 // serveVoiceLibrary answers the library's own voice routes. It runs before
@@ -52,12 +110,10 @@ func (r *Router) serveVoiceLibrary(w http.ResponseWriter, req *http.Request) {
 	started := time.Now()
 	if req.URL.Path == "/v1/audio/voices" {
 		switch req.Method {
-		case http.MethodGet:
-			r.listLibraryVoices(w)
 		case http.MethodPost:
 			r.createLibraryVoice(w, req, started)
 		default:
-			w.Header().Set("Allow", "GET, POST")
+			w.Header().Set("Allow", "POST")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
@@ -77,15 +133,6 @@ func (r *Router) serveVoiceLibrary(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Allow", "GET, DELETE")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
-}
-
-func (r *Router) listLibraryVoices(w http.ResponseWriter) {
-	records, err := r.voiceRecords()
-	if err != nil {
-		http.Error(w, "read voice library: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{"object": "list", "data": records})
 }
 
 func (r *Router) getLibraryVoice(w http.ResponseWriter, id string) {

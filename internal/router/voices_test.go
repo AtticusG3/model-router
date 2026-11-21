@@ -146,6 +146,12 @@ func TestVoiceLibraryRejectsMissingConsentAndCaps(t *testing.T) {
 	if rec := postVoice(t, small, voiceFields(), big); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversize clip: status %d body %s", rec.Code, rec.Body.String())
 	}
+	// Over the cap plus the 1 MiB multipart slack, the body cannot be read for
+	// the model check; it is still the clip cap's 413, not a parse error.
+	huge := activityWAV(2<<20 + 44 + 100)
+	if rec := postVoice(t, small, voiceFields(), huge); rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "exceeds the size cap") {
+		t.Fatalf("clip over cap and slack: status %d body %s", rec.Code, rec.Body.String())
+	}
 }
 
 // A fresh router over the same voice_dir lists the voices again.
@@ -360,5 +366,190 @@ func TestCloneModeConfig(t *testing.T) {
 	}
 	if _, err := config.Parse([]byte("stanzas:\n  - model_id: chat\n    command: fake\n    clone_mode: ref_audio\n")); err == nil {
 		t.Fatal("clone_mode on a chat stanza parsed")
+	}
+}
+
+// A POST that names its model in the multipart form reaches the speech
+// stanza's backend; the library does not answer 400 for missing library
+// fields. Without a model in the query or body the library still creates the
+// voice.
+func TestVoiceUploadWithBodyModelReachesBackend(t *testing.T) {
+	dir := t.TempDir()
+	var gotModel, gotFile string
+	var gotPost bool
+	backend := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method == http.MethodPost && req.URL.Path == "/v1/audio/voices" {
+			gotPost = true
+			if err := req.ParseMultipartForm(1 << 20); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			gotModel = req.FormValue("model")
+			f, _, err := req.FormFile("file")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer f.Close()
+			raw, _ := io.ReadAll(f)
+			gotFile = string(raw)
+			writeJSON(w, map[string]any{"id": "tts-clone"})
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	_, h := speechNode(t, "voice_dir: "+dir+"\nstanzas:"+speechStanza("tts-main", ""), backend)
+
+	fields := voiceFields()
+	fields["model"] = "tts-main"
+	clip := activityWAV(1600)
+	rec := postVoice(t, h, fields, clip)
+	if rec.Code != http.StatusOK || gotModel != "tts-main" || gotFile != string(clip) {
+		t.Fatalf("backend upload = %d model %q file %q body %s", rec.Code, gotModel, gotFile, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tts-clone.wav")); !os.IsNotExist(err) {
+		t.Fatal("the library stored a backend upload")
+	}
+
+	// No model in query or body: the library still creates the voice.
+	if rec := postVoice(t, h, voiceFields(), clip); rec.Code != http.StatusCreated {
+		t.Fatalf("library upload = %d body %s", rec.Code, rec.Body.String())
+	}
+	// A JSON body model goes to the stanza too.
+	gotModel, gotPost = "", false
+	if rec := serve(h, "POST", "/v1/audio/voices", `{"model":"tts-main","name":"Narrator"}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("json upload = %d body %s", rec.Code, rec.Body.String())
+	}
+	if !gotPost {
+		t.Fatal("json model part never reached the backend")
+	}
+}
+
+// A backend-native upload is capped by max_request_body_mb, not the library
+// clip cap: a body over voice_max_mb + 1 MiB still reaches the stanza. An
+// oversized library upload still answers 413 naming the clip cap.
+func TestVoiceUploadWithBodyModelUsesRequestBodyCap(t *testing.T) {
+	dir := t.TempDir()
+	var gotModel string
+	var gotSize int64
+	backend := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path != "/v1/audio/voices" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if err := req.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		gotModel = req.FormValue("model")
+		f, _, err := req.FormFile("file")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer f.Close()
+		gotSize, _ = io.Copy(io.Discard, f)
+		writeJSON(w, map[string]any{"id": "tts-clone"})
+	})
+	_, h := speechNode(t, "voice_dir: "+dir+"\nstanzas:"+speechStanza("tts-main", ""), backend)
+
+	clip := activityWAV(12 << 20)
+	rec := postVoice(t, h, map[string]string{"model": "tts-main"}, clip)
+	if rec.Code != http.StatusOK || gotModel != "tts-main" || gotSize != int64(len(clip)) {
+		t.Fatalf("backend upload = %d model %q size %d body %s", rec.Code, gotModel, gotSize, rec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "narrator-a.wav")); !os.IsNotExist(err) {
+		t.Fatal("the library stored a backend upload")
+	}
+
+	// The clip cap still applies to a library write, and names the clip.
+	rec = postVoice(t, h, voiceFields(), clip)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "voice clip exceeds the size cap") {
+		t.Fatalf("library upload = %d body %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A model-less voice list unions the library voices with the backend presets;
+// ?model= still asks just that stanza.
+func TestVoiceListUnionsLibraryAndBackends(t *testing.T) {
+	dir := t.TempDir()
+	_, h := speechNode(t, "voice_dir: "+dir+"\nstanzas:"+speechStanza("tts-main", ""), fakeSpeech("alto"))
+
+	if rec := postVoice(t, h, voiceFields(), activityWAV(1600)); rec.Code != http.StatusCreated {
+		t.Fatalf("library upload = %d body %s", rec.Code, rec.Body.String())
+	}
+	rec := serve(h, "GET", "/v1/audio/voices", "")
+	var out struct {
+		Data []map[string]any `json:"data"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
+	}
+	byID := map[string]map[string]any{}
+	for _, row := range out.Data {
+		id, _ := row["id"].(string)
+		byID[id] = row
+	}
+	lib, ok := byID["narrator-a"]
+	if !ok || lib["source"] != "library" || lib["language"] != "English" {
+		t.Fatalf("library row missing: %v", lib)
+	}
+	backend, ok := byID["alto"]
+	if !ok || backend["model"] != "tts-main" || backend["source"] != nil {
+		t.Fatalf("backend preset missing: %v", backend)
+	}
+	if rec := serve(h, "GET", "/v1/audio/voices?model=tts-main", ""); !strings.Contains(rec.Body.String(), `"data":["alto"`) {
+		t.Fatalf("?model=tts-main: %s", rec.Body.String())
+	}
+}
+
+// When every candidate stanza fails to list its voices, the library rows are
+// still answered, not replaced by a 502 that depends on how many stanzas ran.
+func TestVoiceListKeepsLibraryWhenEveryBackendFails(t *testing.T) {
+	dir := t.TempDir()
+	down := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/v1/audio/voices" {
+			http.Error(w, "backend down", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	r, h := speechNode(t, "voice_dir: "+dir+"\nstanzas:"+
+		speechStanza("tts-main", "\n    match: {path_default: true}")+speechStanza("tts-alt", ""),
+		down, down)
+
+	if rec := postVoice(t, h, voiceFields(), activityWAV(1600)); rec.Code != http.StatusCreated {
+		t.Fatalf("library upload = %d body %s", rec.Code, rec.Body.String())
+	}
+	if _, err := r.Load("tts-alt"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.anyRunning(r.cfg().Stanza("tts-alt")) {
+		t.Fatal("tts-alt was not running; the union did not take its failure path")
+	}
+	rec := serve(h, "GET", "/v1/audio/voices", "")
+	var out struct {
+		Data []map[string]any `json:"data"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
+	}
+	if len(out.Data) != 1 || out.Data[0]["id"] != "narrator-a" || out.Data[0]["source"] != "library" {
+		t.Fatalf("library rows = %v", out.Data)
+	}
+}
+
+// An unreadable voice_dir degrades like a failed stanza: the backend's voice
+// list still answers instead of the whole request returning 500.
+func TestVoiceListServesBackendsWhenLibraryUnreadable(t *testing.T) {
+	blocked := filepath.Join(t.TempDir(), "voices")
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, h := speechNode(t, "voice_dir: "+blocked+"\nstanzas:"+speechStanza("tts-main", ""), fakeSpeech("alto"))
+
+	rec := serve(h, "GET", "/v1/audio/voices", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"alto"`) || !strings.Contains(rec.Body.String(), `"model":"tts-main"`) {
+		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
 }
