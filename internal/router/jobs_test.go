@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -420,6 +423,353 @@ func TestJobTableCapEvictsOldestFinishedOnly(t *testing.T) {
 		if r.jobs[id] == nil {
 			t.Fatalf("running job %s was dropped", id)
 		}
+	}
+}
+
+// sdcppBackend fakes sd-server's /sdcpp/v1 job API. A job is queued for the
+// first third of d, generating until d, then completed with a WebM result.
+type sdcppBackend struct {
+	srv     *httptest.Server
+	d       time.Duration
+	mu      sync.Mutex
+	jobs    map[string]*sdcppState
+	cancels atomic.Int32
+	// badResult serves a result whose b64_json is not a string, so only a
+	// status poll that skips result can read the record.
+	badResult bool
+}
+
+type sdcppState struct {
+	created   time.Time
+	cancelled bool
+	initImage string
+	seed      string
+}
+
+func newSDCppBackend(t *testing.T, d time.Duration) *sdcppBackend {
+	t.Helper()
+	b := &sdcppBackend{d: d, jobs: map[string]*sdcppState{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {})
+	mux.HandleFunc("POST /sdcpp/v1/vid_gen", func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			InitImage string      `json:"init_image"`
+			Seed      json.Number `json:"seed"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		id := "job_" + rand.Text()
+		b.mu.Lock()
+		b.jobs[id] = &sdcppState{created: time.Now(), initImage: body.InitImage, seed: body.Seed.String()}
+		b.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, map[string]any{"id": id, "status": "queued"})
+	})
+	mux.HandleFunc("GET /sdcpp/v1/jobs/{id}", func(w http.ResponseWriter, req *http.Request) {
+		id := req.PathValue("id")
+		b.mu.Lock()
+		st, ok := b.jobs[id]
+		b.mu.Unlock()
+		if !ok {
+			http.Error(w, "no such job", http.StatusNotFound)
+			return
+		}
+		rec := map[string]any{"id": id, "created": st.created.Unix()}
+		switch age := time.Since(st.created); {
+		case st.cancelled:
+			rec["status"] = "cancelled"
+		case age < b.d/3:
+			rec["status"] = "queued"
+		case age < b.d:
+			rec["status"] = "generating"
+			rec["progress"] = map[string]int{"completed": 1, "total": 2}
+		default:
+			rec["status"] = "completed"
+			rec["progress"] = map[string]int{"completed": 1, "total": 1}
+			if b.badResult {
+				rec["result"] = map[string]any{"kind": "vid_gen", "mime_type": "video/webm", "b64_json": 12345}
+			} else {
+				rec["result"] = map[string]any{
+					"kind": "vid_gen", "mime_type": "video/webm",
+					"b64_json": base64.StdEncoding.EncodeToString([]byte("fake-webm-bytes")),
+				}
+			}
+		}
+		writeJSON(w, rec)
+	})
+	mux.HandleFunc("POST /sdcpp/v1/jobs/{id}/cancel", func(w http.ResponseWriter, req *http.Request) {
+		b.mu.Lock()
+		st, ok := b.jobs[req.PathValue("id")]
+		if ok {
+			st.cancelled = true
+		}
+		b.mu.Unlock()
+		if !ok {
+			http.Error(w, "no such job", http.StatusNotFound)
+			return
+		}
+		b.cancels.Add(1)
+		writeJSON(w, map[string]any{"id": req.PathValue("id"), "status": "cancelled"})
+	})
+	b.srv = httptest.NewServer(mux)
+	t.Cleanup(b.srv.Close)
+	return b
+}
+
+// sdcppJobRouter serves one api_type video stanza through the sdcpp adapter.
+func sdcppJobRouter(t *testing.T, b *sdcppBackend) (*Router, http.Handler) {
+	t.Helper()
+	u, err := url.Parse(b.srv.URL)
+	if err != nil {
+		t.Fatalf("parse backend url: %v", err)
+	}
+	cfg, err := config.Parse([]byte(fmt.Sprintf(`
+stanzas:
+  - model_id: vid
+    command: "fake --port {port}"
+    vram_mb: 6000
+    api_type: video
+    capabilities: [audio_out]
+    job: {adapter: sdcpp}
+    health_check: /health
+    spin_up_seconds: 5
+    port: %s
+`, u.Port())))
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	r := New(cfg, NewLogger(io.Discard, false), "test")
+	r.spawn = func(string, []string) (Proc, error) { return newFakeProc(), nil }
+	r.ledger.SetGPUs([]*GPUState{gpu(0, 10000)})
+	t.Cleanup(func() {
+		r.Shutdown()
+		_ = r.Unload("vid")
+	})
+	return r, NewHandler(r, NewLogger(io.Discard, false))
+}
+
+// The sdcpp adapter carries a job through submit, poll, content and delete,
+// and publishes the stanza's capabilities.
+func TestVideoAdapterLifecycle(t *testing.T) {
+	fastJobPolls(t)
+	b := newSDCppBackend(t, 300*time.Millisecond)
+	r, h := sdcppJobRouter(t, b)
+
+	var models struct {
+		Data []struct {
+			ID           string   `json:"id"`
+			Capabilities []string `json:"capabilities"`
+		} `json:"data"`
+	}
+	if rec := doJob(h, http.MethodGet, "/v1/models", ""); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &models) != nil {
+		t.Fatalf("/v1/models: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(models.Data) != 1 || models.Data[0].ID != "vid" || !slices.Contains(models.Data[0].Capabilities, "audio_out") {
+		t.Fatalf("/v1/models data = %+v, want vid with audio_out", models.Data)
+	}
+
+	id := submitJob(t, h, "vid")
+	waitJob(t, "adapter job completed", func() bool { return jobStatus(t, h, id) == "completed" })
+	rec := doJob(h, http.MethodGet, "/v1/videos/"+id+"/content", "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "video/webm" || rec.Body.String() != "fake-webm-bytes" {
+		t.Fatalf("content = %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+
+	id = submitJob(t, h, "vid")
+	if rec := doJob(h, http.MethodDelete, "/v1/videos/"+id, ""); rec.Code != http.StatusOK {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if b.cancels.Load() != 1 {
+		t.Fatal("DELETE did not reach the backend cancel route")
+	}
+	if got := r.occupancyOf("vid"); got != 0 {
+		t.Fatalf("occupancy after delete = %d, want 0", got)
+	}
+}
+
+// A model-less submit reaches the only video stanza and is translated onto
+// sd-server's field names.
+func TestVideoAdapterModelLessSubmit(t *testing.T) {
+	fastJobPolls(t)
+	b := newSDCppBackend(t, 300*time.Millisecond)
+	_, h := sdcppJobRouter(t, b)
+
+	rec := doJob(h, http.MethodPost, "/v1/videos", `{"prompt":"a paper kite","size":"256x256","seconds":1}`)
+	var v struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.ID == "" || v.Status != "queued" {
+		t.Fatalf("model-less submit = %d %s", rec.Code, rec.Body.String())
+	}
+	waitJob(t, "model-less job completed", func() bool { return jobStatus(t, h, v.ID) == "completed" })
+}
+
+// A 20 MB multipart input_reference survives the adapter translation intact.
+func TestVideoAdapterMultipartReferenceArrivesIntact(t *testing.T) {
+	fastJobPolls(t)
+	b := newSDCppBackend(t, time.Minute)
+	_, h := sdcppJobRouter(t, b)
+
+	reference := bytes.Repeat([]byte{0x5a}, 20<<20)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("prompt", "animate this frame")
+	_ = mw.WriteField("seconds", "1")
+	fw, err := mw.CreateFormFile("input_reference", "frame.png")
+	if err != nil {
+		t.Fatalf("multipart: %v", err)
+	}
+	_, _ = fw.Write(reference)
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/videos", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var v struct {
+		ID string `json:"id"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.ID == "" {
+		t.Fatalf("multipart submit = %d %s", rec.Code, rec.Body.String())
+	}
+
+	b.mu.Lock()
+	st := b.jobs[v.ID]
+	b.mu.Unlock()
+	got, err := base64.StdEncoding.DecodeString(st.initImage)
+	if err != nil {
+		t.Fatalf("backend init_image is not base64: %v", err)
+	}
+	if len(got) != len(reference) || sha256.Sum256(got) != sha256.Sum256(reference) {
+		t.Fatalf("reference arrived as %d bytes, want %d intact", len(got), len(reference))
+	}
+}
+
+// A backend that exits while its job runs fails the job instead of polling
+// until the job TTL, and the client's status poll says failed rather than 404.
+func TestVideoAdapterBackendExitFailsJob(t *testing.T) {
+	fastJobPolls(t)
+	b := newSDCppBackend(t, time.Minute)
+	r, h := sdcppJobRouter(t, b)
+
+	id := submitJob(t, h, "vid")
+	r.managed["vid"].Stop()
+	waitJob(t, "job failed", func() bool {
+		row, ok := jobRow(r, id)
+		return ok && row.JobState == "failed"
+	})
+	for range 2 {
+		rec := doJob(h, http.MethodGet, "/v1/videos/"+id, "")
+		var v struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil ||
+			v.ID != id || v.Status != "failed" || v.Error.Message == "" {
+			t.Fatalf("poll after backend exit = %d %s, want a failed status with a readable error", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// The reported sequence: a job runs, its backend process goes away, and the
+// client keeps polling. The watcher marks the job failed and every later
+// status poll repeats that, instead of reading as "no such job".
+func TestJobBackendExitReportsFailedStatus(t *testing.T) {
+	fastJobPolls(t)
+	b := newJobBackend(t, time.Minute)
+	r, h := jobRouter(t, b, "test", "")
+
+	id := submitJob(t, h, "vid")
+	r.managed["vid"].Stop()
+	waitJob(t, "job failed", func() bool {
+		row, ok := jobRow(r, id)
+		return ok && row.JobState == "failed"
+	})
+	for range 2 {
+		rec := doJob(h, http.MethodGet, "/v1/videos/"+id, "")
+		var v struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+			Error  struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil ||
+			v.ID != id || v.Status != "failed" || v.Error.Message == "" {
+			t.Fatalf("status poll after backend exit = %d %s, want failed with a readable error", rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// A status poll on a completed job must not decode the clip; only /content
+// reads the result payload.
+func TestVideoAdapterStatusSkipsResultPayload(t *testing.T) {
+	fastJobPolls(t)
+	b := newSDCppBackend(t, 100*time.Millisecond)
+	b.badResult = true
+	r, h := sdcppJobRouter(t, b)
+
+	id := submitJob(t, h, "vid")
+	waitJob(t, "job completed", func() bool {
+		row, ok := jobRow(r, id)
+		return ok && row.JobState == "completed"
+	})
+	rec := doJob(h, http.MethodGet, "/v1/videos/"+id, "")
+	var v struct {
+		Status string `json:"status"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.Status != "completed" {
+		t.Fatalf("status on completed job = %d %s, want completed without decoding the result", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "b64_json") || strings.Contains(rec.Body.String(), "12345") {
+		t.Fatalf("status response carries the result payload: %s", rec.Body.String())
+	}
+}
+
+// A state the adapter does not know ends the job as failed, and the reply
+// names the raw state.
+func TestVideoStatusUnknownIsFailed(t *testing.T) {
+	for _, c := range [][2]string{
+		{"", "queued"}, {"queued", "queued"}, {"pending", "queued"},
+		{"generating", "in_progress"}, {"processing", "in_progress"},
+		{"completed", "completed"},
+		{"failed", "failed"}, {"cancelled", "failed"},
+		{"aborted", "failed"}, {"timeout", "failed"},
+	} {
+		if got := videoStatus(c[0]); got != c[1] {
+			t.Errorf("videoStatus(%q) = %q, want %q", c[0], got, c[1])
+		}
+	}
+	doc := videoRecord(&sdcppJobRecord{ID: "job_1", Status: "aborted"}, "vid", "", 0)
+	errObj, ok := doc["error"].(map[string]any)
+	if doc["status"] != "failed" || !ok {
+		t.Fatalf("unknown state record = %v, want failed with an error", doc)
+	}
+	if msg, _ := errObj["message"].(string); !strings.Contains(msg, "aborted") {
+		t.Fatalf("error message = %q, want the raw state", msg)
+	}
+}
+
+// A large seed reaches the backend as the digits it was submitted with.
+func TestVideoAdapterSeedKeepsPrecision(t *testing.T) {
+	b := newSDCppBackend(t, time.Minute)
+	_, h := sdcppJobRouter(t, b)
+
+	rec := doJob(h, http.MethodPost, "/v1/videos", `{"prompt":"a paper kite","seed":12345678901234567890}`)
+	var v struct {
+		ID string `json:"id"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil || v.ID == "" {
+		t.Fatalf("submit = %d %s", rec.Code, rec.Body.String())
+	}
+	b.mu.Lock()
+	seed := b.jobs[v.ID].seed
+	b.mu.Unlock()
+	if seed != "12345678901234567890" {
+		t.Fatalf("backend seed = %q, want the submitted digits", seed)
 	}
 }
 

@@ -91,9 +91,24 @@ const (
 	APITypeSpeech        = "speech"
 	APITypeTranscription = "transcription"
 	APITypeRealtime      = "realtime"
-	APITypeVideo         = "video"
-	APITypeAudioGen      = "audio_gen"
+	// APITypeVideo is the async video job api_type.
+	APITypeVideo    = "video"
+	APITypeAudioGen = "audio_gen"
+
+	// JobAdapterOpenAI proxies the /v1/videos job API unchanged. JobAdapterSDCpp
+	// translates it onto sd-server's /sdcpp/v1 job API.
+	JobAdapterOpenAI = "openai"
+	JobAdapterSDCpp  = "sdcpp"
 )
+
+// JobAdapters is every value a stanza's job.adapter may take.
+var JobAdapters = []string{JobAdapterOpenAI, JobAdapterSDCpp}
+
+// Job selects the adapter in front of a stanza's own async job API. Empty
+// adapter means openai (the backend already speaks /v1/videos).
+type Job struct {
+	Adapter string `yaml:"adapter"`
+}
 
 // APITypes is every value a stanza's api_type may take, in the order errors
 // list them.
@@ -244,6 +259,10 @@ type Stanza struct {
 	// rewriting, one response retry and response headers. Only api_type: image
 	// may set it. See SPEC.md.
 	ImagePipeline *ImagePipeline `yaml:"image_pipeline"`
+	// Job selects the adapter in front of this stanza's async job API. Only
+	// api_type: video may set it; openai (the default) proxies /v1/videos
+	// unchanged, sdcpp translates it onto sd-server's /sdcpp/v1 job API.
+	Job *Job `yaml:"job"`
 	// MaxRequestBodyMB overrides the top-level max_request_body_mb for this
 	// stanza. 0 = inherit.
 	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
@@ -685,6 +704,18 @@ func Parse(raw []byte) (*Config, error) {
 			if !slices.Contains(Capabilities, c) {
 				return nil, fmt.Errorf("stanza %q: capability %q is not valid; must be one of %s",
 					s.ModelID, c, strings.Join(Capabilities, ", "))
+			}
+		}
+		if s.Job != nil {
+			if s.Job.Adapter == "" {
+				s.Job.Adapter = JobAdapterOpenAI
+			}
+			if !slices.Contains(JobAdapters, s.Job.Adapter) {
+				return nil, fmt.Errorf("stanza %q: job.adapter %q is not valid; must be one of %s",
+					s.ModelID, s.Job.Adapter, strings.Join(JobAdapters, ", "))
+			}
+			if s.APIType != APITypeVideo {
+				return nil, fmt.Errorf("stanza %q: job is only valid with api_type: video", s.ModelID)
 			}
 		}
 		if s.ImagePipeline != nil {
