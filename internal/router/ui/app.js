@@ -22,7 +22,7 @@
   function renderPeers(){const ps=status.peers||{};const disc=new Set(status.discovered||[]);const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+(m.gpus&&m.gpus.length?m.gpus.join(','):m.gpu):'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+(disc.has(n)?' <span class="subtle">discovered</span>':'')+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');setHTML($('peers'),cards||'<div class="panel empty">No fresh peer telemetry.</div>')}
   function sameOptions(sel,ids){return sel.options.length===ids.length&&ids.every((id,i)=>sel.options[i].value===id)}
   function fillSelect(sel,ids,html){const prev=sel.value;if(sameOptions(sel,ids))return;sel.innerHTML=html;if([...sel.options].some(o=>o.value===prev))sel.value=prev}
-  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));const vids=(status.models||[]).filter(m=>m.api_type==='video');fillSelect($('video-model'),vids.length?vids.map(m=>m.id):[''],vids.length?vids.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No video models available</option>');const ags=(status.models||[]).filter(m=>m.api_type==='audio_gen');fillSelect($('audiogen-model'),[''].concat(ags.map(m=>m.id)),'<option value="">Path default</option>'+ags.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));videoOptions();const peers=Object.keys(status.peers||{}).sort(),pv=$('act-peer').value;fillSelect($('act-peer'),['','local'].concat(peers.map(p=>'p:'+p)),'<option value="">All</option><option value="local">Local</option>'+peers.map(p=>'<option value="p:'+esc(p)+'">'+esc(p)+'</option>').join(''));if($('act-peer').value!==pv)actPaint(actRows)}
+  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));const vids=(status.models||[]).filter(m=>m.api_type==='video');fillSelect($('video-model'),vids.length?vids.map(m=>m.id):[''],vids.length?vids.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No video models available</option>');const ags=(status.models||[]).filter(m=>m.api_type==='audio_gen');fillSelect($('audiogen-model'),[''].concat(ags.map(m=>m.id)),'<option value="">Path default</option>'+ags.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));videoOptions();actPeerFill()}
   // Duration, resolution and seed are opt-in per video model through its capabilities list.
   function videoOptions(){const m=(status.models||[]).find(x=>x.id===$('video-model').value)||{};const caps=m.capabilities||[];for(const k of ['duration','resolution','seed'])$('video-opt-'+k).hidden=!caps.includes(k)}
   window.loadModel=async function(id){try{await json('/_router/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Load failed: '+e.message)}};
@@ -859,6 +859,7 @@
   // actRender redraws the stat cards, sparklines and rows for the ticked path groups
   // and the selected peer filter, with the running rows above the finished ones.
   function actRender(){
+    actPeerFill();
     let rows=actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch),hid=actRows.length-rows.length;
     $('act-hidden').textContent=hid?hid+' hidden':'';
     $('act-count').textContent=rows.length;
@@ -919,13 +920,11 @@
     }
   }
   let actFirst=true,acts=new Map(),actRows=[],actLive=new Map();
-  // The peer filter: Local is served here for a local client; a peer matches rows it ran, served or sent.
-  function actMatch(e){
-    const f=$('act-peer').value;
-    if(!f)return true;
-    if(f==='local')return !e.node&&!e.from_peer&&(!e.target||e.target===status.node);
-    return e.node===f.slice(2)||e.target===f.slice(2)||e.from_peer===f.slice(2);
-  }
+  // The peer filter matches the server's origin field: Local is a client of this node, 'p:'+name a request that peer sent.
+  function actMatch(e){const f=$('act-peer').value;return !f||e.origin===(f==='local'?f:f.slice(2))}
+  // Peer options are the configured peers, every origin in the rows (a sender need not be configured) and the current pick, so it never drops.
+  const actPeers=(rows,cur)=>[...new Set(Object.keys(status.peers||{}).concat(rows.map(e=>e.origin),cur.startsWith('p:')?[cur.slice(2)]:[]))].filter(p=>p&&p!=='local').sort();
+  function actPeerFill(){const peers=actPeers(actRows.concat([...actLive.values()]),$('act-peer').value);fillSelect($('act-peer'),['','local'].concat(peers.map(p=>'p:'+p)),'<option value="">All</option><option value="local">Local</option>'+peers.map(p=>'<option value="p:'+esc(p)+'">'+esc(p)+'</option>').join(''))}
   $('act-peer').onchange=()=>actPaint(actRows);
 
   // The Activity view listens on /_router/activity/stream only while it is showing.
@@ -978,7 +977,7 @@
   // Rows are matched by id and updated in place; see syncRows.
   const IMG_PATH=/\/(images\/(generations|edits|variations)|txt2img|img2img)$/;
   const ACT_NOTE='No generation requests yet. Send one from the Playground or any client.';
-  function setNote(text){$('activity-rows').querySelectorAll('.act-note').forEach(n=>n.remove());$('activity-rows').insertAdjacentHTML('beforeend','<tr class="act-note"><td colspan="10" class="empty">'+esc(text)+'</td></tr>')}
+  function setNote(text){$('activity-rows').querySelectorAll('.act-note').forEach(n=>n.remove());$('activity-rows').insertAdjacentHTML('beforeend','<tr class="act-note"><td colspan="11" class="empty">'+esc(text)+'</td></tr>')}
   function actCells(e){
     const tok=e.tokens||{};
     const thumb=IMG_PATH.test(e.path||'')?'<span class="thumb" aria-hidden="true" data-id="'+esc(e.id)+'" data-state="'+(e.has_capture?'wait':'none')+'"'+(e.thumb_issue?' title="'+esc(e.thumb_issue)+'"':'')+'></span>':'';
@@ -986,6 +985,7 @@
     return [
       ['mono',esc(fmtTime(e.timestamp))],
       ['','<div class="model-line">'+thumb+'<div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(actWhere(e))+'</div></div></div>'],
+      ['mono',esc(e.origin||'—')],
       ['mono',esc(e.method||'')+' '+esc(e.path||'')],
       [e.status>=400?'status-bad':'status-ok',esc(e.status)],
       ['mono',io[0]],
@@ -1004,6 +1004,7 @@
     return [
       ['mono',esc(fmtTime(e.started))],
       ['','<div class="model-line"><div><div class="model-id">'+esc(e.model||'—')+'</div><div class="subtle">'+esc(actWhere(e))+'</div></div></div>'],
+      ['mono',esc(e.origin||'—')],
       ['mono',esc(e.method||'')+' '+esc(e.path||'')],
       e.lost?['status-bad','Lost']:['','<span class="spinner" aria-hidden="true"></span>Running'],
       ['mono','—'],
@@ -1052,7 +1053,7 @@
       let tr=have.get(id);
       if(!tr){
         tr=document.createElement('tr');tr.tabIndex=0;tr.dataset.id=id;tr._c=[];
-        for(let i=0;i<10;i++)tr.appendChild(document.createElement('td'));
+        for(let i=0;i<11;i++)tr.appendChild(document.createElement('td'));
         if(animate)tr.classList.add('row-in');
       }
       paintRow(tr,e);

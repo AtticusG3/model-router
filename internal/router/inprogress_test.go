@@ -139,6 +139,10 @@ func TestInProgressAcrossMesh(t *testing.T) {
 		onA, onB = a[0], b[0]
 		return onA.Tokens > 0 && onB.Tokens > 0 && onA.Prompt != "" && onB.Prompt != ""
 	})
+	// Alpha's client sent it, so it is local on alpha though bravo served it; on bravo it came from alpha.
+	if onA.Origin != "local" || onB.Origin != "alpha" {
+		t.Fatalf("origins alpha %q bravo %q", onA.Origin, onB.Origin)
+	}
 	if onA.Model != "chat" || onA.Target != "bravo" || onA.FromPeer != "" || onA.Path != "/v1/chat/completions" ||
 		onA.Started.IsZero() || onA.Prompt != prompt || onA.TTFTMs < 1 {
 		t.Fatalf("alpha in progress = %+v", onA)
@@ -174,10 +178,10 @@ func TestInProgressAcrossMesh(t *testing.T) {
 	waitJob(t, "both nodes finished", func() bool {
 		return len(rA.Activity().InProgress()) == 0 && len(rB.Activity().InProgress()) == 0
 	})
-	if rows := rA.Activity().List(); len(rows) != 1 || rows[0].ID != onA.ID || rows[0].Target != "bravo" {
+	if rows := rA.Activity().List(); len(rows) != 1 || rows[0].ID != onA.ID || rows[0].Target != "bravo" || rows[0].Origin != "local" {
 		t.Fatalf("alpha rows = %+v", rows)
 	}
-	if rows := rB.Activity().List(); len(rows) != 1 || rows[0].ID != onB.ID || rows[0].FromPeer != "alpha" {
+	if rows := rB.Activity().List(); len(rows) != 1 || rows[0].ID != onB.ID || rows[0].FromPeer != "alpha" || rows[0].Origin != "alpha" {
 		t.Fatalf("bravo rows = %+v", rows)
 	}
 	tel := rB.TelemetrySnapshot()

@@ -949,11 +949,22 @@ The snapshot a node publishes:
 - `in_progress`: up to 50 logged requests still running (the rows the
   Activity log will write), newest first: `id` (the Activity id the row will
   get), `model`, `target`, `method`, `path`, `started`, `from_peer` (the
-  incoming `X-Model-Router-Peer`), `ttft_ms` and streamed `tokens` once the
-  first token is out, and the first 120 characters of the prompt. No bodies.
+  incoming `X-Model-Router-Peer`), `origin`, `ttft_ms` and streamed `tokens`
+  once the first token is out, and the first 120 characters of the prompt. No
+  bodies.
 - `recent`: the last 20 finished Activity rows as summaries (`id`, `model`,
-  `path`, `status`, `duration_ms`, `tokens`, `target`, `from_peer`), so a
-  peer can see a request it saw running finish.
+  `path`, `status`, `duration_ms`, `tokens`, `target`, `from_peer`,
+  `origin`), so a peer can see a request it saw running finish.
+
+`origin` is who sent the request: `local` for a client of the node, else the
+peer in `from_peer`. Every Activity row, running entry and stream row carries
+it. `target` is not the origin: it names the node that served the request,
+which is this node for a request a peer forwarded in. A stream row from a
+peer's telemetry gets that peer's name (or its `from_peer`), since the peer's
+own `local` means a client of the peer. The Activity page's peer filter
+matches on `origin`: Local is `local`, and the peer list is the configured
+peers plus every origin in the rows, so a sender that is not a configured
+peer can still be picked.
 
 Node name plus `id` keys a request across the mesh. Both lists are left out
 when empty, and older telemetry without them still parses. Rows whose model

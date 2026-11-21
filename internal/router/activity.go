@@ -3,6 +3,7 @@ package router
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
@@ -116,7 +117,13 @@ type ActivityEntry struct {
 	// FromPeer is the node that proxied the request here, from its
 	// X-Model-Router-Peer header; empty for a client request.
 	FromPeer string `json:"from_peer,omitempty"`
+	// Origin is who sent the request: originLocal for a client of this node,
+	// else the sending peer (FromPeer, or the peer whose telemetry it came from).
+	Origin string `json:"origin"`
 }
+
+// originLocal is the Origin of a request a client sent to this node.
+const originLocal = "local"
 
 // maxInProgress caps the running requests listed in the Activity API and
 // telemetry; maxRecent is how many finished rows telemetry summarises.
@@ -136,6 +143,7 @@ type InProgressEntry struct {
 	Path     string    `json:"path"`
 	Started  time.Time `json:"started"`
 	FromPeer string    `json:"from_peer,omitempty"`
+	Origin   string    `json:"origin"`
 	TTFTMs   int       `json:"ttft_ms,omitempty"`
 	// Tokens is the streamed chunks so far, about one per generated token.
 	Tokens int `json:"tokens,omitempty"`
@@ -154,6 +162,7 @@ type RecentEntry struct {
 	Tokens     int    `json:"tokens,omitempty"`
 	Target     string `json:"target,omitempty"`
 	FromPeer   string `json:"from_peer,omitempty"`
+	Origin     string `json:"origin"`
 }
 
 // voiceAdminKind is the MediaStats kind of a voice library write or delete.
@@ -276,6 +285,7 @@ func (a *ActivityLog) begin(e InProgressEntry) *InProgressEntry {
 	defer a.mu.Unlock()
 	a.nextID++
 	e.ID = a.nextID
+	e.Origin = cmp.Or(e.FromPeer, originLocal)
 	a.running[e.ID] = &e
 	return &e
 }
@@ -315,7 +325,7 @@ func (a *ActivityLog) Recent() []RecentEntry {
 	for _, e := range rows {
 		out = append(out, RecentEntry{
 			ID: e.ID, Model: e.Model, Path: e.Path, Status: e.Status, DurationMs: e.DurationMs,
-			Tokens: e.Tokens.CompletionTokens, Target: e.Target, FromPeer: e.FromPeer,
+			Tokens: e.Tokens.CompletionTokens, Target: e.Target, FromPeer: e.FromPeer, Origin: e.Origin,
 		})
 	}
 	return out
@@ -409,6 +419,7 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []by
 		a.nextID++
 		entry.ID = a.nextID
 	}
+	entry.Origin = cmp.Or(entry.FromPeer, originLocal)
 	// The finished row replaces the running entry under the same lock.
 	delete(a.running, entry.ID)
 	cap.ID = entry.ID
