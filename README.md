@@ -175,8 +175,11 @@ private or Tailscale address.
 ## Operator WebUI (`/ui/`)
 
 Catalog **Load** / **Unload** only start and stop **this node's** stanzas.
-Remote rows are Mesh routed: the router picks a peer when a request names
-that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
+The **Peers** cell has one chip per configured peer that serves the id:
+`loaded` (with GPU and in-flight/slots), `available` (advertised, not running)
+or `stale` (its telemetry is too old to trust); hover a chip for when it was
+last seen. Remote rows are mesh routed: the router picks a peer when a request
+names that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
 `qwen3.8-27b`), choose the id in the **Playground** Chat tab and send — that is a normal
 `/v1/chat/completions` request, so the node `POST`s `/_router/load` on a
 fresh peer and streams the reply. The Image tab is the same for `api_type:

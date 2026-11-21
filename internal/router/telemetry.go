@@ -178,13 +178,20 @@ func NewPeerCache(stale time.Duration) *PeerCache {
 
 // Fresh reports whether the peer has telemetry newer than the staleness window.
 func (c *PeerCache) Fresh(name string) bool {
+	_, _, fresh := c.Entry(name)
+	return fresh
+}
+
+// Entry returns the peer's cached telemetry, when it arrived and whether it is
+// still inside the staleness window. t is nil when nothing has arrived yet.
+func (c *PeerCache) Entry(name string) (t *Telemetry, seen time.Time, fresh bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.peers[name]
 	if !ok || e.Telemetry == nil {
-		return false
+		return nil, time.Time{}, false
 	}
-	return time.Since(e.Seen) <= c.stale
+	return e.Telemetry, e.Seen, time.Since(e.Seen) <= c.stale
 }
 
 // Set stores a peer snapshot.

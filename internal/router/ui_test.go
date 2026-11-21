@@ -233,3 +233,20 @@ func TestRouterLogsSnapshotFeedsUIFallback(t *testing.T) {
 		}
 	}
 }
+
+// The model catalog has a Peers cell with one escaped chip per peer, and
+// remote-only rows no longer say "Mesh routed".
+func TestEmbeddedUIModelCatalogPeers(t *testing.T) {
+	for _, want := range []string{
+		"<th>State</th><th>Peers</th><th>VRAM</th>", "<td>'+peerChips(m.peers)+'</td>",
+		"function peerChips", "esc(bits.join(' · '))", "'Last seen '+new Date(p.last_seen*1000)",
+		".state.loaded{", `colspan="6"`,
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if strings.Contains(webUIHTML, "Mesh routed") {
+		t.Error("remote rows still say Mesh routed instead of showing peer chips")
+	}
+}
