@@ -1229,9 +1229,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.serveJob(w, req, id)
 		return
 	}
-	if r.cfg().VoiceDir != "" && isVoiceLibraryPath(req) {
-		r.serveVoiceLibrary(w, req)
-		return
+	if r.cfg().VoiceDir != "" {
+		library, answered := r.voiceLibraryRoute(w, req)
+		if answered {
+			return
+		}
+		if library {
+			r.serveVoiceLibrary(w, req)
+			return
+		}
 	}
 	if isVoiceList(req) && r.serveVoiceUnion(w, req) {
 		return

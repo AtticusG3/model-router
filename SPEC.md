@@ -444,7 +444,10 @@ measured limits are in `docs/research/tts-backends.md`.
   stanza, or the only one). So do `GET /v1/audio/voices`,
   `GET /v1/audio/voices/{id}`, `POST /v1/audio/voices` and
   `DELETE /v1/audio/voices/{id}`; a GET or DELETE names its model in
-  `?model=`. The router does not rewrite `model` for a local stanza, so the
+  `?model=`, and a POST names it in the body — a JSON `model` field, or a
+  `model` part of the multipart form. That holds even on a node with a voice
+  library: only a POST with no model in the query or body is a library write.
+  The router does not rewrite `model` for a local stanza, so the
   backend must accept the stanza id as its model name.
 - **Voice list.** A model-less `GET /v1/audio/voices` on a node with more than
   one speech stanza asks the speech default (loading it if needed) and every
@@ -452,20 +455,29 @@ measured limits are in `docs/research/tts-backends.md`.
   `{"object":"list","data":[{"id":"narrator","model":"tts-clone"}, ...]}`. A
   voice the backend gives as a bare string becomes `{"id": ...}`; an object
   keeps its fields and gains `model`. A stanza that fails or has no voice list
-  is left out (logged); when every one fails the answer is `502`. Listing
-  voices never starts a second speech model. With one candidate the backend's
-  own answer passes through unchanged.
-- **Voice library.** Setting top-level `voice_dir` makes the router own
-  model-less `GET/POST /v1/audio/voices` and
-  `GET/DELETE /v1/audio/voices/{id}`; `?model=` still goes to that stanza's
-  backend. The library is one `<id>.wav` clip and one `<id>.json` sidecar per
+  is left out (logged); when every one fails the answer is `502`, unless a
+  voice library is configured, in which case the library rows are answered
+  with `200`. Listing voices never starts a second speech model. On a node
+  with a voice library the library's voices are merged into the same list,
+  each tagged `"source":"library"`. With one candidate and no voice library
+  the backend's own answer passes through unchanged.
+- **Voice library.** Setting top-level `voice_dir` makes the router own voice
+  writes and single-voice reads: `POST /v1/audio/voices` with no model in the
+  query or body, and `GET/DELETE /v1/audio/voices/{id}`. A POST that names a
+  model in its body goes to that stanza's backend instead, `?model=` still
+  goes to that stanza's backend, and a model-less `GET /v1/audio/voices`
+  unions the library voices with the backend presets (see Voice list).
+  The library is one `<id>.wav` clip and one `<id>.json` sidecar per
   voice, so it survives a restart and needs no database. `POST` is multipart
   with `name`, `file` (`audio_sample` is accepted too), `ref_text`, `language`
   and `consent`; every one is required, and a missing `consent` is `400`. The
   clip must be a WAV, its name must match `[a-z0-9-]{1,64}`, and
   `voice_max_mb` / `voice_max_seconds` cap it (`413` over either, `409` for an
-  existing id). `GET` on the collection answers
-  `{"object":"list","data":[...]}` without audio; `GET` on one id answers its
+  existing id). A POST that names a model belongs to the backend and is capped
+  by `max_request_body_mb` instead, so the clip cap and its 413 apply only to a
+  library write. `GET` on the collection lists the library rows alongside the
+  backend presets, without audio; when every candidate backend fails the
+  library rows are still answered with `200`; `GET` on one id answers its
   sidecar; `DELETE` removes both files. The sidecar holds `id`, `name`,
   `hash` (SHA-256), `created`, `consent`, `who`, `ref_text` and `language`.
 - **Library voice on a speech request.** `POST /v1/audio/speech` (and

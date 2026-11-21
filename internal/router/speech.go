@@ -65,6 +65,18 @@ func isVoiceList(req *http.Request) bool {
 // stanza or none to the normal route.
 func (r *Router) serveVoiceUnion(w http.ResponseWriter, req *http.Request) bool {
 	cfg := r.cfg()
+	voices := []any{}
+	// The library joins the model-less list rather than replacing it: the
+	// backend presets stay visible, each library row is tagged with source.
+	if cfg.VoiceDir != "" {
+		recs, err := r.voiceRecords()
+		if err != nil {
+			r.logger.Warnf("voice library unavailable: %v", err)
+		}
+		for _, rec := range recs {
+			voices = append(voices, libraryVoiceRow{voiceRecord: rec, Source: "library"})
+		}
+	}
 	def, _ := cfg.DefaultStanza(config.APITypeSpeech)
 	var ids []string
 	for _, id := range cfg.StanzaIDs() {
@@ -73,9 +85,22 @@ func (r *Router) serveVoiceUnion(w http.ResponseWriter, req *http.Request) bool 
 		}
 	}
 	if len(ids) < 2 {
-		return false
+		if cfg.VoiceDir == "" {
+			return false
+		}
+		// With a library, the one candidate stanza's list joins the union
+		// instead of the library answering alone; a stanza that does not list
+		// is left out and the library rows answer by themselves.
+		if len(ids) == 1 {
+			if list, err := r.stanzaVoices(req, ids[0]); err == nil {
+				voices = append(voices, list...)
+			} else {
+				r.logger.Warnf("voice list left out %s: %v", ids[0], err)
+			}
+		}
+		writeJSON(w, map[string]any{"object": "list", "data": voices})
+		return true
 	}
-	voices := []any{}
 	var failed []string
 	for _, id := range ids {
 		list, err := r.stanzaVoices(req, id)
@@ -85,7 +110,7 @@ func (r *Router) serveVoiceUnion(w http.ResponseWriter, req *http.Request) bool 
 		}
 		voices = append(voices, list...)
 	}
-	if len(failed) == len(ids) {
+	if len(failed) == len(ids) && cfg.VoiceDir == "" {
 		http.Error(w, "no speech backend listed its voices: "+strings.Join(failed, "; "), http.StatusBadGateway)
 		return true
 	}
@@ -94,6 +119,13 @@ func (r *Router) serveVoiceUnion(w http.ResponseWriter, req *http.Request) bool 
 	}
 	writeJSON(w, map[string]any{"object": "list", "data": voices})
 	return true
+}
+
+// libraryVoiceRow is a library record as a list row, distinguishable from a
+// backend voice by its source field.
+type libraryVoiceRow struct {
+	voiceRecord
+	Source string `json:"source"`
 }
 
 // stanzaVoices fetches one stanza's voice list through the normal local path
