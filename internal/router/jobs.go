@@ -228,7 +228,7 @@ func (r *Router) endJob(j *job, state string) {
 			Timestamp: j.created, Model: j.model, Target: j.target,
 			Method: http.MethodPost, Path: j.coll, Status: j.code,
 			DurationMs: int(took.Milliseconds()), JobID: j.id, JobState: state,
-		}, ActivityCapture{}, nil, "")
+		}, ActivityCapture{}, nil, "", [2][]preview{})
 	}
 }
 

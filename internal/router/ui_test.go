@@ -254,6 +254,9 @@ func TestEmbeddedUICaptureParsedImages(t *testing.T) {
 		"imgs.map(s=>capImg(s,'Generated image'))",
 		`target="_blank" rel="noopener" title="Open full size in a new tab"`,
 		"a.href=URL.createObjectURL(", "Image preview no longer stored",
+		// A shed response preview falls back once to the row's thumbnail.
+		"const thumb=im.src.replace(/\\/image\\/resp\\/0$/,'/thumb');",
+		"if(thumb!==im.src){a.href=im.src=thumb;return}",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)
