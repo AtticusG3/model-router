@@ -42,6 +42,8 @@ const (
 	maxImageBody = 32 * 1024 * 1024
 	// maxThumbEdge is the long edge of a stored thumbnail, in pixels.
 	maxThumbEdge = 160
+	// maxPreviewEdge is the long edge of a stored image preview, in pixels.
+	maxPreviewEdge = 1024
 	// maxHashBytes is how much of an uncaptured media response is hashed for
 	// the Activity row: an identity check, not a checksum of the whole body.
 	maxHashBytes = 64 << 10
@@ -202,8 +204,21 @@ type storedCapture struct {
 	cap      ActivityCapture
 	blob     []byte
 	blobType string
+	// previews are the request [0] and response [1] images, numbered as the
+	// capture's "[image n: …]" placeholders; prevSz is their share of size.
+	previews [2][]preview
+	prevSz   int
 	size     int
 }
+
+// preview is one stored image, served at /_router/activity/{id}/image/{side}/{n}.
+type preview struct {
+	data []byte
+	ct   string
+}
+
+// previewSides are the {side} values of the image endpoint, by previews index.
+var previewSides = []string{"req", "resp"}
 
 // ActivityLog is an in-memory ring of recent proxied requests plus capped
 // request/response captures for the operator Activity page.
@@ -334,6 +349,62 @@ func (a *ActivityLog) Blob(id int) ([]byte, string, bool) {
 	return sc.blob, sc.blobType, true
 }
 
+// Preview returns image n of a capture's request (side 0) or response (side 1).
+func (a *ActivityLog) Preview(id, side, n int) ([]byte, string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ps := a.captures[id].previews[side]
+	if n < 0 || n >= len(ps) || len(ps[n].data) == 0 {
+		return nil, "", false
+	}
+	return ps[n].data, ps[n].ct, true
+}
+
+// addPreviews stores the image previews beside a recorded capture. They are
+// the first thing shed for room: older captures' previews go before these, and
+// these are dropped rather than evicting any capture.
+func (a *ActivityLog) addPreviews(id int, previews [2][]preview) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sc, ok := a.captures[id]
+	if !ok {
+		return
+	}
+	size := 0
+	for _, ps := range previews {
+		for _, p := range ps {
+			size += len(p.data)
+		}
+	}
+	if size == 0 {
+		return
+	}
+	for a.captureSz+size > maxCaptureBytes {
+		if !a.dropOldestPreviews() {
+			return
+		}
+	}
+	sc.previews, sc.prevSz = previews, size
+	sc.size += size
+	a.captures[id] = sc
+	a.captureSz += size
+}
+
+// dropOldestPreviews frees the previews of the oldest capture that has any;
+// false when none does.
+func (a *ActivityLog) dropOldestPreviews() bool {
+	for _, e := range a.entries {
+		if sc, ok := a.captures[e.ID]; ok && sc.prevSz > 0 {
+			a.captureSz -= sc.prevSz
+			sc.size -= sc.prevSz
+			sc.previews, sc.prevSz = [2][]preview{}, 0
+			a.captures[e.ID] = sc
+			return true
+		}
+	}
+	return false
+}
+
 func (a *ActivityLog) dropOldestCapture() {
 	if len(a.captures) == 0 {
 		return
@@ -365,7 +436,9 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []by
 	cap.ID = entry.ID
 	size := len(cap.ReqBody) + len(cap.RespBody) + len(blob)
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
-		a.dropOldestCapture()
+		if !a.dropOldestPreviews() {
+			a.dropOldestCapture()
+		}
 	}
 	// A capture worth keeping holds bytes or flags a truncated request: an
 	// undrained upload with an empty response must still be visible as partial,
@@ -916,6 +989,36 @@ func thumbFromImageResponse(body []byte) ([]byte, string) {
 	return buf.Bytes(), ""
 }
 
+// imagePreviews decodes each base64 image in a JSON body, in the order
+// clipJSON numbers its "[image n: …]" placeholders, into a JPEG with its long
+// edge at most maxPreviewEdge. A slot is empty when that image could not be read.
+func imagePreviews(body []byte) []preview {
+	strs, ok := longJSONStrings(body)
+	if !ok {
+		return nil
+	}
+	var out []preview
+	for _, s := range strs {
+		if s.img == "" {
+			continue
+		}
+		var p preview
+		// decodeB64Image checks the decoded bytes are a PNG, JPEG or WEBP.
+		raw := decodeB64Image(s.val)
+		if src, _, err := image.Decode(bytes.NewReader(raw)); err == nil {
+			var buf bytes.Buffer
+			if jpeg.Encode(&buf, downscale(src, maxPreviewEdge), &jpeg.Options{Quality: 85}) == nil {
+				p = preview{buf.Bytes(), "image/jpeg"}
+			}
+		} else if raw != nil {
+			// shortcut: a WEBP (no decoder in the standard library) is kept as sent, add golang.org/x/image/webp if large ones crowd the ring.
+			p = preview{raw, http.DetectContentType(raw)}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
 // downscale returns src scaled so its long edge is at most max pixels, sampling
 // the nearest source pixel.
 // shortcut: nearest-neighbour, swap in a box filter if thumbnails look aliased.
@@ -1213,7 +1316,16 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 			blob = thumb
 		}
 	}
-	r.activity.record(entry, ActivityCapture{
+	var previews [2][]preview
+	// Only a body that can hold an image is walked: every image path, and a
+	// chat request with an image_url data URL.
+	if isImageRequest(req.URL.Path) || bytes.Contains(reqBody, []byte(`"data:image/`)) {
+		previews[0] = imagePreviews(reqBody)
+	}
+	if isImageRequest(req.URL.Path) && !rec.media && !rec.truncated {
+		previews[1] = imagePreviews(rec.body.Bytes())
+	}
+	entry = r.activity.record(entry, ActivityCapture{
 		ReqHeaders:    copyHeaderMap(req.Header),
 		ReqBody:       reqStr,
 		RespHeaders:   copyHeaderMap(rec.Header()),
@@ -1222,6 +1334,9 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		ClippedFields: fields,
 		Notes:         imageNotesFrom(req),
 	}, blob, blobType)
+	if entry.HasCapture {
+		r.activity.addPreviews(entry.ID, previews)
+	}
 }
 
 // pathAPIType is the api_type a request path serves, "" when none.
