@@ -1,5 +1,7 @@
 # Model family icons
 
+> **Last reviewed:** 2026-11-22
+
 Bundled into the binary with the UI (see `internal/router/ui.go`); the UI never
 fetches an icon over the network. The file name is the family id from
 `internal/router/family.go`.

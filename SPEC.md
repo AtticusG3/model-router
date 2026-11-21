@@ -1,4 +1,4 @@
-# Model Router — SPEC
+# Model Router, SPEC
 
 Internal tool. Not a public repo. Replaces llama-swap fleet-wide (Nomad, Buster,
 Nugget, Digger, Gareth's homelab). One static binary, same build on every node.
@@ -13,7 +13,7 @@ disagree with this file, this file and the code win.
 Process-supervision patterns (spawn, log capture, crash/restart, health-check
 polling, port allocation) are adapted from **mostlygeek/llama-swap**. Where
 code is copied directly rather than reimplemented, the source file carries a
-comment crediting llama-swap and its license.
+comment crediting llama-swap and its licence.
 
 The sd.cpp backend integration (API surface, request/response shape) is
 built against **leejet/stable-diffusion.cpp**, credited in the same way
@@ -30,7 +30,7 @@ wherever its API contract shapes the code directly.
   not local, local GPUs cannot admit it, or every local slot is busy). The
   client still talks to the node it hit; that node reverse-proxies.
 - Backend-agnostic: llama-server (stock or TurboQuant), sd.cpp, and any other
-  process are the same thing to the router — a command, a VRAM budget, a
+  process are the same thing to the router, a command, a VRAM budget, a
   health check, and a way to match an incoming request to a `model_id`.
 
 ## Non-goals
@@ -69,17 +69,17 @@ lists every local stanza anyway.
 
 ## What runs in the binary
 
-1. **Stanza catalog** — the local YAML: every model this node can run, plus
+1. **Stanza catalog**, the local YAML: every model this node can run, plus
    pools, peers, and preload.
-2. **Process supervisor** — spawns, health-polls, restarts, and stops one
+2. **Process supervisor**, spawns, health-polls, restarts, and stops one
    backend process per instance.
-3. **GPU poller** — `nvidia-smi` only (no pynvml, so the binary stays
+3. **GPU poller**, `nvidia-smi` only (no pynvml, so the binary stays
    dependency-free). One sick GPU does not hide the others: enumerate with
    `-L`, then query each index.
-4. **Admission ledger** — per-GPU VRAM reservations. Lives only on this node.
-5. **HTTP API** — OpenAI-compatible and sd.cpp passthrough, control routes,
+4. **Admission ledger**, per-GPU VRAM reservations. Lives only on this node.
+5. **HTTP API**, OpenAI-compatible and sd.cpp passthrough, control routes,
    and the embedded operator UI.
-6. **Peer client** — pulls peer telemetry, calls `POST /_router/load`, then
+6. **Peer client**, pulls peer telemetry, calls `POST /_router/load`, then
    reverse-proxies the client request.
 
 Startup order: parse config, bind HTTP, poll GPUs once (so preload sees real
@@ -488,7 +488,7 @@ measured limits are in `docs/research/tts-backends.md`.
   stanza, or the only one). So do `GET /v1/audio/voices`,
   `GET /v1/audio/voices/{id}`, `POST /v1/audio/voices` and
   `DELETE /v1/audio/voices/{id}`; a GET or DELETE names its model in
-  `?model=`, and a POST names it in the body — a JSON `model` field, or a
+  `?model=`, and a POST names it in the body, a JSON `model` field, or a
   `model` part of the multipart form. That holds even on a node with a voice
   library: only a POST with no model in the query or body is a library write.
   The router does not rewrite `model` for a local stanza, so the
@@ -832,8 +832,8 @@ Two mechanisms:
 
 **Preload restore.** A model listed in `preload` that was evicted to make
 room comes back on its own. The node remembers the eviction (stale, idle or
-resident) with the instance that caused it, and when a model stops — the
-idle sweep, or `POST /_router/unload` — starts the preload models again in
+resident) with the instance that caused it, and when a model stops, the
+idle sweep, or `POST /_router/unload`, starts the preload models again in
 config order. A restore runs only when the model fits without evicting
 anything (`CanAdmit`) and is not already starting, so it never evicts to
 bring a preload back and never competes with a load in flight; a model that

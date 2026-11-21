@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Local music and sound-effect generation backends
+
 # Local music and sound-effect generation backends
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20. Part of #64, issue #87. Keeps the job API shape
 from #83 and the async job layer from #69.
@@ -188,9 +192,9 @@ where they exist.
 | Method and path | Purpose | Request | Response |
 | --- | --- | --- | --- |
 | `POST /v1/audio/generations` | create a job | JSON, or `multipart/form-data` when a file is attached | `200` or `202` with a job record |
-| `GET /v1/audio/generations/{id}` | status | — | job record |
-| `GET /v1/audio/generations/{id}/content` | the audio | — | audio bytes, `Content-Type` from the format (`audio/mpeg`, `audio/flac`, `audio/wav`, `audio/ogg`) |
-| `DELETE /v1/audio/generations/{id}` | cancel or forget | — | job record, or `409` when a running job cannot be stopped |
+| `GET /v1/audio/generations/{id}` | status | n/a | job record |
+| `GET /v1/audio/generations/{id}/content` | the audio | n/a | audio bytes, `Content-Type` from the format (`audio/mpeg`, `audio/flac`, `audio/wav`, `audio/ogg`) |
+| `DELETE /v1/audio/generations/{id}` | cancel or forget | n/a | job record, or `409` when a running job cannot be stopped |
 
 Create fields (all optional except `prompt` or `video`):
 
@@ -228,13 +232,13 @@ extracts, so the shapes below are `(verify)` against the installed version
 | --- | --- | --- | --- |
 | `POST /release_task` | queue a generation | `application/json`, `multipart/form-data` or `application/x-www-form-urlencoded` (below) | wrapper with `data.task_id` |
 | `POST /query_result` | batch status and results | `{"task_id_list": ["<id>", ...]}`. The name matters: a wrong key such as `task_ids` silently returns an empty list (wrapper README) | wrapper with `data[]`: `task_id`, `status` (`0` running, `1` succeeded, `2` failed), `result` (a **JSON string** to parse again) |
-| `GET /v1/audio?path=...` | download one file | — | the audio file |
-| `GET /health` | liveness | — | `200` and a status body |
-| `GET /v1/models` | DiT models on the server | — | list |
+| `GET /v1/audio?path=...` | download one file | n/a | the audio file |
+| `GET /health` | liveness | n/a | `200` and a status body |
+| `GET /v1/models` | DiT models on the server | n/a | list |
 | `POST /v1/init` | load or switch a DiT (slot 1-3) and optionally the LM | `{model, slot, init_llm, lm_model_path}` | wrapper |
-| `GET /v1/stats` | load and average job time | — | wrapper |
+| `GET /v1/stats` | load and average job time | n/a | wrapper |
 | `POST /format_input`, `POST /create_random_sample` | LM helpers (enrich a caption or lyrics, make a random sample) | JSON | wrapper |
-| `GET /docs` | FastAPI's generated docs | — | HTML |
+| `GET /docs` | FastAPI's generated docs | n/a | HTML |
 
 **Create fields** (snake_case or camelCase are both accepted; aliases noted):
 `prompt` (the caption), `lyrics`, `audio_duration` (alias `duration`,
@@ -807,3 +811,14 @@ This repo
 - `internal/router/jobs.go`, `internal/router/matcher.go`, `internal/router/proc.go`,
   `internal/router/router.go`, `cmd/fake-model/main.go`
 - the GPU host's node config under `configs/`
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

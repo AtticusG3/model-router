@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Open-source model-router landscape
+
 # Open-source model-router landscape
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-10-25. Default-branch docs and source unless a URL says otherwise.
 
@@ -6,15 +10,15 @@ Date of reading: 2026-10-25. Default-branch docs and source unless a URL says ot
 
 This note compares `model-router` (this repo) with other open-source programs that load local models on demand, proxy an OpenAI-shaped API, or place a model onto GPUs. The space, as used here, is: one or more machines with limited VRAM, a client that names a model, and a process that starts or selects a backend so that request can be served without a human restarting servers.
 
-Claims below come from official READMEs, official docs, GitHub repo metadata, or source files fetched from GitHub or the project's own docs site. Blogs and listicles were not used. If a behavior was not in a file that was opened, the cell says `?` (unverified). `gpustack-ai/GPUStack` is not the repo that exists; the project is [gpustack/gpustack](https://github.com/gpustack/gpustack).
+Claims below come from official READMEs, official docs, GitHub repo metadata, or source files fetched from GitHub or the project's own docs site. Blogs and listicles were not used. If a behaviour was not in a file that was opened, the cell says `?` (unverified). `gpustack-ai/GPUStack` is not the repo that exists; the project is [gpustack/gpustack](https://github.com/gpustack/gpustack).
 
 `model-router` today, from [README.md](../../README.md), [SPEC.md](../../SPEC.md), [PLAN.md](../../PLAN.md), and [internal/config/config.go](../../internal/config/config.go): OpenAI and sd.cpp passthrough, a process supervisor, idle TTL that marks a model stale but leaves it resident until VRAM is needed, live `nvidia-smi` admission plus a per-GPU reservation ledger, device pin / `1|2` placement / `0,1` split, `max_instances`, slots from `--parallel`/`-np`, a static peer mesh with router vs openai peers, pools, aliases, preload, an embedded `/ui/`, and Prometheus `/health` and `/metrics`. Non-goals that bound the recommendations: no central control plane, no consensus, a node must serve its own catalog with the LAN down, backend-agnostic, one static binary. No auth or TLS on the LAN. No dynamic discovery, autoscaling, or in-flight preemption. SPEC still leaves "hold the connection vs async job polling for slow spin-up" open.
 
 ## 2. Project index
 
-Pushed-at is the GitHub API `pushed_at` on the default branch's repo, not a release tag, except where noted. License is the API `license.spdx_id`.
+Pushed-at is the GitHub API `pushed_at` on the default branch's repo, not a release tag, except where noted. Licence is the API `license.spdx_id`.
 
-| Name | URL | What it is | License | Pushed (UTC) |
+| Name | URL | What it is | Licence | Pushed (UTC) |
 | --- | --- | --- | --- | --- |
 | model-router | this repo | Homelab router: on-demand backends, VRAM admission, static peer spill | (internal) | (local tree) |
 | llama-swap | https://github.com/mostlygeek/llama-swap | Single static binary that swaps any OpenAI/Anthropic-compatible server on demand | MIT | 2026-10-24 |
@@ -35,10 +39,10 @@ Pushed-at is the GitHub API `pushed_at` on the default branch's repo, not a rele
 
 Also confirmed, not given matrix columns:
 
-- [dollthing/goldseam](https://github.com/dollthing/goldseam) (the `avafloww/goldseam` URL redirects here). API description: warm KV-transfer llama.cpp swaps, TypeScript policy, per-GPU budget. MIT. Pushed 2026-06-22, zero stars. Its own README was not opened, so behavior past that description is unverified. Quiet enough that it is not a lift candidate.
+- [dollthing/goldseam](https://github.com/dollthing/goldseam) (the `avafloww/goldseam` URL redirects here). API description: warm KV-transfer llama.cpp swaps, TypeScript policy, per-GPU budget. MIT. Pushed 2026-06-22, zero stars. Its own README was not opened, so behaviour past that description is unverified. Quiet enough that it is not a lift candidate.
 - [lemonade-sdk/lemonade](https://github.com/lemonade-sdk/lemonade). API: local LLM server for GPUs and NPUs. Apache-2.0. Pushed 2026-10-24. No headless multi-model swap API was read, so it is omitted from the matrix.
 
-Not read, so not scored: kubeai, llmaz, AIBrix, Dynamo, the SGLang router, mistral.rs, Aphrodite, Jan, LM Studio CLI, and gguf-switchboard (a README turned up in search; license and push time were not confirmed). llama-swap's README has no related-projects section. ananke's README compares llama-swap, large-model-proxy, and Goldseam; those comparisons were checked against the other projects' own files where those files were opened.
+Not read, so not scored: kubeai, llmaz, AIBrix, Dynamo, the SGLang router, mistral.rs, Aphrodite, Jan, LM Studio CLI, and gguf-switchboard (a README turned up in search; licence and push time were not confirmed). llama-swap's README has no related-projects section. ananke's README compares llama-swap, large-model-proxy, and Goldseam; those comparisons were checked against the other projects' own files where those files were opened.
 
 ## 3. Feature matrix
 
@@ -67,7 +71,7 @@ Footnotes, one per column family:
 
 - **swap.** [README](https://github.com/mostlygeek/llama-swap/blob/main/README.md) and [docs/config.example.yaml](https://github.com/mostlygeek/llama-swap/blob/main/docs/config.example.yaml) (the example says it lists every option). On-demand swap, `cmd`, OpenAI and `/sdapi/v1/*`, groups or matrix for concurrency, `ttl` that unloads (`0` never, global default `0`), `concurrencyLimit` (values `> 0` override an internal default of 10 and answer `429`), peers are proxy base URLs. No `vram` field, so no live VRAM admission. GPU choice is whatever the user puts in `env` / `cmd`. `apiKeys` default empty (default-allow). `/ui` and `/metrics`.
 - **lcpp.** [tools/server/README.md](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) "Using multiple models", and [server-models.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-models.cpp) `pick_victim` / `unload_lru`. Router mode is `llama-server` with no model, sources cache / `--models-dir` / `--models-preset`, `--models-max` default 4 (`0` unlimited), `--models-autoload` default on, `--parallel` is slots inside a child. LRU eviction is by resident count. `pick_victim` skips `req_count != 0` and models that are not ready or sleeping. `--sleep-idle-seconds` unloads weights from RAM. `--rpc` is a server flag; the rpc-server protocol was not read. Presets can set `load-on-startup`. Not an arbitrary-command supervisor.
-- **LAI.** [core/cli/run.go](https://github.com/mudler/LocalAI/blob/master/core/cli/run.go). `--max-active-backends` (`0` unlimited) evicts LRU. `--watchdog-idle` default off, timeout `15m`, stops idle backends. `LOCALAI_VRAM_BUDGET` caps allocation (percent or absolute). Memory reclaimer default off, threshold `0.95`. `ForceEvictionWhenBusy` default false, with retries. `LOCALAI_SIZE_AWARE_EVICTION` default false evicts the largest model. `LOCALAI_MODEL_LOAD_FAILURE_COOLDOWN` default `10s`. P2P and federated flags default off. Galleries autoload by default. `api_keys.json` is named in the config-dir help.
+- **LAI.** [core/cli/run.go](https://github.com/mudler/LocalAI/blob/master/core/cli/run.go). `--max-active-backends` (`0` unlimited) evicts LRU. `--watchdog-idle` default off, timeout `15m`, stops idle backends. `LOCALAI_VRAM_BUDGET` caps allocation (per cent or absolute). Memory reclaimer default off, threshold `0.95`. `ForceEvictionWhenBusy` default false, with retries. `LOCALAI_SIZE_AWARE_EVICTION` default false evicts the largest model. `LOCALAI_MODEL_LOAD_FAILURE_COOLDOWN` default `10s`. P2P and federated flags default off. Galleries autoload by default. `api_keys.json` is named in the config-dir help.
 - **GPU.** [README](https://github.com/gpustack/gpustack/blob/main/README.md): one server, workers join with `--server-url` and a token, catalog deploy downloads weights. [docs/scheduler.md](https://github.com/gpustack/gpustack/blob/main/docs/scheduler.md): filter then score; try single-GPU, then multi-GPU on one worker, then distributed, then CPU offload for backends that allow it; binpack or spread plus a model-file locality score. Replicas are a deployment property ([model deployment management](https://github.com/gpustack/gpustack/blob/main/docs/user-guide/model-deployment-management.md)). This is a control plane, not a request-time swapper.
 - **Xinf.** [Using Xinference](https://inference.readthedocs.io/en/latest/getting_started/using_xinference.html): `xinference-local` starts a supervisor and a worker together; a cluster is one `xinference-supervisor` and N `xinference-worker` processes pointed at it. [launch_model](https://inference.readthedocs.io/en/latest/reference/generated/xinference.client.Client.launch_model.html): `replica` (default 1), `n_worker` (default 1), `n_gpu`, `gpu_idx`, `request_limits`, `worker_ip`. Launch is an explicit API call. [Distributed inference](https://inference.readthedocs.io/en/latest/user_guide/distributed_inference.html): `n_worker > 1` shards across workers (vLLM TP/PP). Engines include llama.cpp, vLLM, SGLang, MLX.
 - **Tab.** [README](https://github.com/theroyallab/tabbyAPI/blob/main/README.md), [config_sample.yml](https://github.com/theroyallab/tabbyAPI/blob/main/config_sample.yml), [wiki: Usage](https://github.com/theroyallab/tabbyAPI/wiki/03.-Usage). OpenAI API, admin `POST /v1/model/load` and `/v1/model/unload`. Loading a different name unloads the current model. Unload terminates pending generations. Draft model block and LoRA list are config. `gpu_split` is an array of GB. Auth is admin key vs API key, with `disable_auth`.
@@ -75,8 +79,8 @@ Footnotes, one per column family:
 - **Lite.** [router settings](https://docs.litellm.ai/docs/proxy/config_settings), [routing](https://docs.litellm.ai/docs/routing), [reliability](https://docs.litellm.ai/docs/proxy/reliability). Strategies include `simple-shuffle`, `least-busy`, `usage-based-routing`, `latency-based-routing`. `allowed_fails` and `cooldown_time` pull a deployment out. `fallbacks` move to another model group after retries. `order` on deployments is ordered failover. Redis is for sharing counters across proxy instances. No local process supervisor.
 - **exo.** [README](https://github.com/exo-explore/exo/blob/main/README.md). Devices discover each other (Zenoh namespace to isolate clusters). Placement preview is `GET /instance/previews` (`memory_delta_by_node`, pipeline or tensor). The user `POST /instance`s a placement, then calls `/v1/chat/completions`. `EXO_OFFLINE` uses local files. Linux builds run on CPU; GPU on Linux is described as in development. RDMA is Thunderbolt on macOS.
 - **ank.** [README](https://github.com/philpax/ananke/blob/main/README.md) and [docs/memory-model.md](https://github.com/philpax/ananke/blob/main/docs/memory-model.md). First request loads; default idle unload is 10 minutes. NVML required for GPU placement. Templates `llama-cpp` and `command`. The memory model is a fitted llama.cpp (and ik_llama) estimator in `crates/estimate/`, not a generic `vram_mb`. The README's own comparison table says eviction is priority-based and switches are drain-then-restart.
-- **mux.** [README](https://github.com/doublewordai/llmux/blob/main/README.md) as returned from the repo page. One active model. A request for another drains in-flight work, runs the current model's `sleep` script, runs the target `wake` script, then proxies. The process is not supervised by llmux. Last push 2026-02-25 and the API reports no license.
-- **rama.** [ramalama-serve(1)](https://github.com/containers/ramalama/blob/main/docs/ramalama-serve.1.md). One model uses llama.cpp, vLLM, or MLX inside a container. Two or more model arguments, or none, start llama.cpp router mode (`--models-dir` behavior) and require a container runtime. Missing models are pulled. No VRAM ledger of its own.
+- **mux.** [README](https://github.com/doublewordai/llmux/blob/main/README.md) as returned from the repo page. One active model. A request for another drains in-flight work, runs the current model's `sleep` script, runs the target `wake` script, then proxies. The process is not supervised by llmux. Last push 2026-02-25 and the API reports no licence.
+- **rama.** [ramalama-serve(1)](https://github.com/containers/ramalama/blob/main/docs/ramalama-serve.1.md). One model uses llama.cpp, vLLM, or MLX inside a container. Two or more model arguments, or none, start llama.cpp router mode (`--models-dir` behaviour) and require a container runtime. Missing models are pulled. No VRAM ledger of its own.
 - **sp.** [README](https://github.com/speaches-ai/speaches/blob/master/README.md) and [src/speaches/config.py](https://github.com/speaches-ai/speaches/blob/master/src/speaches/config.py). Request names a model; it loads and later unloads. `stt_model_ttl` and `tts_model_ttl` default 300 (`-1` never, `0` immediate). `vad_model_ttl` default `-1`. Optional `api_key`. Audio API, not a chat/image fleet router. Whether unload waits for an in-flight transcription was not re-read in current source (an old issue described a race).
 - **dll.** [README](https://github.com/b4rtaz/distributed-llama/blob/main/README.md). Root loads weights and synchronizes; workers only compute a slice. Node count must be a power of two. Root is mandatory. `launch.py` downloads a named model. Not an on-demand multi-model proxy.
 - **lmp.** [README](https://github.com/perk11/large-model-proxy/blob/main/README.md). On connect or OpenAI `model`, check declared resources, stop the LRU service if short, start, healthcheck, proxy. If the victims are in use, the new request waits. `ResourcesAvailable.*.CheckCommand` can shell out to `nvidia-smi` and poll; without it, amounts are not checked against real usage. `reserved_by_starting_services` is a start-up reservation. `KillCommand` for Docker. Single machine.
@@ -115,7 +119,7 @@ From [docs/config.example.yaml](https://github.com/mostlygeek/llama-swap/blob/ma
 
 Ranked. Each one is something the sources actually implement. "Already" means `model-router` as described in the README, SPEC, PLAN, and `config.go`.
 
-### 1. Failed-load cooldown — lift
+### 1. Failed-load cooldown, lift
 
 LocalAI's `LOCALAI_MODEL_LOAD_FAILURE_COOLDOWN` (default 10s, doubles per consecutive failure up to 5 minutes, reset on success, `0` disables) refuses another load of a model that just failed to start, and returns 503 with `Retry-After`. The comment in [run.go](https://github.com/mudler/LocalAI/blob/master/core/cli/run.go) says this stops a polling client from respawning a crashing backend on every request.
 
@@ -125,17 +129,17 @@ This fleet has wrapper binaries and slow image servers. A crash loop on one stan
 
 **Verdict: lift.** Small, matches machines that already crash-restart, and does not add a control plane.
 
-### 2. VRAM headroom, not 100% of free — lift
+### 2. VRAM headroom, not 100% of free, lift
 
-Ollama's `OLLAMA_GPU_OVERHEAD` reserves a byte count per GPU before the scheduler treats memory as free ([envconfig/config.go](https://github.com/ollama/ollama/blob/main/envconfig/config.go)). LocalAI's `LOCALAI_VRAM_BUDGET` caps allocation at a percent or an absolute size, empty meaning all detected VRAM ([run.go](https://github.com/mudler/LocalAI/blob/master/core/cli/run.go)).
+Ollama's `OLLAMA_GPU_OVERHEAD` reserves a byte count per GPU before the scheduler treats memory as free ([envconfig/config.go](https://github.com/ollama/ollama/blob/main/envconfig/config.go)). LocalAI's `LOCALAI_VRAM_BUDGET` caps allocation as a per cent or an absolute size, empty meaning all detected VRAM ([run.go](https://github.com/mudler/LocalAI/blob/master/core/cli/run.go)).
 
 `model-router` admits against live `nvidia-smi` free minus the reservation ledger and the stanza's `vram_mb`. That can still book the last free megabyte. CUDA context, a sick 4060, and fragmentation need a margin. Buster's 4060 was already described in PLAN as nearly full.
 
-Sit it on admission: a node-level reserve (bytes or percent) subtracted from free before a load is accepted. Keep `vram_mb` as the per-stanza reservation. Do not replace the ledger with a percent-of-total guess.
+Sit it on admission: a node-level reserve (bytes or per cent) subtracted from free before a load is accepted. Keep `vram_mb` as the per-stanza reservation. Do not replace the ledger with a per-cent-of-total guess.
 
 **Verdict: lift.** It is the same admission path, with a constant the fleet can set per box.
 
-### 3. Health progress extends the spin-up deadline — lift
+### 3. Health progress extends the spin-up deadline, lift
 
 llama-swap's `healthCheckTimeout` (default 120s, floor 15s) restarts its countdown when the health body reports a changed `progress` value. A non-200 body like `{"progress": 0.42, "message": "loading tensors"}` is treated as alive ([config.example.yaml](https://github.com/mostlygeek/llama-swap/blob/main/docs/config.example.yaml)).
 
@@ -145,7 +149,7 @@ Sit it on the supervisor. Only treat a changing progress field as a deadline res
 
 **Verdict: lift.** It is the difference between a slow load and a dead one, which this fleet already has.
 
-### 4. Hold the connection and stream load status — lift
+### 4. Hold the connection and stream load status, lift
 
 SPEC leaves hold-vs-async open. llama-swap's `sendLoadingState` holds the HTTP request and writes loading lines into the reasoning stream so a chat UI shows progress instead of silence ([README](https://github.com/mostlygeek/llama-swap/blob/main/README.md), [config example](https://github.com/mostlygeek/llama-swap/blob/main/docs/config.example.yaml)). llama.cpp's router queues the request until a slot exists and does not answer with a job id ([server-models.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-models.cpp) `join` / `tick`). large-model-proxy holds the client connection, bounded by `ClientRequestBufferLimitBytes`, until health passes.
 
@@ -155,9 +159,9 @@ Sit it on the proxy, in front of an already-held load. Default off, like llama-s
 
 **Verdict: lift**, as the answer to that open question. Skip a job-polling API.
 
-### 5. Request filters — lift
+### 5. Request filters, lift
 
-llama-swap `stripParams`, `setParams`, and `setParamsByID` rewrite the JSON body before the upstream sees it. `setParamsByID` mints aliases (`${MODEL_ID}:high`) that only change sampling or `chat_template_kwargs`, so one resident process serves several behaviors. A key ending in `?` fills the field only when the client omitted it. `model` is protected ([config example](https://github.com/mostlygeek/llama-swap/blob/main/docs/config.example.yaml)).
+llama-swap `stripParams`, `setParams`, and `setParamsByID` rewrite the JSON body before the upstream sees it. `setParamsByID` mints aliases (`${MODEL_ID}:high`) that only change sampling or `chat_template_kwargs`, so one resident process serves several behaviours. A key ending in `?` fills the field only when the client omitted it. `model` is protected ([config example](https://github.com/mostlygeek/llama-swap/blob/main/docs/config.example.yaml)).
 
 `model-router` has aliases that map ids onto a stanza, and it rewrites `model` to the peer-local id. It does not enforce sampler or template kwargs. The fleet already carries a Qwen chat template file and several names for one weight. Filters would stop a client from disabling that template, without a second process.
 
@@ -165,7 +169,7 @@ Sit it on the proxy, after the matcher, before the upstream dial. Peer `kind: op
 
 **Verdict: lift.** Backend-agnostic, config-only, no new process model.
 
-### 6. Pool error fallback, separate from capacity spillover — lift
+### 6. Pool error fallback, separate from capacity spillover, lift
 
 LiteLLM `fallbacks` try another model group after the configured retries, and deployment `order` fails over on connection errors, 404, and 429 ([reliability](https://docs.litellm.ai/docs/proxy/reliability), [load balancing](https://docs.litellm.ai/docs/proxy/load_balancing)). Cooldown (`allowed_fails`, `cooldown_time`) stops the router from picking a deployment that is already failing ([config settings](https://docs.litellm.ai/docs/proxy/config_settings)).
 
@@ -175,7 +179,7 @@ Sit it on the pool resolver and the peer client. One failed attempt, then the ne
 
 **Verdict: lift.** The mesh already has the target list. This is what happens when the chosen target is sick rather than full.
 
-### 7. Queue while every victim is mid-generation — later
+### 7. Queue while every victim is mid-generation, later
 
 llama.cpp `pick_victim` returns empty when every resident has `req_count != 0` or is stopping; `tick` then waits instead of killing the request ([server-models.cpp](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-models.cpp)). LocalAI waits (`LRU_EVICTION_MAX_RETRIES` default 30, interval 1s) and only kills busy work if `ForceEvictionWhenBusy` is set, default false. Ollama's `findRunnerToUnload` prefers an idle runner and otherwise waits out the one with the shortest keep-alive ([sched.go](https://github.com/ollama/ollama/blob/main/server/sched.go)).
 
@@ -183,9 +187,9 @@ llama.cpp `pick_victim` returns empty when every resident has `req_count != 0` o
 
 Sit it on admission, on the held connection from idea 4. Cap the wait with `spin_up_seconds` or a new deadline so a long image job cannot stall chat forever. Do not add LocalAI's force-evict flag.
 
-**Verdict: later.** Right behavior, but it changes the 503 contract and needs a product decision on how long to hold. Not required to replace llama-swap.
+**Verdict: later.** Right behaviour, but it changes the 503 contract and needs a product decision on how long to hold. Not required to replace llama-swap.
 
-### 8. Optional sleep/wake instead of kill — later
+### 8. Optional sleep/wake instead of kill, later
 
 vLLM sleep mode releases GPU memory without exiting the process. Level 1 offloads weights to CPU and drops KV; level 2 drops both. Official docs: [Sleep Mode](https://docs.vllm.ai/en/latest/features/sleep_mode/). The server exposes `POST /sleep` and `POST /wake_up`. llmux does the same shape with user `sleep` and `wake` scripts and drains in-flight work first ([llmux README](https://github.com/doublewordai/llmux/blob/main/README.md)). llama.cpp `--sleep-idle-seconds` is weaker: it unloads from RAM and pays a full reload ([server README](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)).
 
@@ -195,7 +199,7 @@ Sit it on the supervisor as optional per-stanza commands, the llmux shape, not a
 
 **Verdict: later.** Useful only for backends and hosts that can pay the RAM. Shipping it now specializes the supervisor for one engine.
 
-### 9. GGUF estimate as a check, not the reservation — later
+### 9. GGUF estimate as a check, not the reservation, later
 
 ananke's [memory model](https://github.com/philpax/ananke/blob/main/docs/memory-model.md) predicts llama.cpp VRAM and host RAM from GGUF metadata plus fitted coefficients, including a different curve for ik_llama. Ollama fits from the GGUF and `updateFreeSpace` rather than a user `vram_mb`. GPUStack parses GGUF for resource estimates and uses `weight * 1.2 + framework footprint` otherwise ([compatibility check](https://github.com/gpustack/gpustack/blob/main/docs/user-guide/compatibility-check.md)).
 
@@ -205,7 +209,7 @@ Sit a future check next to `-check`: warn when a llama-server stanza's `vram_mb`
 
 **Verdict: later.** A wrong estimate that becomes the reservation will OOM a GPU the ledger thought was safe.
 
-### 10. Mesh binpack vs spread — later
+### 10. Mesh binpack vs spread, later
 
 GPUStack's scale-up scorer is binpack (pack onto fewer GPUs) or spread (even out workers), after it has already preferred a single GPU over a multi-GPU placement ([scheduler.md](https://github.com/gpustack/gpustack/blob/main/docs/scheduler.md)). Local placement also stops at the first strategy that fits, so it will not split a model across cards if one card is enough.
 
@@ -215,7 +219,7 @@ Sit any change on peer selection only. The local device rules should stay. Do no
 
 **Verdict: later.** Worth a pass once real spill logs show whether peer choice fragments the large cards. Copying the scorer before that is speculation.
 
-### 11. Runtime profiles — later
+### 11. Runtime profiles, later
 
 llama-swap profiles pin an id to another id, alias, peer model, or selector, switched from the UI or `PUT /api/profiles/active`. Startup profile comes from `hooks.on_startup.profile` and is not saved across restart ([config example](https://github.com/mostlygeek/llama-swap/blob/main/docs/config.example.yaml)).
 
@@ -225,7 +229,7 @@ Sit it on the matcher, in front of pools. One active profile, config-defined pin
 
 **Verdict: later.** Real feature, low pressure next to admission and peer failure.
 
-### 12. Count-based LRU and matrix sets — skip
+### 12. Count-based LRU and matrix sets, skip
 
 llama.cpp `--models-max` evicts the least recently used idle model when the count is hit, ignoring VRAM ([unload_lru](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/server-models.cpp)). A 4-slot cap will refuse a second small model or, worse, keep a count slot "free" while one huge model has already filled the GPU. The README does not describe a VRAM ledger. (A 2026 pull request proposed evicting on child OOM; that path was not present in the `unload_lru` read on master, so it is unverified as shipped.)
 
@@ -319,4 +323,17 @@ Fetched and used:
 
 Local files read, not fetched: `README.md`, `SPEC.md`, `PLAN.md`, `internal/config/config.go`.
 
-Opened and not used as current behavior, because they are old commits or design notes rather than `main`/`master` docs: llama-swap `proxy/config/model_config.go` at `625b2967` (path 404s on main), llama.cpp `server-models.cpp` at `0b1bad14` and `d59d455f`, tabbyAPI `backends/exllamav2/model.py` at `ed7cd3cb`, llama-swap `internal/router/design.md` (a design note, not the shipped config contract).
+Opened and not used as current behaviour, because they are old commits or design notes rather than `main`/`master` docs: llama-swap `proxy/config/model_config.go` at `625b2967` (path 404s on main), llama.cpp `server-models.cpp` at `0b1bad14` and `d59d455f`, tabbyAPI `backends/exllamav2/model.py` at `ed7cd3cb`, llama-swap `internal/router/design.md` (a design note, not the shipped config contract).
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [Local speech-to-text backends](stt-backends.md)
+- [Local video generation backends](video-backends.md)
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

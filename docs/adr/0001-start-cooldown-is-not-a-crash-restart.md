@@ -1,3 +1,18 @@
+[Docs home](../README.md) › Decisions › Start cooldown is not a crash restart
+
 # Start cooldown is not a crash restart
 
+> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-22
+
 A model that never becomes healthy and a model that crashes after it was healthy are different events. A failed start refuses another start of that model on that node: 10 seconds, doubling to 5 minutes, reset once a start becomes healthy, answered with 503 and `Retry-After`. The one retry inside a single start stays, and it still does not evict a neighbour. A model that was healthy and then exits keeps the restart backoff from 1 second to 30 seconds. One cooldown for both would stop a polling client from respawning a bad command, and it would also leave a resident model down until the window passed. The restart backoff alone does not stop the next request from spawning a model that has just failed to start.
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Glossary](../../GLOSSARY.md): the terms these decisions use.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

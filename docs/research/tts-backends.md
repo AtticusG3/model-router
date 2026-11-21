@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Local text-to-speech backends
+
 # Local text-to-speech backends
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20. Part of #64, issue #75.
 
@@ -132,11 +136,11 @@ all, and the expected VRAM. Licence is code / weights.
 | IndexTTS-2 / 2.5 | https://github.com/index-tts/index-tts | bilibili Model Use Licence (code and weights) | 2.5 released 2026-08-10 | none upstream; community OpenAI wrappers | sync | wrappers only | yes | 2.5 defaults to bf16 (no); 2 has `use_fp16` `(verify)` | skip: restrictive licence, no upstream server |
 | Chatterbox (Original, Multilingual, Turbo) | https://github.com/resemble-ai/chatterbox, server https://github.com/devnen/Chatterbox-TTS-Server | MIT `(verify)` / MIT `(verify)` | server v2.0.0 (date `(verify)`) | OpenAI `/v1/audio/speech`, `/v1/audio/voices` | sync | `(verify)`; the AGPL-3.0 `travisvn/chatterbox-tts-api` has chunked WAV and SSE | yes | likely, fp32 by default `(verify)` | viable third-party server; model chosen by config, not request; no published VRAM |
 | Orpheus 3B | https://github.com/canopyai/Orpheus-TTS, server https://github.com/Lex-au/Orpheus-FastAPI | Apache-2.0 / base model's community licence `(verify)` | Orpheus-FastAPI v1.2.0, 2025-04-12 | OpenAI `/v1/audio/speech` front end | sync | `(verify)` | yes | GGUF token server likely `(verify)` | skip: two processes per model (front end plus token server), no cloning |
-| F5-TTS | https://github.com/SWivid/F5-TTS | MIT / **CC-BY-NC-4.0** | v1 Base weights 2025-03-12 | none upstream | — | — | yes | `(verify)` | skip: non-commercial weights, no server |
+| F5-TTS | https://github.com/SWivid/F5-TTS | MIT / **CC-BY-NC-4.0** | v1 Base weights 2025-03-12 | none upstream | n/a | n/a | yes | `(verify)` | skip: non-commercial weights, no server |
 | XTTS-v2 (coqui-tts fork, AllTalk) | https://github.com/idiap/coqui-ai-TTS, https://github.com/erew123/alltalk_tts | MPL-2.0 / **CPML, non-commercial incl. output** | `coqui-tts` 0.27.x `(verify)` | AllTalk has OpenAI `/v1/audio/speech` | sync | own streaming API | yes | likely `(verify)` | skip: output-restricting licence; AllTalk is a whole app |
 | Fish Speech / OpenAudio | https://github.com/fishaudio/fish-speech | Apache-2.0 / **CC-BY-NC-SA-4.0** or research licence | `(verify)` | own `POST /v1/tts` (msgpack), `/v1/references/*` | sync | `(verify)` | yes | `(verify)` | skip: not OpenAI-shaped, non-commercial weights |
 | Higgs Audio v2 | https://github.com/boson-ai/higgs-audio | Apache-2.0 / own community licence `(verify)` | `(verify)` | OpenAI via its vLLM image | sync | yes | yes; ~9 GB one speaker, ~14 GB two | no (recent vLLM) | skip: cloning through its vLLM path reported broken (issue #151), large |
-| Spark-TTS 0.5B | https://github.com/SparkAudio/Spark-TTS | Apache-2.0 / **CC-BY-NC-SA-4.0** | `(verify)` | CLI and web UI only | — | — | yes | `(verify)` | skip: non-commercial weights, no server |
+| Spark-TTS 0.5B | https://github.com/SparkAudio/Spark-TTS | Apache-2.0 / **CC-BY-NC-SA-4.0** | `(verify)` | CLI and web UI only | n/a | n/a | yes | `(verify)` | skip: non-commercial weights, no server |
 
 More than six candidates are viable on paper. Only the first four ship an
 OpenAI speech endpoint from the model's own project or a maintained server, and
@@ -783,3 +787,17 @@ This repo
   `internal/router/filters.go`, `internal/router/proc.go`,
   `internal/router/router.go`, `internal/config/config.go`
 - the GPU host's node config under `configs/` (card occupancy, CPU affinity)
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [Local realtime and speech-to-speech backends](realtime-backends.md)
+- [Local video generation backends](video-backends.md)
+- [model-router docs](../README.md)
+- [Voice cloning and a voice library across router nodes](voice-cloning-backends.md)
+<!-- backlinks:end -->

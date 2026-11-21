@@ -1,6 +1,6 @@
 # Fleet swap-over: llama-swap → model-router (v0.1)
 
-STAGED — nothing here has been executed. Every step below is the procedure to
+STAGED, nothing here has been executed. Every step below is the procedure to
 run per node, in order. Each node's old llama-swap stays installed as rollback
 (`systemctl stop llama-swap.service` is only executed after the router passes
 its health checks on the same port).
@@ -11,7 +11,7 @@ Rollout order (least disruptive first):
 2. **gareths-homelab** (nginx fronts the router; trivial rollback)
 3. **digger** (image node; sdcpp-webui runs alongside, untouched)
 4. **nugget** (V100; unit is `deploy/model-router.nugget.service`)
-5. **buster** (LAST — rag-proxy, Open WebUI, Hermes depend on :18080)
+5. **buster** (LAST, rag-proxy, Open WebUI, Hermes depend on :18080)
 
 ---
 
@@ -70,11 +70,11 @@ systemctl start llama-swap.service
 
 | Node | Router port | Verify against | Notes |
 |------|-------------|----------------|-------|
-| nomad | :8081 | local `qwen3.5-9b`; Chat lab `agents-a1` then `qwen3.8-27b` (mesh) | unlisted local stanza; catalog Load/Unload is local-only — remote ids are Mesh routed via Chat lab |
+| nomad | :8081 | local `qwen3.5-9b`; Chat lab `agents-a1` then `qwen3.8-27b` (mesh) | unlisted local stanza; catalog Load/Unload is local-only, remote ids are Mesh routed via Chat lab |
 | nugget | :8081 | `agents-a1` chat (preload), `qwen3-0.6b-instruct` | Swap as user kevyn; unit is `deploy/model-router.nugget.service` (memlock + TurboQuant lib path). Single V100. |
 | gareths-homelab | 127.0.0.1:18080 (nginx :8081/:8082) | `qwen2.5-1.5b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | nginx blocks already proxy both ports → 18080; confirm `proxy_buffering off` for SSE |
 | digger | :8082 | `qwen3-0.6b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | image stanzas with `"model": "<id>"` in body; no body model → krea-2-turbo (path_default) |
-| buster | :18080 | `agents-a1`, `qwen3-0.6b-instruct` (alias intent-router), /v1/embeddings | rag-proxy keeps pointing at 127.0.0.1:18080 — NO rag-proxy change needed. Reranker/sparse/turbovec (:18095/:18096/:18097) untouched |
+| buster | :18080 | `agents-a1`, `qwen3-0.6b-instruct` (alias intent-router), /v1/embeddings | rag-proxy keeps pointing at 127.0.0.1:18080, NO rag-proxy change needed. Reranker/sparse/turbovec (:18095/:18096/:18097) untouched |
 
 ## Known v0.1 limitations (accept before swapping)
 
@@ -91,7 +91,7 @@ systemctl start llama-swap.service
    to a half-migrated fleet with a stale port.
 4. **nvidia-smi per-GPU resilience:** a single sick GPU (like the 4060's
    current "Unable to determine device handle") no longer blinds the whole
-   poller — healthy GPUs still report. But a stanza pinned to the sick GPU
+   poller, healthy GPUs still report. But a stanza pinned to the sick GPU
    cannot be admitted (fail-closed) until the driver recovers.
 5. **Client disconnect during spin-up:** the request goroutine waits out the
    full spin-up window; the model still finishes loading and serves the next

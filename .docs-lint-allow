@@ -1,0 +1,4 @@
+# "catalog" is the code term: catalog.yaml, the catalog package and the /v1/catalog endpoint.
+catalog
+# HTTP header name, spelt as the RFC spells it.
+authorization

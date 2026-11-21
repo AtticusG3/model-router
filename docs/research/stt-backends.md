@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Local speech-to-text backends
+
 # Local speech-to-text backends
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20 (all URLs below were opened that day). Part of #64.
 
@@ -11,7 +15,7 @@ anything that only the GPU host can settle is in the checklist (§8).
 
 The question: which locally runnable, server-style speech-to-text backend should
 this router start and proxy the way it already starts `llama-server` and
-`sd-server` — one foreground process per model, a `{port}` and a `{gpu}`, an HTTP
+`sd-server`, one foreground process per model, a `{port}` and a `{gpu}`, an HTTP
 `health_check`, a `vram_mb` reservation, a kill to unload.
 
 Constraints taken as given (from the issue, `README.md`, `SPEC.md` and the
@@ -63,8 +67,8 @@ diarization is an optional extra, and vLLM's translations route is whisper-only)
 It runs on both card families: CTranslate2 wheels include `70-real`.
 
 **The rule:** run `whisper-server` unless the request needs an endpoint it does
-not have — `/v1/audio/translations`, SSE streaming transcription, or
-`/v1/audio/diarization` — or unless the only copy of a model you need is a
+not have, `/v1/audio/translations`, SSE streaming transcription, or
+`/v1/audio/diarization`, or unless the only copy of a model you need is a
 CTranslate2/Hugging-Face whisper conversion with no `ggml` build. Translation
 for captions is not needed today (the client needs EN→EN and JA→JA
 transcription, not x→EN), so the fallback exists mostly for diarization and
@@ -86,7 +90,7 @@ behaviour is a multipart `model` rewrite; that is called out in §5 and §8.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | whisper.cpp `whisper-server` | https://github.com/ggml-org/whisper.cpp | MIT | v1.9.5, 2026-10-07; latest commit 2026-11-20 | own `/inference`; OpenAI path via `--request-path` | sync | no | yes | yes | **primary** |
 | speaches (was faster-whisper-server) | https://github.com/speaches-ai/speaches | MIT | v0.9.0-rc.3, 2025-12-27 (stable v0.8.3, 2025-09-19) | OpenAI | sync + SSE | yes (SSE, websocket realtime) | yes | yes | **fallback** |
-| faster-whisper-server forks | https://github.com/andyjjrt/faster-whisper-server | not read `(verify)` | not read `(verify)` | OpenAI, multi-model | sync | no | yes | yes | skip — speaches supersedes; only worth it if you must pin the old name |
+| faster-whisper-server forks | https://github.com/andyjjrt/faster-whisper-server | not read `(verify)` | not read `(verify)` | OpenAI, multi-model | sync | no | yes | yes | skip, speaches supersedes; only worth it if you must pin the old name |
 | WhisperX | https://github.com/m-bain/whisperX | BSD-2 | v3 line; context-aware batching 2026 | library, no server | sync | no | yes (cu126) | yes (cu126/int8) | aligner, not a server |
 | whisper-asr-webservice | https://github.com/ahmetoner/whisper-asr-webservice | MIT | v1.10.0, 2026-08-09 | own `/asr`, `/detect-language` | sync | no | yes | yes | not an OpenAI path |
 | NeMo Speech (Parakeet, Canary) | https://github.com/NVIDIA-NeMo/Speech | Apache-2.0 | v3.0.0, 2026-08-07 | library; `nemo-speech serve` (C++) is OpenAI-shaped | sync | websocket realtime (C++ server) | yes | Parakeet v2/v3 and canary-1b-flash list Volta; canary-1b-v2 does not | accuracy option for EN only |
@@ -94,7 +98,7 @@ behaviour is a multipart `model` rewrite; that is called out in §5 and §8.
 | Voxtral Mini/Small | https://github.com/vllm-project/vllm | Apache-2.0 (model) | vLLM v0.34.0, 2026-11-16 | vLLM OpenAI transcription | sync | vLLM realtime (4B-Realtime) | yes | official vLLM dropped CC<8.0 (v0.9+) | no JA, no timestamps |
 | Granite Speech 4.1-2b-plus | https://huggingface.co/ibm-granite/granite-speech-4.1-2b-plus | Apache-2.0 | v2610 update | vLLM / llama.cpp OpenAI | sync | no | yes | unknown `(verify)` | speaker-attributed ASR + word timestamps in one model |
 | Moonshine | https://github.com/moonshine-ai/moonshine | MIT (legacy non-EN non-commercial) | streaming models current | SDK/CLI, no server | sync | yes (library) | yes (ORT) | yes (ORT) | needs a server written |
-| Distil-Whisper | https://github.com/huggingface/distil-whisper | MIT | v3.5 | weights only | — | — | yes | yes | English speed, no server |
+| Distil-Whisper | https://github.com/huggingface/distil-whisper | MIT | v3.5 | weights only | n/a | n/a | yes | yes | English speed, no server |
 | Kyutai STT | https://github.com/kyutai-labs/delayed-streams-modeling | CC-BY-4.0 | en_fr 1B / en 2.6B | websocket only | sync stream | yes | yes (torch cu126) | yes | EN/FR only, no HTTP surface |
 | WhisperLiveKit | https://github.com/QuentinFuxa/WhisperLiveKit | Apache-2.0 | current | OpenAI transcription + Deepgram websocket | sync + stream | yes | yes | yes (faster-whisper backend) | best streaming front-end; Sortformer diarization |
 | sherpa-onnx servers | https://github.com/k2-fsa/sherpa-onnx | Apache-2.0 | active | websocket binary protocol, no HTTP | stream + offline | yes | yes (onnxruntime-gpu) | yes (onnxruntime-gpu) | diarization + Japanese zipformer; needs a front-end |
@@ -118,7 +122,7 @@ diarization belongs in a second stanza.**
 
 - `whisper-server` already emits `words[]` (`word`, `start`, `end`, `t_dtw`,
   `probability`) inside `verbose_json` and can compute token-level timing with
-  `-dtw` — no second process, no extra VRAM.
+  `-dtw`, no second process, no extra VRAM.
 - Its `--diarize` flag is **stereo channel energy only** (it sums `pcmf32s[0]`
   against `pcmf32s[1]` per segment and only runs when the audio has two
   channels), and `--tinydiarize` needs a `-tdrz` model and only marks speaker
@@ -168,8 +172,8 @@ intended lifecycle: one process per model, `vram_mb` released on kill).
 `vad_samples_overlap`, `no_language_probabilities`.
 
 - A missing `file` is `400 {"error":"no 'file' field in the request"}`.
-- Unknown fields are ignored — which is what makes an OpenAI-shaped client
-  safe here: it will send `model`, and that is simply not read.
+- Unknown fields are ignored, which is what makes an OpenAI-shaped client
+  safe here: it will send `model`, and that is not read.
 - **`model` is not read.** The process serves exactly the file it was started
   with. This is the single most important fact for the router (§5).
 - Booleans are `true|1|yes|y` (`parse_str_to_bool`).
@@ -192,7 +196,7 @@ intended lifecycle: one process per model, `vram_mb` released on kill).
 `speaker` field when stereo diarization is on. `words[]` entries have `word`,
 `probability` and, when timestamps and token timestamps are on, `start`, `end`,
 `t_dtw`. `compression_ratio` is not implemented (the source leaves a TODO).
-It is close to OpenAI's `verbose_json` but not identical — a client that reads
+It is close to OpenAI's `verbose_json` but not identical, a client that reads
 `words[]` is fine; one that requires OpenAI's exact extra fields is not.
 
 ### Sizes, sync/async, streaming, errors
@@ -263,8 +267,8 @@ them; §8 has the command).
   build misbehaves, `--no-flash-attn` is the first thing to try `(verify)`.
 - **CPU-only:** `--no-gpu` (alias `-ng`) runs on the Xeons; `vram_mb: 0` makes
   the router treat it as a CPU process (never evicted to make room). Throughput
-  is not published by the project — the README has no numbers, only a
-  `whisper-bench` pointer — so a CPU figure has to be measured on the host
+  is not published by the project, the README has no numbers, only a
+  `whisper-bench` pointer, so a CPU figure has to be measured on the host
   `(verify)`. Note the host's CPUs are already assigned to the large chat
   model, so a CPU STT stanza competes for cores, not just latency.
 - **Co-residency:** on the 24 GB card the resident set (intent + embedding +
@@ -298,7 +302,7 @@ them; §8 has the command).
 Open weights exist (`Qwen/Qwen3-ASR-1.7B`, `-0.6B`) under Apache-2.0, with a
 separate `Qwen/Qwen3-ForcedAligner-0.6B` (~0.92B) for word/character timestamps
 (its own limit is 5 minutes of speech per call; the ASR model's native limit is
-20 minutes). English LibriSpeech clean/other WER is 1.63/3.38 for 1.7B — the
+20 minutes). English LibriSpeech clean/other WER is 1.63/3.38 for 1.7B, the
 best open number found. It is served by vLLM or SGLang; the vLLM path needs
 CUDA wheels that no longer build for sm_70 (official vLLM dropped compute
 capability < 8.0 at v0.9), so this is a **24 GB card** option, with a
@@ -348,7 +352,7 @@ plainly:
    `404 File Not Found (/v1/audio/transcriptions)`. The router cannot fix this
    with config, because its route table only proxies `/v1/*`, `/v/*`,
    `/sdapi/v1/`, `/rerank`, `/reranking`, `/infill`, `/completion`, `/props`,
-   `/slots`, `/tokenize`, `/detokenize`, `/apply-template` — a bare `/inference`
+   `/slots`, `/tokenize`, `/detokenize`, `/apply-template`, a bare `/inference`
    never reaches a stanza.
 2. **The router requires the multipart `model` value to resolve to one of its
    own ids** (`resolveRef`: an id containing `/` is read as `peer/model`, and an
@@ -483,12 +487,12 @@ carries the >9.5 GB peak from §4.
 
 - `whisper-server` and `whisper.cpp`: **MIT**. Whisper weights: MIT. The
   VAD model is Silero, also MIT. The `--convert` path shells out to `ffmpeg` on
-  user-supplied uploads — the upstream README itself warns about running the
+  user-supplied uploads, the upstream README itself warns about running the
   server with privileges; keep it on `127.0.0.1` and let the router own the
   socket. Uploads are held in memory, so a hostile client can grow the
   process's RSS; the router's own `readBody` does the same on its side.
 - Transcription accuracy risk: no numeric WER is published by whisper.cpp for
-  any model, and no numeric Japanese figure exists for `large-v3`/`turbo` — the
+  any model, and no numeric Japanese figure exists for `large-v3`/`turbo`, the
   only published numbers are the 2022 paper's `large`/`large-v2` figures
   (LibriSpeech clean 2.7 WER; Japanese is scored as character error rate, 9.4
   for `large` and 9.1 for `large-v2` on one FLEURS split, 6.4/5.3 on another)
@@ -507,7 +511,7 @@ carries the >9.5 GB peak from §4.
   `torchaudio`'s `MMS_FA` aligner and the default `ctc-forced-aligner` model
   are **CC-BY-NC-4.0**; the `ctc-forced-aligner` code is BSD-2. Silero VAD is
   MIT (the PyPI metadata and README badge still say CC-BY-NC-4.0, and the
-  maintainer has stated MIT in discussion — worth a look if it matters).
+  maintainer has stated MIT in discussion, worth a look if it matters).
   Internal use only anyway, but these are the terms to avoid tripping over if a
   caption ever leaves the LAN.
 - Model licences in the table: whisper MIT, distil-whisper MIT, Moonshine MIT
@@ -575,7 +579,7 @@ curl -s http://127.0.0.1:18080/v1/audio/transcriptions \
 
 Open questions for the operator:
 
-1. Which card should own transcription permanently — the 24 GB card (fits
+1. Which card should own transcription permanently, the 24 GB card (fits
    today, competes with image jobs on TTL) or a 32 GB card (needs the large chat
    model evicted, and its reload is minutes)?
 2. Is English-plus-Japanese a hard requirement for one weight, or is it
@@ -711,3 +715,16 @@ This repo
 - `internal/router/server.go`, `internal/router/matcher.go`,
   `internal/router/filters.go`, `internal/router/router.go`,
   `cmd/fake-model/main.go`
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [Local realtime and speech-to-speech backends](realtime-backends.md)
+- [Local text-to-speech backends](tts-backends.md)
+- [model-router docs](../README.md)
+<!-- backlinks:end -->
