@@ -573,6 +573,33 @@ stanzas:
     unlisted: false
     port: 5938
 
+  # #89 music: ACE-Step 1.5 turbo (2B DiT) + the 0.6B planning LM, behind a
+  # small OpenAI-shaped shim that turns the router's audio_gen job API into
+  # ACE-Step's own task API (/release_task, /query_result, /v1/audio?path=).
+  # The upstream 1.7B LM repo in the research note does not exist on HF
+  # (ACE-Step/acestep-5Hz-lm-1.7B is a 404); 0.6B and 4B are the published ones.
+  # torch is pinned to 2.11.0+cu130 in its own venv: the locked 2.10.0+cu128
+  # build fails every bf16 GEMM on this box with CUBLAS_STATUS_INVALID_VALUE.
+  # cu130 has no sm_70, so this stanza is GPU0 only; a V100 placement would
+  # need a second venv on cu128.
+  - model_id: ace-step-music
+    name: "ACE-Step 1.5 turbo (music, 10-600 s, 48 kHz stereo)"
+    command: >
+      /usr/bin/env PORT={port} /home/kevyn/projects/model-router/deploy/acestep-shim/run.sh
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "HF_HOME=/opt/ai/hf/acestep"]
+    vram_mb: 13000
+    device: 0
+    spin_up_seconds: 120
+    api_type: audio_gen
+    capabilities: [audio_out]
+    match: {path_default: true}
+    health_check: /health
+    idle_ttl_seconds: 900
+    hold_seconds: 900
+    slots: 1
+    unlisted: false
+    port: 5941
+
 peers:
   - name: gareths-homelab
     kind: router
