@@ -273,9 +273,11 @@ values, so a typo like `transcribe` is caught at load. `-check` prints the type
 per stanza.
 
 `capabilities` is an optional list per stanza: `vision`, `audio_in`,
-`audio_out`, `tools`, `reasoning`. An unknown flag fails load. Capabilities are
-published in `/v1/models` and `/_router/status`, so a vision chat model (started
-with an `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`.
+`audio_out`, `tools`, `reasoning`, and for video models `duration`,
+`resolution`, `seed`. An unknown flag fails load. Capabilities are published in
+`/v1/models` and `/_router/status`, so a vision chat model (started with an
+`--mmproj`) is `api_type: chat` plus `capabilities: [vision]`. The video flags
+control which optional fields the Playground's Video tab shows.
 
 `job` (only on `api_type: video`) picks the adapter in front of the backend's
 async job API: `openai` (default, the backend speaks `/v1/videos`) or `sdcpp`
