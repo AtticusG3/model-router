@@ -17,11 +17,14 @@ import (
 
 // A safety card is a near-uniform, desaturated image: the block detector
 // samples the decoded first image and asks that the mean channel spread be
-// small, that the fullest luminance bin be mid-range, and that most samples
-// sit in a few narrow luminance bins. A plain white or black background, such
-// as line art on white paper, fills an extreme bin and fails the mid-range
-// check. Text and the checkerboard bands on some cards move a minority of
-// samples out of those bins, so the bin share threshold stays below half.
+// small, that the fullest luminance bin be mid-range, that most samples sit in
+// a few narrow luminance bins, and that the middle 60% of rows be near-uniform
+// too. A plain white or black background, such as line art on white paper,
+// fills an extreme bin and fails the mid-range check. A photo with one large
+// flat area at the edge, such as an overcast sky over the top half, fails the
+// middle-band check. Text and the checkerboard bands on some cards move a
+// minority of samples out of those bins, so the bin share thresholds stay below
+// one.
 const (
 	blockedSampleTarget = 1 << 16
 	blockedBinCount     = 32
@@ -29,6 +32,7 @@ const (
 	blockedEdgeBins     = 3
 	blockedMeanChroma   = 16
 	blockedTopShare     = 0.5
+	blockedMidShare     = 0.9
 	blockedSeedMax      = 1<<31 - 1
 )
 
@@ -107,8 +111,8 @@ func blockedCardPNG(raw []byte) bool {
 	if err != nil {
 		return false
 	}
-	meanChroma, fullest, topShare, ok := blockedCardStats(img)
-	if !ok || meanChroma > blockedMeanChroma || topShare < blockedTopShare {
+	meanChroma, fullest, topShare, midShare, ok := blockedCardStats(img)
+	if !ok || meanChroma > blockedMeanChroma || topShare < blockedTopShare || midShare < blockedMidShare {
 		return false
 	}
 	return fullest >= blockedEdgeBins && fullest < blockedBinCount-blockedEdgeBins
@@ -124,28 +128,36 @@ func blockedSampleStride(w, h int) int {
 }
 
 // blockedCardStats samples img, returning the mean channel spread, the fullest
-// luminance bin and the share of samples in the three fullest bins.
-func blockedCardStats(img image.Image) (meanChroma float64, fullest int, topShare float64, ok bool) {
+// luminance bin, the share of samples in the three fullest bins, and that
+// share over the middle 60% of rows.
+func blockedCardStats(img image.Image) (meanChroma float64, fullest int, topShare, midShare float64, ok bool) {
 	bounds := img.Bounds()
 	w, h := bounds.Dx(), bounds.Dy()
 	if w <= 0 || h <= 0 {
-		return 0, 0, 0, false
+		return 0, 0, 0, 0, false
 	}
 	step := blockedSampleStride(w, h)
+	midMin, midMax := bounds.Min.Y+h/5, bounds.Min.Y+h*4/5
 
-	var bins [blockedBinCount]int
-	samples, chromaSum := 0, 0
+	var bins, midBins [blockedBinCount]int
+	samples, midSamples, chromaSum := 0, 0, 0
 	for y := bounds.Min.Y; y < bounds.Max.Y; y += step {
+		midRow := y >= midMin && y < midMax
 		for x := bounds.Min.X; x < bounds.Max.X; x += step {
 			r, g, b, _ := img.At(x, y).RGBA()
 			r, g, b = r>>8, g>>8, b>>8
 			chromaSum += int(max(r, g, b) - min(r, g, b))
-			bins[int((r+g+b)/3)/(256/blockedBinCount)]++
+			bin := int((r+g+b)/3) / (256 / blockedBinCount)
+			bins[bin]++
+			if midRow {
+				midBins[bin]++
+				midSamples++
+			}
 			samples++
 		}
 	}
-	if samples == 0 {
-		return 0, 0, 0, false
+	if samples == 0 || midSamples == 0 {
+		return 0, 0, 0, 0, false
 	}
 
 	for i := range bins {
@@ -153,19 +165,24 @@ func blockedCardStats(img image.Image) (meanChroma float64, fullest int, topShar
 			fullest = i
 		}
 	}
-	rest := bins
+	return float64(chromaSum) / float64(samples), fullest,
+		blockedBinShare(bins, samples), blockedBinShare(midBins, midSamples), true
+}
+
+// blockedBinShare returns the share of samples in the three fullest bins.
+func blockedBinShare(bins [blockedBinCount]int, samples int) float64 {
 	top := 0
 	for range blockedTopBins {
 		best := 0
-		for i := range rest {
-			if rest[i] > rest[best] {
+		for i := range bins {
+			if bins[i] > bins[best] {
 				best = i
 			}
 		}
-		top += rest[best]
-		rest[best] = 0
+		top += bins[best]
+		bins[best] = 0
 	}
-	return float64(chromaSum) / float64(samples), fullest, float64(top) / float64(samples), true
+	return float64(top) / float64(samples)
 }
 
 // reseededBody replaces the seed field of a txt2img JSON body with a fresh
