@@ -50,6 +50,11 @@ type Managed struct {
 	progress    float64
 	hasProgress bool
 
+	// loraMu serialises LoRA cache warms; loraWarmed records whether this
+	// instance's cache has been filled. A restart clears the cache and the flag.
+	loraMu     sync.Mutex
+	loraWarmed bool
+
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	// waitDone is closed by the single Wait owner (watch) when the process exits.
@@ -100,6 +105,37 @@ func (m *Managed) markUsed() {
 	m.mu.Lock()
 	m.lastUsed = time.Now()
 	m.mu.Unlock()
+}
+
+// loraWarmPath is the sd-server endpoint that fills its LoRA cache.
+const loraWarmPath = "/sdapi/v1/loras"
+
+// loraWarmClient bounds the LoRA cache warm call; the shim uses the same 30s.
+var loraWarmClient = &http.Client{Timeout: 30 * time.Second}
+
+// warmLoRAs asks sd-server to list its LoRAs, which fills the cache. A no-op
+// once warmed unless force is set. The lock serialises concurrent warms so a
+// burst of LoRA requests sends one GET.
+func (m *Managed) warmLoRAs(force bool) bool {
+	proxy := m.proxy()
+	m.loraMu.Lock()
+	defer m.loraMu.Unlock()
+	if m.loraWarmed && !force {
+		return true
+	}
+	resp, err := loraWarmClient.Get(proxy + loraWarmPath)
+	if err != nil {
+		m.logger.Warnf("%s: LoRA warm failed: %v", m.id, err)
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		m.logger.Warnf("%s: LoRA warm returned %d", m.id, resp.StatusCode)
+		return false
+	}
+	m.loraWarmed = true
+	return true
 }
 
 // newManaged constructs a supervisor for a stanza. The port is the backend port.
@@ -162,6 +198,9 @@ func (m *Managed) Start() (int, error) {
 	m.proc = nil
 	m.waitDone = nil
 	m.progress, m.hasProgress = 0, false
+	m.loraMu.Lock()
+	m.loraWarmed = false
+	m.loraMu.Unlock()
 	spawn := m.spawn
 	cmd, env := m.command, m.env
 	m.mu.Unlock()
@@ -262,6 +301,12 @@ func (m *Managed) Start() (int, error) {
 
 	// Record the GPU this model landed on (set by the router after Start).
 	m.logger.Infof("%s healthy on port %d", m.id, m.port)
+
+	// Fill the LoRA cache once the backend is ready so the first request that
+	// names one is not rejected. A restart clears the cache and the flag.
+	if m.stz().ImagePipeline != nil {
+		go m.warmLoRAs(false)
+	}
 
 	return m.gpuIndex(), nil
 }

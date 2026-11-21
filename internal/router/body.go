@@ -131,6 +131,17 @@ func (b *preparedBody) cleanup() {
 	}
 }
 
+// requestsLoRA reports whether the snapshotted body names a non-empty LoRA
+// list. It streams the spooled copy instead of loading it whole.
+func (b *preparedBody) requestsLoRA() bool {
+	rc, err := b.open()
+	if err != nil {
+		return false
+	}
+	defer rc.Close()
+	return bodyRequestsLoRA(rc)
+}
+
 // install puts a fresh copy of the body on req for one backend attempt.
 func (b *preparedBody) install(req *http.Request) error {
 	rc, err := b.open()

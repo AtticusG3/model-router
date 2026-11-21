@@ -3,6 +3,7 @@ package router
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"slices"
@@ -24,9 +25,27 @@ type imageStep struct {
 	After func(req *http.Request, status int, h http.Header, body []byte, notes *imageNotes) bool
 }
 
-// defaultImageSteps builds the steps a stanza's image_pipeline runs. It is
-// empty, so declaring the option changes nothing until a build adds the steps.
+// defaultImageSteps builds the steps a stanza's image_pipeline runs. The step
+// list is empty; the LoRA warm-up is built into proxyImage.
 func defaultImageSteps(*config.Stanza) []imageStep { return nil }
+
+// bodyRequestsLoRA reports whether a JSON request body names a non-empty LoRA
+// list. It reads r to the end.
+func bodyRequestsLoRA(r io.Reader) bool {
+	var body struct {
+		LoRA []json.RawMessage `json:"lora"`
+	}
+	if json.NewDecoder(r).Decode(&body) != nil {
+		return false
+	}
+	return len(body.LoRA) > 0
+}
+
+// responseIsInvalidLoRA reports whether a reply is sd-server's 400 for a LoRA
+// path it does not know.
+func responseIsInvalidLoRA(status int, body []byte) bool {
+	return status == http.StatusBadRequest && bytes.Contains(bytes.ToLower(body), []byte("invalid lora path"))
+}
 
 // imageNotes collects what pipeline steps changed, for the Activity capture.
 type imageNotes struct {
@@ -135,8 +154,9 @@ type prefixedBody struct {
 
 // proxyImage serves a local stanza that declares an image_pipeline. It keeps
 // the client's original body for Activity, runs the request steps, then proxies
-// the request; response steps can add headers and ask for one retry.
-func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, baseURL, model, target string, s *config.Stanza) {
+// the request; a reply that rejects a LoRA path warms the cache and retries
+// once, and response steps can add headers and ask for one retry.
+func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, m *Managed, baseURL, model, target string, s *config.Stanza) {
 	steps := r.imageSteps(s)
 	notes := &imageNotes{}
 	clients, err := captureOriginalImageBody(req)
@@ -159,6 +179,20 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 		}
 	}
 
+	// A retry needs the rewritten body again. Remember it before the first send.
+	snap, err := r.snapshotBody(req, r.cfg().RequestBodyLimit(s.ModelID))
+	if err != nil {
+		r.writeBodyError(w, req, err)
+		return
+	}
+
+	// Warm the LoRA cache before a request that names one. sd-server starts
+	// with an empty cache, so the first such request would be rejected.
+	lora := m != nil && snap.requestsLoRA()
+	if lora {
+		m.warmLoRAs(false)
+	}
+
 	inspect := false
 	for _, st := range steps {
 		if st.After != nil {
@@ -166,15 +200,8 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 			break
 		}
 	}
-	if !inspect {
+	if !inspect && !lora {
 		r.proxyJobAware(w, req, t, baseURL, model, target)
-		return
-	}
-
-	// A retry needs the rewritten body again. Remember it before the first send.
-	snap, err := r.snapshotBody(req, r.cfg().RequestBodyLimit(s.ModelID))
-	if err != nil {
-		r.writeBodyError(w, req, err)
 		return
 	}
 
@@ -201,6 +228,12 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 		if st.After != nil && st.After(req, held.status(), held.Header(), held.buf.Bytes(), notes) {
 			retry = true
 		}
+	}
+	// sd-server rejected a LoRA request before the cache was warm. Warm again
+	// and retry once; a second failure goes to the client as is.
+	if lora && responseIsInvalidLoRA(held.status(), held.buf.Bytes()) {
+		m.warmLoRAs(true)
+		retry = true
 	}
 	if retry {
 		added := headerDelta(before, held.Header())

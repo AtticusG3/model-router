@@ -204,15 +204,17 @@ uses. `sd-server` and `ideogram4` are the presets; an unknown preset, or
 `image_pipeline` on a stanza that is not `api_type: image`, fails load with a
 message naming the valid values.
 
-The step list this build ships is empty, so a preset parses and validates but
-changes no request yet. Keep the shim on a stanza that needs the sd-server
-checks, LoRA warm-up or caption enhancement until #120–#123 land.
+The LoRA warm-up runs for every `image_pipeline` stanza: the router warms
+sd-server's LoRA cache when the backend becomes ready and before a request
+whose body names a LoRA, and retries one `invalid lora path` reply after
+warming again. The step list this build ships is otherwise empty, so caption
+enhancement and blocked-card retries still need the shim until #120–#123 land.
 
-A bare sd-server stanza needs no shim once its preset's steps ship: run it with
+A bare sd-server stanza needs no shim for LoRA requests: run it with
 `--listen-ip 127.0.0.1 --listen-port {port}` and `health_check: /v1/models`
-(sd-server has no `/health`). Until then keep the shim for that stanza. The
-Python shim in `deploy/` stays supported for nodes that still wrap sd-server
-with it.
+(sd-server has no `/health`). Keep the shim if the stanza needs caption
+enhancement or a blocked-card retry. The Python shim in `deploy/` stays
+supported for nodes that still wrap sd-server with it.
 
 The request body kept in Activity is the client's original, even when a
 pipeline step rewrites it; a step can attach notes (for example the rewritten
