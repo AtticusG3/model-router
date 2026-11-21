@@ -175,14 +175,46 @@ class ShimTest(unittest.TestCase):
         self.assertEqual(out["prompt"], enhanced)
         caption = json.loads(enhanced)
         self.assertTrue(shim._valid_caption(caption))
-        self.assertEqual(caption["compositional_deconstruction"]["elements"][0]["bbox"], [120, 240, 880, 820])
-        self.assertIn("768x512", self.enhancer.requests[0]["messages"][1]["content"])
+        self.assertEqual(caption["compositional_deconstruction"]["elements"][0]["bbox"], [240, 120, 820, 880])
+        self.assertIn("768 pixels wide (x) by 512 pixels tall (y)", self.enhancer.requests[0]["messages"][1]["content"])
+
+    def test_bboxes_reach_sd_server_y_first_in_spec_key_order(self) -> None:
+        reply = {
+            "high_level_description": "a car parked under string lights",
+            "compositional_deconstruction": {
+                "background": "a night car park",
+                "elements": [
+                    {"desc": "asphalt ground", "bbox": [0, 760, 1000, 1000], "type": "obj", "extra": 1},
+                    {"type": "obj", "bbox": [100, 120, 900, 220], "desc": "string lights",
+                     "color_palette": ["#FFD27A"]},
+                    {"desc": "a sign", "text": "OPEN", "bbox": [700, 300, 900, 400], "type": "text"},
+                    {"type": "obj", "bbox": [500, 0, 400, 100], "desc": "broken box"},
+                ],
+            },
+        }
+        self.enhancer.content = json.dumps(reply)
+        data, _, enhanced, source = shim._enhance_txt2img(
+            "/sdapi/v1/txt2img", self.body(prompt="a car at night", width=1344, height=768), True, 5.0
+        )
+        self.assertEqual(source, "enhancer")
+        self.assertEqual(json.loads(data)["prompt"], enhanced)
+        elements = json.loads(enhanced)["compositional_deconstruction"]["elements"]
+        self.assertEqual(
+            [(list(el), el["bbox"]) for el in elements],
+            [
+                (["type", "bbox", "desc"], [760, 0, 1000, 1000]),
+                (["type", "bbox", "desc", "color_palette"], [120, 100, 220, 900]),
+                (["type", "bbox", "text", "desc"], [300, 700, 400, 900]),
+            ],
+        )
+        self.assertIn("1344 pixels wide (x) by 768 pixels tall (y)", self.enhancer.requests[0]["messages"][1]["content"])
 
     def test_existing_json_prompt_is_untouched(self) -> None:
         prompt = json.dumps(CAPTION)
         data = self.body(prompt=prompt)
         out, original, enhanced, source = self.enhance("/sdapi/v1/txt2img", data, True)
         self.assertIs(out, data)
+        self.assertEqual(json.loads(out)["prompt"], prompt)
         self.assertIsNone(original)
         self.assertIsNone(enhanced)
         self.assertIsNone(source)
@@ -203,6 +235,10 @@ class ShimTest(unittest.TestCase):
         expected = json.dumps(shim._caption_template("a red car"), separators=(",", ":"))
         self.assertEqual(enhanced, expected)
         self.assertTrue(shim._valid_caption(json.loads(json.loads(data)["prompt"])))
+        self.assertEqual(
+            json.loads(enhanced)["compositional_deconstruction"]["elements"],
+            [{"type": "obj", "bbox": [200, 200, 800, 800], "desc": "a red car"}],
+        )
 
     def test_timeout_uses_template(self) -> None:
         self.enhancer.delay = 0.5

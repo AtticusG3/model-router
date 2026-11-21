@@ -62,6 +62,17 @@ shim then sends a deterministic template: the original prompt as the
 high-level description and as one centred element. sd-server never receives a
 broken caption, and stderr gets one line with the reason.
 
+Bboxes follow the image model's upstream caption spec (the field table in
+`docs/prompting.md` of the model's repo):
+`[y_min, x_min, y_max, x_max]` on a 0-1000 grid, origin top-left. The
+enhancer is asked for `[x_min, y_min, x_max, y_max]`, which chat models get
+right more often, and the shim swaps each validated bbox to y-first before
+forwarding. It also writes each element's keys in the spec's order (`obj`:
+`type, bbox, desc, color_palette`; `text`: `type, bbox, text, desc,
+color_palette`), drops keys the spec does not list, and drops elements without
+a valid bbox. A prompt the client already sent as a JSON caption is forwarded
+as is, so it must already be y-first.
+
 The system prompt asks for `style_description` only when the request asks for
 a style, medium, camera, lighting or aesthetic; otherwise the shim removes it.
 
