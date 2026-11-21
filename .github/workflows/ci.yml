@@ -1,0 +1,44 @@
+name: CI
+
+# Minimal gate: formatting, vet and the test suite. This is the repo's own
+# `make check` (see Makefile) run on the fleet's Gitea runner.
+# Why it exists: without a non-review check, automerge has nothing to trust and
+# every PR sits mergeable forever (Kevyn, 21 Nov 2026).
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# One run per ref: a new push cancels the run it supersedes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: shiftplan-docker
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "gofmt: these files need formatting:"
+            echo "$out"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      # -count=2 per the fleet convention: the repeat catches state leaking
+      # between test iterations.
+      - name: go test
+        run: go test ./... -count=2
