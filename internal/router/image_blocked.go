@@ -63,12 +63,15 @@ func blockedRetryStep(max int) imageStep {
 	}
 }
 
-// defaultImageSteps builds the steps a stanza's image_pipeline runs.
+// defaultImageSteps builds the steps a stanza's image_pipeline runs: the
+// img2img body checks for every preset, plus the blocked-card retry when the
+// stanza asks for one.
 func defaultImageSteps(s *config.Stanza) []imageStep {
-	if s == nil || s.ImagePipeline == nil || s.ImagePipeline.RetryBlocked <= 0 {
-		return nil
+	steps := []imageStep{{Rewrite: checkImg2img}}
+	if s != nil && s.ImagePipeline != nil && s.ImagePipeline.RetryBlocked > 0 {
+		steps = append(steps, blockedRetryStep(s.ImagePipeline.RetryBlocked))
 	}
-	return []imageStep{blockedRetryStep(s.ImagePipeline.RetryBlocked)}
+	return steps
 }
 
 // blockedCardResponse reports whether the reply's first image is a safety card.

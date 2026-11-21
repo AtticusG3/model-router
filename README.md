@@ -299,10 +299,11 @@ in from peers. A preset name selects the steps, or a map names them:
   channel spread, concentration in a few luminance bins, and a fullest bin in
   the middle of the range, so plain black or white backgrounds are not cards.
 
-The blocked-card retry and the LoRA warm-up ship in this build; the other
-preset steps parse and validate but change no request yet. Keep the shim on a
-stanza that needs caption enhancement or the img2img body checks until those
-steps land.
+Every preset runs the shim's img2img body checks (see `SPEC.md`): a request
+with no usable `init_images[0]` gets 400 with `X-SD-Shim: reject` instead of
+quietly running as txt2img. The blocked-card retry and the LoRA warm-up ship
+in this build too. Keep the shim on a stanza that needs caption enhancement
+until that step lands.
 
 A bare sd-server stanza needs no shim: run it with `sd-server --listen-ip
 127.0.0.1 --listen-port {port}` with `health_check: /v1/models` (sd-server has
