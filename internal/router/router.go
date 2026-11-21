@@ -63,6 +63,10 @@ type Router struct {
 	// imageSteps builds the steps a stanza's image_pipeline runs; empty until a
 	// build adds them.
 	imageSteps func(*config.Stanza) []imageStep
+
+	// voiceMu serialises voice library writes so two uploads of one id cannot
+	// interleave their clip and sidecar.
+	voiceMu sync.Mutex
 }
 
 // New builds a Router from parsed config.
@@ -1167,6 +1171,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.serveJob(w, req, id)
 		return
 	}
+	if r.cfg().VoiceDir != "" && isVoiceLibraryPath(req) {
+		r.serveVoiceLibrary(w, req)
+		return
+	}
 	if isVoiceList(req) && r.serveVoiceUnion(w, req) {
 		return
 	}
@@ -1694,6 +1702,12 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			r.proxyImage(w, req, Target{Local: key}, m, m.proxy(), key, r.node, s)
 			return nil
 		}
+		if s.APIType == config.APITypeSpeech && isSynthesis(req) {
+			if err := r.injectLibraryVoice(req, s); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return nil
+			}
+		}
 		if err := filterLocal(req, s); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return nil
@@ -1733,6 +1747,12 @@ func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, p
 	// load step — the upstream serves the model id directly.
 	if p.Kind != "openai" {
 		if err := r.peerLoad(req.Context(), p, peerModel); err != nil {
+			return err
+		}
+	}
+	// Resolve a library voice on the way out, so a peer needs no copy of it.
+	if isSynthesis(req) {
+		if err := r.injectLibraryVoice(req, r.speechStanzaFor(peerModel)); err != nil {
 			return err
 		}
 	}

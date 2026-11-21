@@ -127,6 +127,17 @@ var PeerSpills = []string{PeerSpillAuto, PeerSpillOnFailure, PeerSpillNever}
 // JobAdapters is every value a stanza's job.adapter may take.
 var JobAdapters = []string{JobAdapterOpenAI, JobAdapterSDCpp}
 
+// The field shape a speech backend takes a cloned reference in. ref_audio is
+// vLLM-Omni/OpenAI (data URI plus ref_text); speaker_ref_b64 is llama-server
+// (raw base64 plus lang).
+const (
+	CloneModeRefAudio      = "ref_audio"
+	CloneModeSpeakerRefB64 = "speaker_ref_b64"
+)
+
+// CloneModes is every value a stanza's clone_mode may take.
+var CloneModes = []string{CloneModeRefAudio, CloneModeSpeakerRefB64}
+
 // Job selects the adapter in front of a stanza's own async job API. Empty
 // adapter means openai (the backend already speaks /v1/videos).
 type Job struct {
@@ -304,6 +315,10 @@ type Stanza struct {
 	// after this many seconds (504). 0 = no limit: the router itself never
 	// times out a request in flight, however long the audio.
 	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
+	// CloneMode is the field shape a speech backend takes a library voice's
+	// reference in: ref_audio (data URI plus ref_text) or speaker_ref_b64
+	// (raw base64 plus lang). Empty means ref_audio.
+	CloneMode string `yaml:"clone_mode"`
 
 	// InstancePorts holds the backend port of each instance; [0] is Port.
 	// Derived by Parse from MaxInstances.
@@ -524,6 +539,14 @@ type Config struct {
 	// stanza (a stanza may override it). Over the cap the client gets 413
 	// before any model is loaded. Default 256.
 	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
+	// VoiceDir enables the router voice library: a cloned voice is one WAV
+	// clip and one JSON sidecar in this directory. Empty disables the library
+	// and leaves /v1/audio/voices to the speech backends.
+	VoiceDir string `yaml:"voice_dir"`
+	// VoiceMaxMB and VoiceMaxSeconds cap an uploaded clip. 0 = the defaults
+	// (10 MB, 60 s).
+	VoiceMaxMB      int64 `yaml:"voice_max_mb"`
+	VoiceMaxSeconds int   `yaml:"voice_max_seconds"`
 	// JobTableMax caps the async job table; a full table drops its oldest
 	// finished job. Default 256.
 	JobTableMax int `yaml:"job_table_max"`
@@ -557,6 +580,10 @@ const (
 	DefaultStartPort   = 5800
 	// DefaultMaxRequestBodyMB caps a request body when max_request_body_mb is unset.
 	DefaultMaxRequestBodyMB = 256
+	// DefaultVoiceMaxMB and DefaultVoiceMaxSeconds cap a voice clip when
+	// voice_max_mb / voice_max_seconds are unset.
+	DefaultVoiceMaxMB      int64 = 10
+	DefaultVoiceMaxSeconds       = 60
 	// MaxRequestBodyMBLimit (1 TiB) keeps the cap in bytes, plus one for the
 	// over-cap probe read, well inside int64.
 	MaxRequestBodyMBLimit = 1 << 20
@@ -601,6 +628,25 @@ func (c *Config) JobTTL() time.Duration {
 		return time.Hour
 	}
 	return time.Duration(c.JobTTLMinutes) * time.Minute
+}
+
+// VoiceMaxBytes is the byte cap for one library voice clip, from
+// voice_max_mb or the default.
+func (c *Config) VoiceMaxBytes() int64 {
+	mb := c.VoiceMaxMB
+	if mb <= 0 {
+		mb = DefaultVoiceMaxMB
+	}
+	return mb << 20
+}
+
+// VoiceMaxSecondsValue is the play-length cap for one library voice clip,
+// from voice_max_seconds or the default.
+func (c *Config) VoiceMaxSecondsValue() int {
+	if c.VoiceMaxSeconds <= 0 {
+		return DefaultVoiceMaxSeconds
+	}
+	return c.VoiceMaxSeconds
 }
 
 // RequestBodyLimit is the byte cap for a request resolved to stanza id (empty
@@ -674,6 +720,12 @@ func Parse(raw []byte) (*Config, error) {
 	}
 	if cfg.MaxRequestBodyMB < 0 || cfg.MaxRequestBodyMB > MaxRequestBodyMBLimit {
 		return nil, fmt.Errorf("max_request_body_mb must be between 0 and %d", MaxRequestBodyMBLimit)
+	}
+	if cfg.VoiceMaxMB < 0 {
+		return nil, fmt.Errorf("voice_max_mb must not be negative")
+	}
+	if cfg.VoiceMaxSeconds < 0 {
+		return nil, fmt.Errorf("voice_max_seconds must not be negative")
 	}
 
 	reserved := map[int]bool{}
@@ -794,6 +846,17 @@ func Parse(raw []byte) (*Config, error) {
 		}
 		if s.RequestTimeoutSeconds < 0 {
 			return nil, fmt.Errorf("stanza %q: request_timeout_seconds must not be negative", s.ModelID)
+		}
+		if s.CloneMode != "" {
+			if s.APIType != APITypeSpeech {
+				return nil, fmt.Errorf("stanza %q: clone_mode is only valid with api_type: speech", s.ModelID)
+			}
+			if !slices.Contains(CloneModes, s.CloneMode) {
+				return nil, fmt.Errorf("stanza %q: clone_mode %q is not valid; must be one of %s",
+					s.ModelID, s.CloneMode, strings.Join(CloneModes, ", "))
+			}
+		} else if s.APIType == APITypeSpeech {
+			s.CloneMode = CloneModeRefAudio
 		}
 		for _, rw := range s.PathRewrite {
 			if !strings.HasPrefix(rw.From, "/") || !strings.HasPrefix(rw.To, "/") {

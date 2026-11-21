@@ -97,6 +97,9 @@ start_port: 5800          # base for auto-allocated ports
 reserved_ports: [8081, 6333]
 headroom_mb: 0            # MB left unbooked on every GPU; default 0
 max_request_body_mb: 256  # cap on one request body; over it is 413 before any load; default 256
+voice_dir: /opt/ai/state/voices  # enables the router voice library; empty = backend voices only
+voice_max_mb: 10          # cap on one library clip; default 10
+voice_max_seconds: 60     # cap on one library clip's play length; default 60
 job_table_max: 256        # async jobs remembered; a full table drops the oldest finished one; default 256
 job_ttl_minutes: 60       # longest one async job holds its model; default 60
 session_max_minutes: 0    # close a realtime session open longer (code 1001); 0 = no cap (default)
@@ -149,6 +152,7 @@ stanzas:
     api_type: transcription
     slots: 1               # a transcription stanza never overbooks its slots
     request_timeout_seconds: 0   # 0 = no limit; else 504 after this long
+    clone_mode: ref_audio  # speech only: ref_audio (default) or speaker_ref_b64
     path_rewrite:          # optional; the backend's own path for a client path
       - {from: /v1/audio/transcriptions, to: /inference}
 
@@ -289,6 +293,12 @@ Activity rows and metrics keep the client's path; only the proxied request
 changes. Filters and `path_rewrite` are the shared mechanism for audio
 backends that need a different path or field names.
 
+`clone_mode` (a speech stanza only) is the reference shape the router uses for
+a library voice: `ref_audio` (the default) sends a `data:audio/wav;base64,...`
+URI plus `ref_text`, and `speaker_ref_b64` sends raw base64 plus `lang`. An
+unknown value, or `clone_mode` on another api_type, is a load error. See Voice
+library under Speech.
+
 Before a request goes to a peer, its model field (the peer's `body_field`) is
 set to the peer's id in JSON, urlencoded and multipart bodies, and so is a
 `model` query param on any method, so a `peer/model` id or an alias reaches the
@@ -415,6 +425,31 @@ measured limits are in `docs/research/tts-backends.md`.
   is left out (logged); when every one fails the answer is `502`. Listing
   voices never starts a second speech model. With one candidate the backend's
   own answer passes through unchanged.
+- **Voice library.** Setting top-level `voice_dir` makes the router own
+  model-less `GET/POST /v1/audio/voices` and
+  `GET/DELETE /v1/audio/voices/{id}`; `?model=` still goes to that stanza's
+  backend. The library is one `<id>.wav` clip and one `<id>.json` sidecar per
+  voice, so it survives a restart and needs no database. `POST` is multipart
+  with `name`, `file` (`audio_sample` is accepted too), `ref_text`, `language`
+  and `consent`; every one is required, and a missing `consent` is `400`. The
+  clip must be a WAV, its name must match `[a-z0-9-]{1,64}`, and
+  `voice_max_mb` / `voice_max_seconds` cap it (`413` over either, `409` for an
+  existing id). `GET` on the collection answers
+  `{"object":"list","data":[...]}` without audio; `GET` on one id answers its
+  sidecar; `DELETE` removes both files. The sidecar holds `id`, `name`,
+  `hash` (SHA-256), `created`, `consent`, `who`, `ref_text` and `language`.
+- **Library voice on a speech request.** `POST /v1/audio/speech` (and
+  `/batch`) with a `voice` that names a library entry has `voice` removed
+  before the stanza's filters, and the reference added in the stanza's
+  `clone_mode`: `ref_audio` plus `ref_text`, or `speaker_ref_b64` plus `lang`.
+  `language`/`lang` is filled only when the client omitted it. A body that
+  already carries `ref_audio` or `speaker_ref_b64` is left alone, and an
+  unknown `voice` is forwarded as a backend voice (a stock preset, for
+  example). On a peer hop the voice is resolved before the hop, so the peer
+  needs no copy of it; a peer with a different `clone_mode` for the same
+  voice is not translated.
+- **Activity.** A voice write or delete is an `admin` row (`media.kind`), not a
+  generation row; the clip itself is never kept in it.
 - **Formats.** `response_format` (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`)
   passes through, and so does the backend's `Content-Type`.
 - **Streaming.** The proxy flushes every chunk. With `stream: true`, or any
