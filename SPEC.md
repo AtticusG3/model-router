@@ -191,7 +191,7 @@ image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancemen
 image_pipeline:
   caption: "" | ideogram4    # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
-  retry_blocked: 2           # blocked responses that may be retried
+  retry_blocked: 0|1         # blocked retries; the hook retries at most once for now
 ```
 
 `caption` is a format name, so another format can be added later; an unknown
@@ -200,10 +200,15 @@ uses. `sd-server` and `ideogram4` are the presets; an unknown preset, or
 `image_pipeline` on a stanza that is not `api_type: image`, fails load with a
 message naming the valid values.
 
-A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
---listen-port {port}` and `health_check: /v1/models` (sd-server has no
-`/health`). The Python shim in `deploy/` stays supported for nodes that still
-wrap sd-server with it.
+The step list this build ships is empty, so a preset parses and validates but
+changes no request yet. Keep the shim on a stanza that needs the sd-server
+checks, LoRA warm-up or caption enhancement until #120–#123 land.
+
+A bare sd-server stanza needs no shim once its preset's steps ship: run it with
+`--listen-ip 127.0.0.1 --listen-port {port}` and `health_check: /v1/models`
+(sd-server has no `/health`). Until then keep the shim for that stanza. The
+Python shim in `deploy/` stays supported for nodes that still wrap sd-server
+with it.
 
 The request body kept in Activity is the client's original, even when a
 pipeline step rewrites it; a step can attach notes (for example the rewritten

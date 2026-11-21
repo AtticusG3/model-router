@@ -1217,7 +1217,10 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	}
 	return rec, func() {
 		if isOriginal {
-			r.recordProxy(req, rec, started, original.body, original.bytes, original.truncated, model, target)
+			// A backend that answers before reading the upload leaves the rest
+			// unread, the same as the captureReader path below.
+			trunc := original.truncated || (!original.eof && original.hasBody)
+			r.recordProxy(req, rec, started, original.body, original.bytes, trunc, model, target)
 			return
 		}
 		var reqBody []byte

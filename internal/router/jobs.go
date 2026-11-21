@@ -52,15 +52,23 @@ func jobID(path string) string {
 // POST /v1/videos, or to a remix POST /v1/videos/{id}/remix (which makes a new
 // job), records the job before the client sees its id.
 func (r *Router) proxyJobAware(w http.ResponseWriter, req *http.Request, t Target, baseURL, model, target string) {
+	wrapped, done := r.beginProxy(w, req, model, target)
+	defer done()
+	r.proxyJobAwareWriter(wrapped, req, t, baseURL, model, target)
+}
+
+// proxyJobAwareWriter is proxyJobAware without the per-request metrics and
+// Activity capture; its caller owns one beginProxy pair for the whole exchange.
+func (r *Router) proxyJobAwareWriter(w http.ResponseWriter, req *http.Request, t Target, baseURL, model, target string) {
 	if req.Method != http.MethodPost || (req.URL.Path != "/v1/videos" && !strings.HasSuffix(req.URL.Path, "/remix")) {
-		r.proxyTo(w, req, baseURL, model, target)
+		r.proxyToWriter(w, req, baseURL, model, target)
 		return
 	}
 	// The job outlives the submitting client, so its submit must too: a client
 	// that drops mid-submit must not leave a job running that nothing holds.
 	req = req.WithContext(context.WithoutCancel(req.Context()))
 	hw := &holdBackWriter{ResponseWriter: w}
-	r.proxyTo(hw, req, baseURL, model, target)
+	r.proxyToWriter(hw, req, baseURL, model, target)
 	if !hw.pass && hw.status()/100 == 2 {
 		var v struct {
 			ID string `json:"id"`
