@@ -128,13 +128,16 @@ func TestInProgressAcrossMesh(t *testing.T) {
 	}
 
 	var onA, onB InProgressEntry
-	waitJob(t, "first token on both nodes", func() bool {
+	// The prompt is filled by the body tee when the request body reaches EOF,
+	// while tokens are counted as the response streams, so a row can report
+	// tokens before its prompt: wait for both, then assert the value below.
+	waitJob(t, "first token and prompt on both nodes", func() bool {
 		a, b := rA.Activity().InProgress(), rB.Activity().InProgress()
 		if len(a) != 1 || len(b) != 1 {
 			return false
 		}
 		onA, onB = a[0], b[0]
-		return onA.Tokens > 0 && onB.Tokens > 0
+		return onA.Tokens > 0 && onB.Tokens > 0 && onA.Prompt != "" && onB.Prompt != ""
 	})
 	if onA.Model != "chat" || onA.Target != "bravo" || onA.FromPeer != "" || onA.Path != "/v1/chat/completions" ||
 		onA.Started.IsZero() || onA.Prompt != prompt || onA.TTFTMs < 1 {

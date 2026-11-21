@@ -449,5 +449,5 @@ func (r *Router) logVoiceAdmin(req *http.Request, status int, id string, started
 		Status:     status,
 		DurationMs: int(time.Since(started).Milliseconds()),
 		Media:      &MediaStats{Kind: voiceAdminKind, Voice: id},
-	}, ActivityCapture{}, nil, "")
+	}, ActivityCapture{}, nil, "", [2][]preview{})
 }

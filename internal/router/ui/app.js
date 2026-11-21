@@ -1142,10 +1142,14 @@
     const a=ev.target.closest('a.cap-open[href^="data:"]');
     if(a)a.href=URL.createObjectURL(new Blob([Uint8Array.from(atob(a.href.split(',')[1]),c=>c.charCodeAt(0))],{type:a.href.slice(5,a.href.indexOf(';'))}));
   });
-  // A preview the ring has since shed for room 404s: say so instead of showing a broken image.
+  // A preview the ring has since shed for room 404s. Response image 0 falls back once to the row's
+  // thumbnail, which outlives previews; otherwise say so instead of showing a broken image.
   $('capture-parsed').addEventListener('error',ev=>{
-    const a=ev.target.closest&&ev.target.closest('a.cap-open');
-    if(a)a.replaceWith(Object.assign(document.createElement('p'),{className:'subtle',textContent:'Image preview no longer stored; the raw view has the capture.'}));
+    const im=ev.target,a=im.closest&&im.closest('a.cap-open');
+    if(!a)return;
+    const thumb=im.src.replace(/\/image\/resp\/0$/,'/thumb');
+    if(thumb!==im.src){a.href=im.src=thumb;return}
+    a.replaceWith(Object.assign(document.createElement('p'),{className:'subtle',textContent:'Image preview no longer stored; the raw view has the capture.'}));
   },true);
   async function openCapture(id, row){
     const dlg=$('activity-dialog'),e=acts.get(String(id))||{};

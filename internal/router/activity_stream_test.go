@@ -44,7 +44,7 @@ func TestActivityStreamSnapshotThenEntry(t *testing.T) {
 	r := New(cfg, logger, "router-a")
 	srv := httptest.NewServer(NewHandler(r, logger))
 	t.Cleanup(srv.Close)
-	r.Activity().record(ActivityEntry{Model: "demo-old", Path: "/v1/chat/completions", Status: 200}, ActivityCapture{}, nil, "")
+	r.Activity().record(ActivityEntry{Model: "demo-old", Path: "/v1/chat/completions", Status: 200}, ActivityCapture{}, nil, "", [2][]preview{})
 
 	resp, err := http.Get(srv.URL + "/_router/activity/stream")
 	if err != nil {
@@ -67,7 +67,7 @@ func TestActivityStreamSnapshotThenEntry(t *testing.T) {
 	}
 
 	start := time.Now()
-	r.Activity().record(ActivityEntry{Model: "demo-new", Path: "/v1/chat/completions", Status: 200, DurationMs: 42}, ActivityCapture{}, nil, "")
+	r.Activity().record(ActivityEntry{Model: "demo-new", Path: "/v1/chat/completions", Status: 200, DurationMs: 42}, ActivityCapture{}, nil, "", [2][]preview{})
 	name, data = readEvent(t, br)
 	if d := time.Since(start); d > 100*time.Millisecond {
 		t.Fatalf("entry took %v", d)
@@ -120,7 +120,7 @@ func TestActivityStreamInProgressThenEntry(t *testing.T) {
 		t.Fatalf("snapshot %q %s, want in_progress id %d", name, data, run.ID)
 	}
 
-	r.Activity().record(ActivityEntry{ID: run.ID, Model: "demo-slow", Path: "/v1/chat/completions", Status: 200}, ActivityCapture{}, nil, "")
+	r.Activity().record(ActivityEntry{ID: run.ID, Model: "demo-slow", Path: "/v1/chat/completions", Status: 200}, ActivityCapture{}, nil, "", [2][]preview{})
 	name, data = readEvent(t, br)
 	var e ActivityEntry
 	if name != "entry" || json.Unmarshal([]byte(data), &e) != nil || e.ID != run.ID {
@@ -136,7 +136,7 @@ func TestActivityStalledSubscriberDoesNotBlockRecord(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for range 500 {
-			a.record(ActivityEntry{Model: "demo"}, ActivityCapture{}, nil, "")
+			a.record(ActivityEntry{Model: "demo"}, ActivityCapture{}, nil, "", [2][]preview{})
 		}
 		close(done)
 	}()

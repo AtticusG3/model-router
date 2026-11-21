@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"image"
@@ -44,6 +45,10 @@ const (
 	maxThumbEdge = 160
 	// maxPreviewEdge is the long edge of a stored image preview, in pixels.
 	maxPreviewEdge = 1024
+	// maxDecodePixels caps the declared size of an image decoded for a
+	// thumbnail or preview: a small file can declare dimensions that would
+	// take gigabytes to decode.
+	maxDecodePixels = 40_000_000
 	// maxHashBytes is how much of an uncaptured media response is hashed for
 	// the Activity row: an identity check, not a checksum of the whole body.
 	maxHashBytes = 64 << 10
@@ -360,36 +365,6 @@ func (a *ActivityLog) Preview(id, side, n int) ([]byte, string, bool) {
 	return ps[n].data, ps[n].ct, true
 }
 
-// addPreviews stores the image previews beside a recorded capture. They are
-// the first thing shed for room: older captures' previews go before these, and
-// these are dropped rather than evicting any capture.
-func (a *ActivityLog) addPreviews(id int, previews [2][]preview) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	sc, ok := a.captures[id]
-	if !ok {
-		return
-	}
-	size := 0
-	for _, ps := range previews {
-		for _, p := range ps {
-			size += len(p.data)
-		}
-	}
-	if size == 0 {
-		return
-	}
-	for a.captureSz+size > maxCaptureBytes {
-		if !a.dropOldestPreviews() {
-			return
-		}
-	}
-	sc.previews, sc.prevSz = previews, size
-	sc.size += size
-	a.captures[id] = sc
-	a.captureSz += size
-}
-
 // dropOldestPreviews frees the previews of the oldest capture that has any;
 // false when none does.
 func (a *ActivityLog) dropOldestPreviews() bool {
@@ -423,7 +398,10 @@ func (a *ActivityLog) dropOldestCapture() {
 	}
 }
 
-func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []byte, blobType string) ActivityEntry {
+// record appends a finished row and stores its capture, blob and image
+// previews within maxCaptureBytes, shedding older rows' previews first and
+// older captures after that.
+func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []byte, blobType string, previews [2][]preview) ActivityEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	// A proxied row reserved its id when the request began; a job row has none.
@@ -435,6 +413,17 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []by
 	delete(a.running, entry.ID)
 	cap.ID = entry.ID
 	size := len(cap.ReqBody) + len(cap.RespBody) + len(blob)
+	prevSz := 0
+	for _, ps := range previews {
+		for _, p := range ps {
+			prevSz += len(p.data)
+		}
+	}
+	// A row's own previews never cost it its capture.
+	if size+prevSz > maxCaptureBytes {
+		previews, prevSz = [2][]preview{}, 0
+	}
+	size += prevSz
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
 		if !a.dropOldestPreviews() {
 			a.dropOldestCapture()
@@ -445,7 +434,7 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []by
 	// not dropped as an empty capture.
 	if (size > 0 || cap.Truncated) && a.captureSz+size <= maxCaptureBytes {
 		entry.HasCapture = true
-		a.captures[entry.ID] = storedCapture{cap: cap, blob: blob, blobType: blobType, size: size}
+		a.captures[entry.ID] = storedCapture{cap: cap, blob: blob, blobType: blobType, previews: previews, prevSz: prevSz, size: size}
 		a.captureSz += size
 	}
 	a.entries = append(a.entries, entry)
@@ -978,7 +967,7 @@ func thumbFromImageResponse(body []byte) ([]byte, string) {
 		}
 		return nil, "image base64 decode failed: " + err.Error()
 	}
-	src, _, err := image.Decode(bytes.NewReader(raw))
+	src, err := decodeImage(raw)
 	if err != nil {
 		return nil, "image decode failed: " + err.Error()
 	}
@@ -1005,18 +994,31 @@ func imagePreviews(body []byte) []preview {
 		var p preview
 		// decodeB64Image checks the decoded bytes are a PNG, JPEG or WEBP.
 		raw := decodeB64Image(s.val)
-		if src, _, err := image.Decode(bytes.NewReader(raw)); err == nil {
+		if src, err := decodeImage(raw); err == nil {
 			var buf bytes.Buffer
 			if jpeg.Encode(&buf, downscale(src, maxPreviewEdge), &jpeg.Options{Quality: 85}) == nil {
 				p = preview{buf.Bytes(), "image/jpeg"}
 			}
-		} else if raw != nil {
+		} else if raw != nil && errors.Is(err, image.ErrFormat) {
 			// shortcut: a WEBP (no decoder in the standard library) is kept as sent, add golang.org/x/image/webp if large ones crowd the ring.
 			p = preview{raw, http.DetectContentType(raw)}
 		}
 		out = append(out, p)
 	}
 	return out
+}
+
+// decodeImage decodes raw unless its header declares more than maxDecodePixels.
+func decodeImage(raw []byte) (image.Image, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width*cfg.Height > maxDecodePixels {
+		return nil, fmt.Errorf("%dx%d is over the %d MP decode limit", cfg.Width, cfg.Height, maxDecodePixels/1_000_000)
+	}
+	src, _, err := image.Decode(bytes.NewReader(raw))
+	return src, err
 }
 
 // downscale returns src scaled so its long edge is at most max pixels, sampling
@@ -1290,8 +1292,11 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	entry.RespBytes = rec.respBytes
 	entry.BodyHash = rec.bodyHash()
 	reqStr, fields, clipped := clipCapture(reqBody, "request.")
+	// Previews are kept only for a side whose images clipping replaced with
+	// placeholders; images still inline in the capture need none.
+	reqClipped := len(fields) > 0
 	var respStr string
-	var respCut bool
+	var respCut, respClipped bool
 	var blob []byte
 	blobType := "image/jpeg"
 	if rec.media {
@@ -1306,6 +1311,7 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	} else {
 		var respFields []string
 		respStr, respFields, respCut = clipCapture(rec.body.Bytes(), "response.")
+		respClipped = len(respFields) > 0
 		fields = append(fields, respFields...)
 		if isImageRequest(req.URL.Path) {
 			thumb, issue := thumbFromImageResponse(rec.body.Bytes())
@@ -1319,10 +1325,10 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	var previews [2][]preview
 	// Only a body that can hold an image is walked: every image path, and a
 	// chat request with an image_url data URL.
-	if isImageRequest(req.URL.Path) || bytes.Contains(reqBody, []byte(`"data:image/`)) {
+	if reqClipped && (isImageRequest(req.URL.Path) || bytes.Contains(reqBody, []byte(`"data:image/`))) {
 		previews[0] = imagePreviews(reqBody)
 	}
-	if isImageRequest(req.URL.Path) && !rec.media && !rec.truncated {
+	if respClipped && isImageRequest(req.URL.Path) && !rec.media && !rec.truncated {
 		previews[1] = imagePreviews(rec.body.Bytes())
 	}
 	entry = r.activity.record(entry, ActivityCapture{
@@ -1333,10 +1339,7 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		Truncated:     reqTrunc || clipped || respCut || (rec.truncated && !rec.media),
 		ClippedFields: fields,
 		Notes:         imageNotesFrom(req),
-	}, blob, blobType)
-	if entry.HasCapture {
-		r.activity.addPreviews(entry.ID, previews)
-	}
+	}, blob, blobType, previews)
 }
 
 // pathAPIType is the api_type a request path serves, "" when none.
