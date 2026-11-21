@@ -357,7 +357,11 @@ func TestEmbeddedUIFamilyIcons(t *testing.T) {
 	}
 	for _, want := range []string{
 		"const FAMILY_ICONS={", "\"qwen\":\"\\" + "u003csvg", // json.Marshal escapes the opening bracket
-		"fi=f&&Object.hasOwn(FAMILY_ICONS,f.id)&&FAMILY_ICONS[f.id]", `role="img" aria-label="'+esc(fl)+'"`,
+		// #132 makes a metadata icon_url win over the built-in family icon, and the
+		// built-in icon stays as the fallback, so assert both halves rather than the
+		// pre-#132 single expression.
+		"iu=m.info&&m.info.icon_url,fi=f&&(iu&&safeUrl(iu)?",
+		":Object.hasOwn(FAMILY_ICONS,f.id)&&FAMILY_ICONS[f.id])", `role="img" aria-label="'+esc(fl)+'"`,
 		"(fi||icon(origin==='remote'?'peer':'model'))",
 		"<td>'+peerChips(m.peers)+'</td>",
 	} {

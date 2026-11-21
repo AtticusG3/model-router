@@ -223,6 +223,10 @@ type Stanza struct {
 	// Family overrides the model family the catalog guesses from the id and
 	// name (a family id such as qwen, mistral or flux). UI metadata only.
 	Family string `yaml:"family"`
+	// Params and Owner are the model's parameter count (e.g. "27B") and maker,
+	// shown in the catalog. They win over catalog.metadata_url. UI metadata only.
+	Params string `yaml:"params"`
+	Owner  string `yaml:"owner"`
 	// Command is the backend command. {port} / ${PORT} are replaced with the
 	// stanza's port; {model} / {model_path} with the stanza's ModelPath.
 	// {gpu} is left in place and filled with the GPU index chosen at spawn
@@ -539,6 +543,15 @@ type Security struct {
 	ProxyPrefixes []netip.Prefix `yaml:"-"`
 }
 
+// Catalog points the Model catalog at an optional metadata file.
+type Catalog struct {
+	// MetadataURL is one JSON file of family and model metadata (see SPEC.md).
+	// Empty means off: the catalog uses built-in data only.
+	MetadataURL string `yaml:"metadata_url"`
+	// RefreshSeconds is how often the file is fetched again. Default 3600.
+	RefreshSeconds int `yaml:"refresh_seconds"`
+}
+
 // APIKeysEnv names the environment variable that adds API keys.
 const APIKeysEnv = "MODEL_ROUTER_API_KEYS"
 
@@ -588,6 +601,7 @@ type Config struct {
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`
+	Catalog   Catalog   `yaml:"catalog"`
 	Discovery Discovery `yaml:"discovery"`
 
 	// Derived lookups (populated by Load).
@@ -776,6 +790,9 @@ func Parse(raw []byte) (*Config, error) {
 	}
 	if cfg.Telemetry.PeerStaleSeconds == 0 {
 		cfg.Telemetry.PeerStaleSeconds = DefaultPeerStale
+	}
+	if cfg.Catalog.RefreshSeconds <= 0 {
+		cfg.Catalog.RefreshSeconds = 3600
 	}
 	if err := cfg.parseDiscovery(); err != nil {
 		return nil, err

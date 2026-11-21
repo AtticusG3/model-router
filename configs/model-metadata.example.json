@@ -1,0 +1,18 @@
+{
+  "families": {
+    "qwen": {"name": "Qwen", "owner": "Alibaba", "homepage": "https://huggingface.co/Qwen"},
+    "jina": {"name": "Jina", "owner": "Jina", "icon_url": "https://git.example.com/model-metadata/raw/branch/main/icons/jina.svg"},
+    "zimage": {"name": "Z-Image", "owner": "Example Image Lab", "icon_url": "https://git.example.com/model-metadata/raw/branch/main/icons/zimage.svg"}
+  },
+  "models": [
+    {"match": "qwen38-flash-next", "params": "125B-A6B", "modality": "text", "context_length": 262144},
+    {"match": "qwen3-0.6b-instruct", "params": "0.6B", "licence": "Apache-2.0", "modality": "text", "context_length": 32768, "hf_repo": "Qwen/Qwen3-0.6B"},
+    {"match": "qwen3-embedding-4b", "params": "4B", "licence": "Apache-2.0", "modality": "embedding", "hf_repo": "Qwen/Qwen3-Embedding-4B"},
+    {"match": "qwen-image-*", "family": "qwen", "modality": "image"},
+    {"match": "jina-reranker-*", "family": "jina", "modality": "rerank"},
+    {"match": "krea*", "modality": "image"},
+    {"match": "z-anime-*", "family": "zimage", "modality": "image"},
+    {"match": "ideogram4", "modality": "image"},
+    {"match": "flux3-*", "modality": "image"}
+  ]
+}
