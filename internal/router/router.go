@@ -92,8 +92,8 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		httpc:           &http.Client{Timeout: 0}, // no overall timeout; streaming is long
 		activity:        NewActivityLog(),
 		metrics:         NewMetrics(),
-		imageSteps:      defaultImageSteps,
 	}
+	r.imageSteps = r.defaultImageSteps
 	r.cfgp.Store(cfg)
 	return r
 }

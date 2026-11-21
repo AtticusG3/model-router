@@ -335,7 +335,7 @@ func TestImagePipelinePeerRequestAndNotes(t *testing.T) {
 	}))
 	r.imageSteps = func(*config.Stanza) []imageStep {
 		return []imageStep{{
-			Rewrite: func(req *http.Request, notes *imageNotes) error {
+			Rewrite: func(req *http.Request, _ http.Header, notes *imageNotes) error {
 				seenPeer = req.Header.Get("X-Model-Router-Peer")
 				var body map[string]any
 				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
