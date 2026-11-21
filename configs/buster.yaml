@@ -464,6 +464,45 @@ stanzas:
     unlisted: false
     port: 5933
 
+  # #82 realtime: speech-to-speech (HF voice agent) as one process on GPU0.
+  # In-process VAD (silero) + faster-whisper tiny.en + Kokoro 82M, and the LLM
+  # is a router chat stanza -- so this adds two small models, never a third
+  # copy of an LLM. Speaks the OpenAI Realtime GA core subset on /v1/realtime.
+  # Path/default are set, so a model-less ws upgrade lands here.
+  # miss: --stt faster-whisper / --tts kokoro need the package extras
+  # ("speech-to-speech[faster-whisper,kokoro]"), and the kokoro frontend shells
+  # out to `uv pip install` for its spacy model, so PYTHONPATH-free VIRTUAL_ENV
+  # and PATH must be real: without them the spawn dies with "spaCy requires
+  # either pip or uv to download models".
+  # health is /docs: FastAPI's page appears only after the handlers are built.
+  - model_id: voice-cascade
+    name: "Voice cascade (faster-whisper + Kokoro, LLM via router, realtime)"
+    command: >
+      /usr/bin/env VIRTUAL_ENV=/opt/ai/venv-s2s
+      PATH=/opt/ai/venv-s2s/bin:/home/kevyn/.local/bin:/usr/local/bin:/usr/bin:/bin
+      HF_HOME=/opt/ai/hf/s2s CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0
+      /opt/ai/venv-s2s/bin/speech-to-speech serve
+      --host 127.0.0.1 --port {port}
+      --device cuda
+      --stt faster-whisper --tts kokoro
+      --llm_backend chat-completions
+      --responses_api_base_url http://127.0.0.1:18080/v1
+      --responses_api_api_key unused
+      --model_name qwen38-flash-next
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "HF_HOME=/opt/ai/hf/s2s"]
+    vram_mb: 2000
+    device: 0
+    spin_up_seconds: 180
+    api_type: realtime
+    capabilities: [audio_in, audio_out, tools]
+    match: {path_default: true}
+    health_check: /docs
+    idle_ttl_seconds: 900
+    hold_seconds: 120
+    slots: 1
+    unlisted: false
+    port: 5936
+
 peers:
   - name: gareths-homelab
     kind: router
