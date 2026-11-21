@@ -462,11 +462,26 @@ example:
 
 ## Async jobs
 
-Video generation runs for minutes, longer than clients and fronting proxies
-hold a connection, so its backends answer a submit at once and run the job in
-the background. The router speaks one job API for this, the OpenAI-style
-`/v1/videos` (create, retrieve, content, delete), to clients and to backends.
-A backend that already speaks that job API is proxied unchanged. A stanza
+Video, music and sound-effect generation runs for longer than clients and
+fronting proxies hold a connection, so their backends answer a submit at once
+and run the job in the background. The router speaks one job shape for this,
+the OpenAI-style create, retrieve, content, delete, to clients and to
+backends, on two job collections: `/v1/videos` (`api_type: video`) and
+`/v1/audio/generations` (`api_type: audio_gen`). Everything below applies to
+both; read `{coll}` as either path. A job id belongs to the collection it was
+created in: the same id under the other collection is `404`.
+
+An audio job is created with JSON or, to attach a reference clip, multipart.
+The fields follow `docs/research/music-sfx-backends.md` §3.1: `model`,
+`prompt`, `lyrics`, `instrumental`, `seconds`, `seed`, `response_format` and
+file parts such as `reference_audio`. The router reads only `model` and
+passes the rest to the backend. Its record is
+`{id, object: "audio.generation", status, ...}`, and
+`GET /v1/audio/generations/{id}/content` streams the audio with the backend's
+`Content-Type`. A model-less create reaches the `audio_gen` stanza marked
+`path_default`, or the only one.
+
+A backend that already speaks the job API is proxied unchanged. A video stanza
 whose backend has its own job shape sets `job.adapter`:
 
 ```yaml
@@ -482,9 +497,11 @@ statuses (`generating` → `in_progress`, `cancelled` → `failed` with an error
 code), serves `result.b64_json` from `GET /v1/videos/{id}/content`, and sends
 `DELETE` to the cancel route. Remix is not available through the `sdcpp`
 adapter. A multipart `input_reference` becomes `init_image`; a 20 MB image
-rides the normal streaming upload path.
+rides the normal streaming upload path. An `audio_gen` backend speaks
+`/v1/audio/generations` itself, or sits behind a small adapter in its stanza
+`command` (research §5.4); there is no in-router audio adapter.
 
-- **Submit.** A `2xx` answer to `POST /v1/videos` whose JSON has an `id`
+- **Submit.** A `2xx` answer to `POST {coll}` whose JSON has an `id`
   records the job: id, model, the local instance or peer that took it, and the
   time. The router records it before the answer reaches the client, so a poll
   can never beat it. The submit is detached from client cancel: a client that
@@ -492,18 +509,19 @@ rides the normal streaming upload path.
 - **Hold.** The job takes one occupancy slot on its instance, the same count a
   mid-proxy request takes, so the idle sweep and eviction leave the model
   alone and a competing load waits or spills. The router polls
-  `GET /v1/videos/{id}` on the target every 2 seconds. `completed`, `failed`,
+  `GET {coll}/{id}` on the target every 2 seconds. `completed`, `failed`,
   `cancelled`, a `404`, the model being unloaded, or `job_ttl_minutes`
   (default 60) ends the hold. The idle clock starts when the job ends, so
   `idle_ttl_seconds` is the window to fetch the content. `slots` does not
   bound jobs: a second submit while one runs queues on the same instance.
-- **Follow-ups.** `GET /v1/videos/{id}`, `GET /v1/videos/{id}/content` and
-  `DELETE /v1/videos/{id}` (any path under `/v1/videos/{id}`) name no model.
+- **Follow-ups.** `GET {coll}/{id}`, `GET {coll}/{id}/content` and
+  `DELETE {coll}/{id}` (any path under `{coll}/{id}`) name no model.
   The router looks the id up and proxies to the recorded instance or peer. It
   never loads a model for a follow-up. An unknown id is `404` with a hint to
   submit again; a job whose model is no longer loaded is `404` too. A
-  `POST /v1/videos/{id}/remix` makes a child job, which the router records
-  and holds like a submit.
+  `POST {coll}/{id}/remix` makes a child job, which the router records
+  and holds like a submit. Content is streamed, never buffered, so a large
+  result starts reaching the client while the backend still sends it.
 - **Cancel.** Closing the client connection does not stop a job. A `2xx`
   answer to `DELETE` ends the job, frees the hold and forgets the id.
 - **Peers.** A job that spilled to a router peer is recorded with that peer.
@@ -516,7 +534,7 @@ rides the normal streaming upload path.
   A client polling an old id gets `404` and submits again.
 - **Visibility.** `/_router/status` has `jobs` (running jobs per model id) and
   `/metrics` has `model_router_jobs_running{model}`. Activity logs each job
-  as one `POST /v1/videos` row, written when it ends, with `job_id`,
+  as one `POST {coll}` row, written when it ends, with `job_id`,
   `job_state` and the duration from submit to end.
 
 ## Realtime sessions
@@ -778,7 +796,7 @@ the peer admits against its own budget.
 | `/v1/*`, `/v/*`, `/sdapi/v1/*`, `/rerank`, `/reranking`, `/infill`, `/completion`, `/props`, `/slots`, `/tokenize`, `/detokenize`, `/apply-template` | Passthrough to the resolved backend. `/` is the same when a model id is present. |
 | `/v1/models` | One row per mesh `model_id`: every local stanza, plus models listed by fresh router peers and by openai peers. No aliases, no pools, no `peer/model` ids. |
 | `POST /_router/load`, `POST /_router/unload` | This node's admission. Body `{"model_id":"..."}`. Unload of a model id stops every instance. |
-| `GET`, `DELETE /v1/videos/{id}`, `GET /v1/videos/{id}/content` | Async job follow-ups, routed by job id to the instance or peer that owns the job. Unknown id: 404. See Async jobs. |
+| `GET`, `DELETE /v1/videos/{id}` and `/v1/audio/generations/{id}`, `GET .../{id}/content` | Async job follow-ups, routed by job id to the instance or peer that owns the job. Unknown id: 404. See Async jobs. |
 | `GET /_router/status` | Node name, catalog, local telemetry, cached peers, running async jobs per model (`jobs`). |
 | `GET /_router/telemetry` | The snapshot peers pull. |
 | `GET /_router/logs` | Router, upstream, and mesh rings, plus a scrape of each running backend's `/metrics`. |
