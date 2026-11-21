@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import importlib.machinery
 import importlib.util
 import json
 import os
+import socket
 import struct
 import threading
 import time
@@ -78,17 +80,26 @@ class FakeEnhancer:
         self.content = json.dumps(CAPTION)
         self.delay = 0.0
         self.status = "running"
+        self.catalog_status = 200
+        self.chat_status = 200
+        self.reply: bytes | None = None
+        self.trickle = 0.0
         self.requests: list[dict] = []
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
-            def _reply(self, status: int, body: bytes) -> None:
+            def _reply(self, status: int, body: bytes, trickle: float = 0.0) -> None:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 try:
-                    self.wfile.write(body)
+                    if not trickle:
+                        self.wfile.write(body)
+                        return
+                    for byte in body:
+                        self.wfile.write(bytes([byte]))
+                        time.sleep(trickle / len(body))
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
@@ -98,7 +109,7 @@ class FakeEnhancer:
                         {"id": "test-model", "status": {"value": owner.status}}
                     ]
                 }
-                self._reply(200, json.dumps(catalog).encode())
+                self._reply(owner.catalog_status, json.dumps(catalog).encode())
 
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("Content-Length", 0) or 0)
@@ -106,13 +117,14 @@ class FakeEnhancer:
                 if owner.delay:
                     time.sleep(owner.delay)
                 reply = {"choices": [{"message": {"content": owner.content}}]}
-                self._reply(200, json.dumps(reply).encode())
+                body = owner.reply if owner.reply is not None else json.dumps(reply).encode()
+                self._reply(owner.chat_status, body, owner.trickle)
 
             def log_message(self, *_args) -> None:
                 return
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread = threading.Thread(target=self.server.serve_forever, args=(0.05,), daemon=True)
 
     def start(self) -> str:
         self.thread.start()
@@ -133,7 +145,6 @@ class ShimTest(unittest.TestCase):
             {
                 "SHIM_ENHANCER_URL": url,
                 "SHIM_ENHANCER_MODEL": "test-model",
-                "SHIM_ENHANCER_TIMEOUT": "5",
             }
         )
 
@@ -148,14 +159,18 @@ class ShimTest(unittest.TestCase):
     def body(self, **fields) -> bytes:
         return json.dumps(fields).encode("utf-8")
 
+    def enhance(self, path: str, data: bytes, enabled: bool, timeout: float = 5.0):
+        return shim._enhance_txt2img(path, data, enabled, timeout)
+
     def test_plain_prompt_is_rewritten_to_valid_caption(self) -> None:
-        data, original, enhanced = shim._enhance_txt2img(
+        data, original, enhanced, source = self.enhance(
             "/sdapi/v1/txt2img",
             self.body(prompt="a red car", width=768, height=512, seed=7),
             True,
         )
         self.assertEqual(original, "a red car")
         self.assertIsNotNone(enhanced)
+        self.assertEqual(source, "enhancer")
         out = json.loads(data)
         self.assertEqual(out["prompt"], enhanced)
         caption = json.loads(enhanced)
@@ -166,38 +181,95 @@ class ShimTest(unittest.TestCase):
     def test_existing_json_prompt_is_untouched(self) -> None:
         prompt = json.dumps(CAPTION)
         data = self.body(prompt=prompt)
-        out, original, enhanced = shim._enhance_txt2img("/sdapi/v1/txt2img", data, True)
+        out, original, enhanced, source = self.enhance("/sdapi/v1/txt2img", data, True)
         self.assertIs(out, data)
         self.assertIsNone(original)
         self.assertIsNone(enhanced)
+        self.assertIsNone(source)
         self.assertEqual(self.enhancer.requests, [])
 
     def test_enhance_prompt_false_is_untouched(self) -> None:
         data = self.body(prompt="a red car", enhance_prompt=False)
-        out, original, enhanced = shim._enhance_txt2img("/sdapi/v1/txt2img", data, True)
+        out, original, enhanced, source = self.enhance("/sdapi/v1/txt2img", data, True)
         self.assertIs(out, data)
         self.assertIsNone(original)
         self.assertIsNone(enhanced)
+        self.assertIsNone(source)
         self.assertEqual(self.enhancer.requests, [])
 
     def test_malformed_output_uses_template(self) -> None:
         self.enhancer.content = "this is not json"
-        data, _, enhanced = shim._enhance_txt2img("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
+        data, _, enhanced, source = self.enhance("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
         expected = json.dumps(shim._caption_template("a red car"), separators=(",", ":"))
         self.assertEqual(enhanced, expected)
         self.assertTrue(shim._valid_caption(json.loads(json.loads(data)["prompt"])))
 
     def test_timeout_uses_template(self) -> None:
         self.enhancer.delay = 0.5
-        os.environ["SHIM_ENHANCER_TIMEOUT"] = "0.1"
-        data, _, enhanced = shim._enhance_txt2img("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
+        data, _, enhanced, source = self.enhance(
+            "/sdapi/v1/txt2img", self.body(prompt="a red car"), True, timeout=0.1
+        )
         expected = json.dumps(shim._caption_template("a red car"), separators=(",", ":"))
         self.assertEqual(enhanced, expected)
+        self.assertEqual(source, "template")
+
+    def test_every_enhancer_failure_sends_prompt_in_template(self) -> None:
+        timeout = 0.5
+        closed = socket.socket()
+        closed.bind(("127.0.0.1", 0))
+        refused_url = f"http://127.0.0.1:{closed.getsockname()[1]}/v1"
+        closed.close()
+        cases = {
+            "model not running": {"status": "stopped"},
+            "catalogue unreachable": {"catalog_status": 500},
+            "catalogue unreachable, no model set": {"catalog_status": 500, "env": {"SHIM_ENHANCER_MODEL": ""}},
+            "model missing from catalogue": {"env": {"SHIM_ENHANCER_MODEL": "other-model"}},
+            "connection refused": {"env": {"SHIM_ENHANCER_URL": refused_url}},
+            "timeout before headers": {"delay": timeout * 3},
+            "trickled body": {"trickle": timeout * 3},
+            "http 500": {"chat_status": 500},
+            "non-json content": {"content": "this is not json"},
+            "json without choices": {"reply": b'{"id":"x"}'},
+            "invalid caption": {"content": json.dumps({"high_level_description": "x"})},
+            "malformed url": {"env": {"SHIM_ENHANCER_URL": "127.0.0.1:18080/v1"}},
+            "unexpected exception": {"raises": True},
+        }
+        no_chat = {"model not running", "catalogue unreachable", "catalogue unreachable, no model set",
+                   "model missing from catalogue"}
+        prompts = ("a red car", 'a "quoted" sign\\path\nsecond line 🚗 赤い車')
+        for name, case in cases.items():
+            for prompt in prompts:
+                with self.subTest(name, prompt=prompt):
+                    fake = FakeEnhancer()
+                    for key in ("status", "catalog_status", "delay", "trickle", "chat_status", "content", "reply"):
+                        if key in case:
+                            setattr(fake, key, case[key])
+                    env = {"SHIM_ENHANCER_URL": fake.start(), **case.get("env", {})}
+                    boom = mock.patch.object(shim, "_enhancer_model", side_effect=RuntimeError("boom"))
+                    try:
+                        with mock.patch.dict(os.environ, env), boom if case.get("raises") else contextlib.nullcontext():
+                            started = time.monotonic()
+                            data, original, _, source = self.enhance(
+                                "/sdapi/v1/txt2img", self.body(prompt=prompt), True, timeout=timeout
+                            )
+                            elapsed = time.monotonic() - started
+                    finally:
+                        fake.stop()
+                    self.assertLess(elapsed, timeout + 1)
+                    self.assertEqual(original, prompt)
+                    self.assertEqual(source, "template")
+                    caption = json.loads(json.loads(data)["prompt"])
+                    self.assertIsInstance(caption, dict)
+                    self.assertTrue(shim._valid_caption(caption))
+                    self.assertEqual(caption["high_level_description"], prompt)
+                    self.assertEqual(caption["compositional_deconstruction"]["elements"][0]["desc"], prompt)
+                    if name in no_chat:
+                        self.assertEqual(fake.requests, [])
 
     def test_flag_off_or_img2img_is_untouched(self) -> None:
         data = self.body(prompt="a red car")
         for path, enabled in (("/sdapi/v1/txt2img", False), ("/sdapi/v1/img2img", True)):
-            out, original, enhanced = shim._enhance_txt2img(path, data, enabled)
+            out, original, enhanced, source = self.enhance(path, data, enabled)
             self.assertIs(out, data)
             self.assertIsNone(original)
             self.assertIsNone(enhanced)
@@ -205,7 +277,7 @@ class ShimTest(unittest.TestCase):
 
     def test_stopped_enhancer_model_is_not_cold_loaded(self) -> None:
         self.enhancer.status = "stopped"
-        data, _, enhanced = shim._enhance_txt2img("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
+        data, _, enhanced, source = self.enhance("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
         expected = json.dumps(shim._caption_template("a red car"), separators=(",", ":"))
         self.assertEqual(enhanced, expected)
         self.assertEqual(self.enhancer.requests, [])
@@ -214,9 +286,9 @@ class ShimTest(unittest.TestCase):
         styled = dict(CAPTION)
         styled["style_description"] = {"medium": "photo"}
         self.enhancer.content = json.dumps(styled)
-        _, _, plain = shim._enhance_txt2img("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
+        _, _, plain, _ = self.enhance("/sdapi/v1/txt2img", self.body(prompt="a red car"), True)
         self.assertNotIn("style_description", json.loads(plain))
-        _, _, styled_out = shim._enhance_txt2img(
+        _, _, styled_out, _ = self.enhance(
             "/sdapi/v1/txt2img", self.body(prompt="a cinematic photo of a red car"), True
         )
         self.assertIn("style_description", json.loads(styled_out))
@@ -230,11 +302,16 @@ class ShimTest(unittest.TestCase):
 
     def test_cli_flags(self) -> None:
         parsed = shim._parse_args(["--prompt-enhance", "--retry-blocked", "5900", "--", "sd-server"])
-        self.assertEqual(parsed, (5900, True, True, ["sd-server"]))
+        self.assertEqual(parsed, (5900, True, True, 20.0, ["sd-server"]))
         self.assertIsNone(shim._parse_args(["--", "sd-server"]))
         os.environ["SHIM_PROMPT_ENHANCE"] = "1"
+        os.environ["SHIM_ENHANCER_TIMEOUT"] = "30"
         parsed = shim._parse_args(["5900", "--", "sd-server"])
-        self.assertEqual(parsed, (5900, True, False, ["sd-server"]))
+        self.assertEqual(parsed, (5900, True, False, 30.0, ["sd-server"]))
+        parsed = shim._parse_args(["--enhancer-timeout", "45", "5900", "--", "sd-server"])
+        self.assertEqual(parsed, (5900, True, False, 45.0, ["sd-server"]))
+        for bad in (["--enhancer-timeout"], ["--enhancer-timeout", "0"], ["--enhancer-timeout", "soon"]):
+            self.assertIsNone(shim._parse_args(bad + ["5900", "--", "sd-server"]))
 
 
 if __name__ == "__main__":

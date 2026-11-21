@@ -19,7 +19,7 @@ Drop-in replacement for sd-health-proxy with pipeline hardening:
 
 Usage (model-router command):
 
-  sd-router-shim [--prompt-enhance] [--retry-blocked] {port} -- sd-server [args...]
+  sd-router-shim [--prompt-enhance] [--enhancer-timeout SECONDS] [--retry-blocked] {port} -- sd-server [args...]
 
 Do not pass --listen-ip/--listen-port to sd-server; the shim supplies them.
 """
@@ -204,30 +204,27 @@ def _enhancer_model(base: str, timeout: float) -> str | None:
     """Use the configured model, or a model the router already has running.
 
     Never ask the router to cold-load: that can evict the image model. A
-    stopped model therefore yields None and the caller uses the template.
+    stopped or unlisted model therefore yields None, and an unreadable
+    catalogue raises, so the caller uses the template either way.
     """
     configured = os.environ.get("SHIM_ENHANCER_MODEL", "").strip()
-    try:
-        with urlopen(base + "/models", timeout=min(timeout, 3)) as resp:
-            catalog = json.loads(resp.read())
-    except Exception:
-        return configured or None
+    with urlopen(base + "/models", timeout=min(timeout, 3)) as resp:
+        catalog = json.loads(resp.read())
     rows = catalog.get("data") if isinstance(catalog, dict) else None
     if not isinstance(rows, list):
-        return configured or None
+        return None
 
     def running(row: dict) -> bool:
         status = row.get("status")
         state = status.get("value") if isinstance(status, dict) else None
         meta = row.get("meta")
-        origin = meta.get("modelrouter", {}).get("origin") if isinstance(meta, dict) else None
+        router = meta.get("modelrouter") if isinstance(meta, dict) else None
+        origin = router.get("origin") if isinstance(router, dict) else None
         return state == "running" or origin == "remote"
 
     if configured:
         row = next((r for r in rows if isinstance(r, dict) and r.get("id") == configured), None)
-        if row is not None and not running(row):
-            return None
-        return configured
+        return configured if row is not None and running(row) else None
     for row in rows:
         if not isinstance(row, dict) or not isinstance(row.get("id"), str):
             continue
@@ -239,14 +236,32 @@ def _enhancer_model(base: str, timeout: float) -> str | None:
     return None
 
 
-def _enhance_prompt(prompt: str, width: int, height: int) -> str | None:
-    """Return a validated compact caption from the enhancer, or None."""
+def _enhance_prompt(prompt: str, width: int, height: int, timeout: float) -> tuple[str | None, str | None]:
+    """Return (caption, None) from the enhancer, or (None, reason).
+
+    The catalogue lookup and the chat call share one wall-clock budget, and
+    any exception counts as a failure, so the caller can always fall back.
+    """
+    result: list = [None, "timeout"]
+
+    def run() -> None:
+        try:
+            result[:] = _ask_enhancer(prompt, width, height, timeout)
+        except Exception as exc:
+            result[:] = [None, f"error: {exc}"]
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    # shortcut: an abandoned worker lingers until its socket times out or the reply ends, close its socket if threads pile up
+    return (None, "timeout") if worker.is_alive() else (result[0], result[1])
+
+
+def _ask_enhancer(prompt: str, width: int, height: int, timeout: float) -> tuple[str | None, str | None]:
     base = os.environ.get("SHIM_ENHANCER_URL", ENHANCER_URL).rstrip("/")
-    timeout = _env_float("SHIM_ENHANCER_TIMEOUT", ENHANCER_TIMEOUT_S)
     model = _enhancer_model(base, timeout)
     if not model:
-        sys.stderr.write("sd-router-shim: enhancer model not running; using template\n")
-        return None
+        return None, "not running"
     payload = {
         "model": model,
         "messages": [
@@ -264,47 +279,51 @@ def _enhance_prompt(prompt: str, width: int, height: int) -> str | None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            reply = json.loads(resp.read())
-        content = reply["choices"][0]["message"]["content"]
-        caption = json.loads(_strip_code_fence(content))
-    except Exception as exc:
-        sys.stderr.write(f"sd-router-shim: prompt enhancer failed: {exc}\n")
-        return None
+    with urlopen(req, timeout=timeout) as resp:
+        reply = json.loads(resp.read())
+    content = reply["choices"][0]["message"]["content"]
+    caption = json.loads(_strip_code_fence(content))
     if not _valid_caption(caption):
-        sys.stderr.write("sd-router-shim: prompt enhancer returned an invalid caption\n")
-        return None
+        return None, "invalid caption"
     if not _asks_for_style(prompt):
         caption.pop("style_description", None)
-    return json.dumps(caption, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(caption, separators=(",", ":"), ensure_ascii=False), None
 
 
-def _enhance_txt2img(path: str, data: bytes | None, enabled: bool) -> tuple[bytes | None, str | None, str | None]:
-    """Return (body, original prompt, enhanced prompt). None prompts = untouched."""
+def _enhance_txt2img(
+    path: str, data: bytes | None, enabled: bool, timeout: float
+) -> tuple[bytes | None, str | None, str | None, str | None]:
+    """Return (body, original prompt, enhanced prompt, source). None = untouched.
+
+    source is "enhancer" or "template"; an enhancer failure only drops the
+    rewrite, never the request.
+    """
     if not enabled or path != "/sdapi/v1/txt2img" or not data:
-        return data, None, None
+        return data, None, None, None
     try:
         body = json.loads(data.decode("utf-8"))
     except Exception:
-        return data, None, None
+        return data, None, None, None
     if not isinstance(body, dict) or body.get("enhance_prompt") is False:
-        return data, None, None
+        return data, None, None, None
     prompt = body.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip():
-        return data, None, None
+        return data, None, None, None
     try:
         if isinstance(json.loads(prompt), dict):
-            return data, None, None
+            return data, None, None, None
     except Exception:
         pass
     width = _dimension(body.get("width"), 1024)
     height = _dimension(body.get("height"), 1024)
-    enhanced = _enhance_prompt(prompt, width, height)
+    enhanced, reason = _enhance_prompt(prompt, width, height, timeout)
+    source = "enhancer"
     if enhanced is None:
+        sys.stderr.write(f"sd-router-shim: prompt enhancer skipped ({reason}); using template\n")
         enhanced = json.dumps(_caption_template(prompt), separators=(",", ":"), ensure_ascii=False)
+        source = "template"
     body["prompt"] = enhanced
-    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), prompt, enhanced
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), prompt, enhanced, source
 
 
 def _dimension(value: object, default: int) -> int:
@@ -475,29 +494,40 @@ def _response_is_invalid_lora(status: int, body: bytes) -> bool:
     return "invalid lora path" in text
 
 
-USAGE = "usage: sd-router-shim [--prompt-enhance] [--retry-blocked] <outer-port> -- <sd-server> [args...]\n"
+USAGE = (
+    "usage: sd-router-shim [--prompt-enhance] [--enhancer-timeout SECONDS] [--retry-blocked]"
+    " <outer-port> -- <sd-server> [args...]\n"
+)
 
 
-def _parse_args(argv: list[str]) -> tuple[int, bool, bool, list[str]] | None:
+def _parse_args(argv: list[str]) -> tuple[int, bool, bool, float, list[str]] | None:
     if "--" not in argv:
         return None
     idx = argv.index("--")
-    head, sd_cmd = argv[:idx], argv[idx + 1 :]
+    head, sd_cmd = iter(argv[:idx]), argv[idx + 1 :]
     port = None
     enhance = _truthy(os.environ.get("SHIM_PROMPT_ENHANCE"))
     retry = False
+    timeout = _env_float("SHIM_ENHANCER_TIMEOUT", ENHANCER_TIMEOUT_S)
     for arg in head:
         if arg == "--prompt-enhance":
             enhance = True
         elif arg == "--retry-blocked":
             retry = True
+        elif arg == "--enhancer-timeout":
+            try:
+                timeout = float(next(head))
+            except (StopIteration, ValueError):
+                return None
+            if not timeout > 0:
+                return None
         elif arg.isdigit() and port is None:
             port = int(arg)
         else:
             return None
     if port is None:
         return None
-    return port, enhance, retry, sd_cmd
+    return port, enhance, retry, timeout, sd_cmd
 
 
 def main() -> int:
@@ -506,7 +536,7 @@ def main() -> int:
     if parsed is None:
         sys.stderr.write(USAGE)
         return 2
-    outer, enhance_prompt, retry_blocked, sd_cmd = parsed
+    outer, enhance_prompt, retry_blocked, enhancer_timeout, sd_cmd = parsed
     if not sd_cmd:
         sys.stderr.write("sd-router-shim: no sd-server command given\n")
         return 2
@@ -629,7 +659,7 @@ def main() -> int:
                 not in ("host", "content-length", "connection", "accept-encoding")
             }
 
-            prompt_original = prompt_enhanced = None
+            prompt_original = prompt_enhanced = prompt_source = None
             if self.command == "POST":
                 rewritten, err = _rewrite_sdapi_body(path_only, data)
                 if err is not None:
@@ -642,8 +672,8 @@ def main() -> int:
                     self.wfile.write(body)
                     return
                 data = rewritten
-                data, prompt_original, prompt_enhanced = _enhance_txt2img(
-                    path_only, data, enhance_prompt
+                data, prompt_original, prompt_enhanced, prompt_source = _enhance_txt2img(
+                    path_only, data, enhance_prompt, enhancer_timeout
                 )
                 if _body_requests_lora(data):
                     warm_loras()
@@ -693,6 +723,7 @@ def main() -> int:
             if prompt_original is not None:
                 self.send_header("X-SD-Shim-Prompt-Original", quote(prompt_original, safe=""))
                 self.send_header("X-SD-Shim-Prompt-Enhanced", quote(prompt_enhanced, safe=""))
+                self.send_header("X-SD-Shim-Prompt-Source", prompt_source)
             self.end_headers()
             self.wfile.write(body)
 
