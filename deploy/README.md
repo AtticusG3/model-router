@@ -4,6 +4,9 @@ Wrapper between model-router and sd-server, installed as the stanza command so
 the router sees one healthy endpoint. This copy is the source of truth; the
 installed binary is replaced by copying this file.
 
+Backend runtime layout (environments, torch tracks, weights, ports, probe):
+see [`backends.md`](backends.md).
+
 Usage:
 
 ```

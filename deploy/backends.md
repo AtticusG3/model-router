@@ -1,0 +1,212 @@
+# Backend runtime layout
+
+Shared decisions for every backend ticket (transcription, speech, realtime,
+video, audio generation) on the GPU host that runs the live config at
+`/opt/ai/config/model-router.yaml`. One backend, one environment, one port,
+one model directory. A backend ticket that deviates says why in its own
+section.
+
+## 1. One environment per backend
+
+Never add a runtime to the shared sidecar venv and never share a venv between
+two backends: one backend's dependency bump must not break another's spawn.
+
+| Kind | Where |
+| --- | --- |
+| Python venv | `/opt/ai/venv-<backend>` |
+| Docker image | `mr/<backend>:<version>` |
+| Static binary | `/opt/ai/bin` (no venv) |
+
+`<backend>` is one short name used for the venv, the model directory, the hub
+cache, the container name and the image tag, so a path can never point at
+another backend's files. Examples: `stt`, `tts`, `realtime`, `video`,
+`audio-gen`.
+
+## 2. Two torch tracks
+
+Two tracks exist because the cards differ. A wheel built for one track does
+not run on the other's older card.
+
+| Track | Wheel index | Pin | Cards it may use |
+| --- | --- | --- | --- |
+| cu126 | `https://download.pytorch.org/whl/cu126` | `torch==2.7.1+cu126` | the two 32 GB sm_70 cards (GPU 1, GPU 2) and the 24 GB sm_86 card (GPU 0) |
+| cu130 | `https://download.pytorch.org/whl/cu130` | `torch==2.12.1+cu130` | the 24 GB sm_86 card (GPU 0) only |
+
+- Anything that must run on the sm_70 cards uses the cu126 track.
+- The cu130 track has no sm_70 kernels. On a sm_70 card it fails at kernel
+  launch, not at import, so a placement check cannot catch it.
+- Do not raise the cu126 pin without checking the arch list; a build can
+  drop sm_70 between versions.
+
+Check a freshly built environment in its own venv:
+
+```bash
+python -c 'import torch; print(torch.__version__, torch.cuda.get_arch_list())'
+```
+
+cu126 must print `sm_70` and `sm_86`; cu130 must print `sm_86`. Put that line
+and its output in the backend ticket.
+
+## 3. Weights and the hub cache
+
+- Weights live under `/opt/ai/models/<backend>/`. Checkpoints too large for
+  `/opt/ai` may live under `/srv/ssd/models/<backend>/` instead; the stanza
+  points at whichever root holds the files. Never share one directory between
+  two backends.
+- Every Python backend sets `HF_HOME=/opt/ai/hf/<backend>`, via the stanza
+  `env` or `-e HF_HOME=/hf` on a docker command. There is no shared or
+  user-home `HF_HOME`: two backends sharing one cache fight over lock files
+  and a partial download breaks both.
+- Download once by hand in the backend environment with `HF_HUB_OFFLINE`
+  unset. Once the files are present, add `HF_HUB_OFFLINE=1` the same way; a
+  spawn must not touch the network.
+- The cache is read-mostly but still takes lock files, so a docker mount for
+  `HF_HOME` is read-write even when the weights mount is read-only.
+
+## 4. Foreground launch only
+
+The router spawns the stanza command as a process-group leader and stops it
+with SIGTERM to the group, then SIGKILL after 10 seconds. A backend that
+daemonises survives that stop and keeps holding GPU memory.
+
+- No `-d`/`--detach`, no `&`, no `nohup`, no launcher that backgrounds the
+  server.
+- Python: the stanza command is the server itself, not a wrapper that starts
+  it in the background.
+- Docker: `docker run` without `-d` is the foreground process and forwards the
+  signal to the container.
+
+Docker stanza template:
+
+```yaml
+  - model_id: <id>
+    command: >
+      docker run --rm --init --name mr-<id>
+      --gpus device={gpu}
+      --stop-timeout 5
+      -p 127.0.0.1:{port}:{port}
+      -v /opt/ai/models/<backend>:/models:ro
+      -v /opt/ai/hf/<backend>:/hf
+      -e HF_HOME=/hf
+      -e HF_HUB_OFFLINE=1
+      mr/<backend>:<version>
+      --host 0.0.0.0 --port {port}
+    device: "0|1|2"
+```
+
+- `--gpus device={gpu}` exposes exactly the card the router chose; inside the
+  container it is GPU 0. Do not also pass a host index in
+  `CUDA_VISIBLE_DEVICES` or `--device CUDA{n}`.
+- `--stop-timeout 5` lets the daemon finish the stop before the router's
+  10-second SIGKILL; with the default 10 the two race.
+- `-p 127.0.0.1:{port}:{port}` publishes the listener the router proxies to.
+  The backend binds `0.0.0.0` inside the container (a published port is
+  forwarded to the container's network address, not its loopback), while the
+  host side stays loopback-only. A non-docker backend binds `127.0.0.1`.
+- A shell entrypoint must `exec` the server, or the signal stops the shell and
+  the model process is killed only at the stop timeout.
+
+Verify that an unload leaves nothing behind (run on the node):
+
+```bash
+nvidia-smi --query-gpu=index,memory.used --format=csv,noheader
+curl -s -X POST http://127.0.0.1:18080/_router/unload \
+  -H 'Content-Type: application/json' -d '{"model_id":"<id>"}'
+sleep 3
+docker ps -a --filter 'name=^/mr-<id>$' --format '{{.Names}}'   # empty
+nvidia-smi --query-gpu=index,memory.used --format=csv,noheader
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name --format=csv
+```
+
+The unload call returns the router's result. The container listing prints
+nothing, the card's used memory returns to the pre-load figure, and the compute
+process list holds no process from the container. Record all three in the
+backend ticket.
+
+## 5. Ports
+
+Stanza ports are explicit and the router proxies to `127.0.0.1:{port}`.
+`port: 0` is auto-allocated from `start_port: 5901`, skipping
+`reserved_ports`; extra-instance ports are allocated above every stanza port
+and every reserved port.
+
+Ports already taken in the live config:
+
+| Port | Used by |
+| --- | --- |
+| `18080` | model-router listen |
+| `5903, 5904, 5907` | resident 24 GB card stanzas |
+| `5915, 5916, 5918, 5919, 5922, 5925, 5927` | image and chat stanzas |
+| `18100` | image edit stanza (also listed as reserved) |
+| `6333, 8081, 8082, 18095, 18096, 18097, 18099` | sidecars and peer routers in `reserved_ports` |
+
+`5901` is the allocation base; no stanza binds it today.
+
+**Backend block: `5930-5949`.** Reserved so auto-allocation can never hand a
+backend port to another model. Add it to `reserved_ports` on the live config:
+
+```yaml
+reserved_ports: [8081, 6333, 18095, 18096, 18097, 8082, 18099, 18100,
+                 5930, 5931, 5932, 5933, 5934, 5935, 5936, 5937, 5938,
+                 5939, 5940, 5941, 5942, 5943, 5944, 5945, 5946, 5947,
+                 5948, 5949]
+```
+
+Backend tickets take fixed ports from that block, in this order (the research
+notes already use them):
+
+| Ports | Type |
+| --- | --- |
+| `5930-5932` | transcription |
+| `5933-5935` | speech |
+| `5936-5937` | realtime |
+| `5938-5939` | video |
+| `5940-5942` | audio generation |
+| `5943-5949` | unassigned headroom |
+
+Rules: write `port: <n>` explicitly, never `port: 0`; one port per stanza; a
+primary and a fallback for the same type get two ports so they can coexist.
+The backend binds `127.0.0.1`; the router owns the public surface.
+
+## 6. Smoke probe
+
+`deploy/probe-backend.sh URL TYPE [MODEL]` checks one backend: the type's
+health path, then one tiny request. It prints `PASS ...` and exits 0, or
+`FAIL ...` with the HTTP status and the start of the error body.
+
+```bash
+# directly on a running backend
+./deploy/probe-backend.sh http://127.0.0.1:5930 transcription demo-stt
+
+# through the router (loads the stanza on demand; allow a cold start)
+PROBE_TIMEOUT=600 PROBE_HEALTH=/health \
+  ./deploy/probe-backend.sh http://127.0.0.1:18080 chat demo-chat
+```
+
+`TYPE` is an `api_type`: `chat`, `embedding`, `rerank`, `image`, `speech`,
+`transcription`, `realtime`, `video`, `audio_gen`. `MODEL` defaults to
+`probe`. `PROBE_HEALTH` overrides the health path (defaults follow the
+research notes: `/v1/audio/health` for transcription, `/docs` for realtime,
+`/sdapi/v1/sd-models` for video, `/health` otherwise). The tiny request is one
+short prompt or 64x64 one-step image, a 0.1 s silent clip for transcription,
+and a websocket handshake for realtime. A realtime `101` and any other `2xx`
+count as PASS. `video` and `audio_gen` probe the `/v1/videos` and
+`/v1/audio/generations` contract, so they only pass once the adapter for that
+backend exists; before then probe the native API by hand.
+
+A backend ticket runs this script on the node and pastes the `PASS` line.
+
+## 7. Config mirror
+
+The repo copy of the node config is byte-identical to the live config;
+production is the authority. If the two already differ, reconcile that first
+by copying the live file over the repo copy; do not merge them by hand. Then
+apply the `reserved_ports` change on the node, re-sync and validate:
+
+```bash
+cp /opt/ai/config/model-router.yaml configs/<node>.yaml
+diff -q configs/<node>.yaml /opt/ai/config/model-router.yaml && echo in sync
+./build/model-router -check -config /opt/ai/config/model-router.yaml
+```
+
+A non-empty diff is a bug, not a merge conflict to resolve in the repo copy.
