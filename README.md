@@ -328,8 +328,10 @@ in from peers. A preset name selects the steps, or a map names them:
   above 5 fails load).
   The reply's `X-SD-Shim-Blocked-Retries` header says how many retries ran. A
   blocked card is a desaturated, near-uniform image: the check combines mean
-  channel spread, concentration in a few luminance bins, and a fullest bin in
-  the middle of the range, so plain black or white backgrounds are not cards.
+  channel spread, concentration in a few luminance bins, a near-uniform middle
+  band, and a fullest bin in the middle of the range, so plain black or white
+  backgrounds and photos with one large flat area such as an overcast sky are
+  not cards.
 
 Every preset runs the shim's img2img body checks (see `SPEC.md`): a request
 with no usable `init_images[0]` gets 400 with `X-SD-Shim: reject` instead of
