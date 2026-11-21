@@ -19,6 +19,10 @@ import (
 // imageTestRouter starts backend and routes a bare sd-server stanza at it: no
 // shim, sd-server listening directly, health checked on /v1/models.
 func imageTestRouter(t *testing.T, backend http.Handler) *Router {
+	return imageTestRouterPipeline(t, backend, "sd-server")
+}
+
+func imageTestRouterPipeline(t *testing.T, backend http.Handler, pipeline string) *Router {
 	t.Helper()
 	srv := httptest.NewServer(backend)
 	t.Cleanup(srv.Close)
@@ -31,11 +35,11 @@ stanzas:
     vram_mb: 0
     api_type: image
     health_check: /v1/models
-    image_pipeline: sd-server
+    image_pipeline: %s
     match: {path_prefix: /sdapi/v1, path_default: true}
     spin_up_seconds: 5
     port: %d
-`, port)))
+`, pipeline, port)))
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}

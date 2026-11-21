@@ -195,7 +195,7 @@ image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancemen
 image_pipeline:
   caption: "" | ideogram4    # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
-  retry_blocked: 0|1         # blocked retries; the hook retries at most once for now
+  retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
 `caption` is a format name, so another format can be added later; an unknown
@@ -204,11 +204,12 @@ uses. `sd-server` and `ideogram4` are the presets; an unknown preset, or
 `image_pipeline` on a stanza that is not `api_type: image`, fails load with a
 message naming the valid values.
 
-The LoRA warm-up runs for every `image_pipeline` stanza: the router warms
-sd-server's LoRA cache when the backend becomes ready and before a request
-whose body names a LoRA, and retries one `invalid lora path` reply after
-warming again. The step list this build ships is otherwise empty, so caption
-enhancement and blocked-card retries still need the shim until #120–#123 land.
+The blocked-card retry ships in this build, and so does the LoRA warm-up:
+the router warms sd-server's LoRA cache when the backend becomes ready and
+before a request whose body names a LoRA, and retries one `invalid lora path`
+reply after warming again. The other preset steps parse and validate but
+change no request yet, so caption enhancement and the img2img body checks
+still need the shim until they land.
 
 A bare sd-server stanza needs no shim for LoRA requests: run it with
 `--listen-ip 127.0.0.1 --listen-port {port}` and `health_check: /v1/models`

@@ -141,8 +141,8 @@ type ImagePipeline struct {
 	Caption string `yaml:"caption"`
 	// Enhancer names the model and timeout used by a caption step.
 	Enhancer *ImageEnhancer `yaml:"enhancer"`
-	// RetryBlocked is how many times a blocked response may be retried. The
-	// hook retries once, so use 0 or 1 until a retry step honours higher values.
+	// RetryBlocked is how many times a blocked response may be retried, 0 for
+	// no retry.
 	RetryBlocked int `yaml:"retry_blocked"`
 
 	// preset is the bare-string form, expanded by Parse so an unknown name is
@@ -542,6 +542,9 @@ const (
 	// MaxRequestBodyMBLimit (1 TiB) keeps the cap in bytes, plus one for the
 	// over-cap probe read, well inside int64.
 	MaxRequestBodyMBLimit = 1 << 20
+	// MaxRetryBlocked caps image_pipeline retry_blocked so one client request
+	// cannot hold a model through a long run of blocked generations.
+	MaxRetryBlocked = 5
 )
 
 var portMacroRe = regexp.MustCompile(`\{port\}|\$\{PORT\}`)
@@ -744,6 +747,9 @@ func Parse(raw []byte) (*Config, error) {
 			}
 			if p.RetryBlocked < 0 {
 				return nil, fmt.Errorf("stanza %q: image_pipeline retry_blocked must not be negative", s.ModelID)
+			}
+			if p.RetryBlocked > MaxRetryBlocked {
+				return nil, fmt.Errorf("stanza %q: image_pipeline retry_blocked must be at most %d", s.ModelID, MaxRetryBlocked)
 			}
 			if p.Enhancer != nil && p.Enhancer.Model == "" {
 				return nil, fmt.Errorf("stanza %q: image_pipeline enhancer needs a model", s.ModelID)
