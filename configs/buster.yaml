@@ -503,6 +503,38 @@ stanzas:
     unlisted: false
     port: 5936
 
+  # #79 second speech option: KittenTTS 2 (1.7B ternary body, 954 MB packed,
+  # 115 built-in voices, in-context cloning from a 5-30 s reference).
+  # The `kittenml` package is a library and the vendor's own server is a
+  # separate module, so deploy/kitten-tts-shim/server.py is the OpenAI-shaped
+  # front end the router needs. Upstream does ship an OpenAI-compatible server
+  # (python -m kittenml.kittentts2.docker.server) but it takes `voice` as a
+  # dict, not the ref_audio/ref_text pair this router injects.
+  # Deps are pinned on purpose: torch 2.15 / transformers 5.24 make this
+  # checkpoint emit ~16 codec frames and stop (0.5 s of noise) -- torch 2.11.0
+  # + transformers 5.22.2 + huggingface_hub 2.4.0 generate normally.
+  - model_id: kitten-tts-2
+    name: "KittenTTS 2 (1.7B ternary, 115 voices, clone from 5-30 s)"
+    command: >
+      /usr/bin/env VIRTUAL_ENV=/opt/ai/venv-kitten
+      PATH=/opt/ai/venv-kitten/bin:/usr/local/bin:/usr/bin:/bin
+      HF_HOME=/opt/ai/hf/tts KITTEN_MODEL_DIR=/opt/ai/models/tts/kitten-tts-2
+      KITTEN_DEVICE=cuda CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0
+      /opt/ai/venv-kitten/bin/python -m uvicorn
+      --app-dir /home/kevyn/projects/model-router/deploy/kitten-tts-shim
+      server:app --host 127.0.0.1 --port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "HF_HOME=/opt/ai/hf/tts"]
+    vram_mb: 5000
+    device: 0
+    spin_up_seconds: 120
+    api_type: speech
+    health_check: /health
+    idle_ttl_seconds: 900
+    hold_seconds: 120
+    slots: 1
+    unlisted: false
+    port: 5934
+
 peers:
   - name: gareths-homelab
     kind: router
