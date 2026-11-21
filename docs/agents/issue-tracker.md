@@ -1,10 +1,12 @@
-[Docs home](../README.md) › Agent setup › Issue tracker: GitHub
+[Docs home](../README.md) › Agent setup › Issue tracker: Gitea
 
-# Issue tracker: GitHub
+# Issue tracker: Gitea
 
 > **Type:** Reference · **Audience:** agents and maintainers · **Last reviewed:** 2026-11-22
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Issues and specs for this repo live as Gitea issues in `kevyn/model-router`. Issue and PR numbers (for example #185) refer to that repo.
+
+The commands below are written for the `gh` CLI and apply only to the older GitHub mirror (`AtticusG3/model-router`), if it is still in use. On Gitea, use the web UI or the `tea` CLI equivalents (`tea issues`, `tea comment`, `tea pulls`).
 
 ## Conventions
 

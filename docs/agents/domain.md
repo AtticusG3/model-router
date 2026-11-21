@@ -62,7 +62,7 @@ If your output contradicts an existing ADR, surface it explicitly rather than si
 ## Linked from
 
 <!-- backlinks:start -->
-- [Issue tracker: GitHub](issue-tracker.md)
+- [Issue tracker: Gitea](issue-tracker.md)
 - [model-router docs](../README.md)
 - [Triage Labels](triage-labels.md)
 <!-- backlinks:end -->

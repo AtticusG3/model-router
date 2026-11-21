@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues and specs live as GitHub issues in AtticusG3/model-router. See `docs/agents/issue-tracker.md`.
+Issues and specs live as Gitea issues in `kevyn/model-router`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
