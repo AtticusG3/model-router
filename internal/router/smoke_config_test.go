@@ -14,7 +14,7 @@ func TestMatchPeerWithRealSmokeConfig(t *testing.T) {
 	t.Logf("peers: %d, peerByName has digger: %v", len(cfg.Peers), cfg.Peer("digger") != nil)
 
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"digger/remote-model","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}

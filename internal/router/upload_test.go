@@ -936,7 +936,7 @@ func TestUploadModelStraddlingPrefixIsScannedWhole(t *testing.T) {
 	}
 	req, _ := http.NewRequest("POST", "http://x/v1/audio/transcriptions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "multipart/form-data; boundary=fictionalboundary")
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil || ref.Local != "agents-a1" {
 		t.Fatalf("match = %+v, %v; want agents-a1", ref, err)
 	}

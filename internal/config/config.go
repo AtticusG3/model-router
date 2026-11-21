@@ -316,6 +316,10 @@ type Stanza struct {
 	// an admit timeout. never is on_failure except that a hard start failure
 	// is answered locally instead of walked.
 	PeerSpill string `yaml:"peer_spill"`
+	// Share advertises this model (and its filter-set ids) to peers. nil when
+	// the key is absent (default true); false keeps it off the mesh and makes
+	// this node refuse peer-proxied requests for it.
+	Share *bool `yaml:"share"`
 	// PathRewrite swaps a request path prefix for the backend's own before
 	// the request is proxied to a local instance; the first matching from
 	// wins. For a backend that serves an OpenAI route under another path.
@@ -361,6 +365,9 @@ func (s *Stanza) SlotCount() int {
 	}
 	return s.Slots
 }
+
+// Shared reports whether peers may see and request this model.
+func (s *Stanza) Shared() bool { return s.Share == nil || *s.Share }
 
 // CPUOnly reports whether the stanza runs with no GPU: `device: cpu` (a CPU
 // speech or transcription backend, usually with vram_mb: 0). It never takes a
@@ -1226,21 +1233,6 @@ func (c *Config) Pool(name string) *Pool { return c.poolByName[name] }
 
 // Peer returns the peer with the given name, or nil.
 func (c *Config) Peer(name string) *Peer { return c.peerByName[name] }
-
-// PeerAdvertises reports whether any peer lists id in its models catalog.
-func (c *Config) PeerAdvertises(id string) bool {
-	if id == "" {
-		return false
-	}
-	for i := range c.Peers {
-		for _, m := range c.Peers[i].Models {
-			if m == id {
-				return true
-			}
-		}
-	}
-	return false
-}
 
 // StanzaIDs returns all local stanza ids in config order.
 func (c *Config) StanzaIDs() []string {

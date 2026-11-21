@@ -1014,17 +1014,50 @@ func parseRetryAfter(v string) time.Duration {
 
 // peerModels is the models a peer serves. A discovered peer's scan-time Models
 // go stale between scans; the syncer refreshes its cache every few seconds,
-// so read the catalog there. Configured peers keep the model list the operator
-// wrote.
+// so read the catalog there. A configured router peer serves the model list
+// the operator wrote plus the catalog its telemetry advertises; an openai peer
+// or an older router that sends no catalog has only the written list.
 func (r *Router) peerModels(p *config.Peer) []string {
+	t, _, _ := r.peers.Entry(p.Name)
+	if t == nil {
+		return p.Models
+	}
 	if r.cfg().Peer(p.Name) == nil {
-		if t, _, _ := r.peers.Entry(p.Name); t != nil {
-			if models := modelsFrom(t); len(models) > 0 {
-				return models
-			}
+		if models := modelsFrom(t); len(models) > 0 {
+			return models
+		}
+		return p.Models
+	}
+	out := slices.Clone(p.Models)
+	for _, m := range t.Catalog {
+		if !slices.Contains(out, m) {
+			out = append(out, m)
 		}
 	}
-	return p.Models
+	return out
+}
+
+// meshAdvertises reports whether any configured or discovered peer serves id.
+func (r *Router) meshAdvertises(id string) bool {
+	return slices.ContainsFunc(r.PeerList(), func(p *config.Peer) bool { return r.peerHasModel(p, id) })
+}
+
+// refuseUnshared answers 404 when a peer asks for a local model kept off the
+// mesh (share: false), even if the caller's config still names it.
+func (r *Router) refuseUnshared(w http.ResponseWriter, req *http.Request, id string) bool {
+	if r.fromPeer(req) == "" {
+		return false
+	}
+	cfg := r.cfg()
+	s := cfg.Stanza(id)
+	if s == nil {
+		s = cfg.Alias(id)
+	}
+	if s == nil || s.Shared() {
+		return false
+	}
+	http.Error(w, "model not shared", http.StatusNotFound)
+	return true
 }
 
 func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
@@ -1387,7 +1420,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			w = u
 		}
 	}
-	ref, err := matchRequest(req, r.cfg())
+	ref, err := matchRequest(req, r.cfg(), r.meshAdvertises)
 	if err != nil {
 		if errors.Is(err, ErrNoModel) {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -1425,6 +1458,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
+	if r.refuseUnshared(w, req, modelID) {
+		return
+	}
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
 	s := r.cfg().Stanza(modelID)
 	// One admit budget for the whole local path: a sibling retry after the
@@ -1582,6 +1618,21 @@ func (r *Router) servePool(w http.ResponseWriter, req *http.Request, poolName st
 	}
 	defer snap.cleanup()
 	skip := map[string]bool{}
+	// A peer never gets a share: false member, even through a pool name.
+	if r.fromPeer(req) != "" {
+		cfg := r.cfg()
+		unshared := 0
+		for _, t := range pool.Targets {
+			if id := resolveRef(t, cfg).Local; id != "" && !cfg.Stanza(id).Shared() {
+				skip[t] = true
+				unshared++
+			}
+		}
+		if unshared == len(pool.Targets) {
+			http.Error(w, "model not shared", http.StatusNotFound)
+			return
+		}
+	}
 	var last error
 	for {
 		tgt, err := r.pickPoolTarget(pool, skip)
@@ -2090,6 +2141,7 @@ func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) e
 		return fmt.Errorf("peer %s load: %w", p.Name, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Model-Router-Peer", r.node)
 	resp, err := r.httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("peer %s load: %w", p.Name, err)
@@ -2436,7 +2488,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 	models := map[string]*ImagePipelineInfo{}
 	for i := range cfg.Stanzas {
 		s := &cfg.Stanzas[i]
-		if s.ImagePipeline != nil {
+		if s.ImagePipeline != nil && s.Shared() {
 			models[s.ModelID] = &ImagePipelineInfo{Caption: s.ImagePipeline.Caption}
 		}
 	}
@@ -2454,16 +2506,25 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 				staleByGPU[gpu] += vram
 			}
 		}
+		if gpu >= 0 && item.inFlight == 0 {
+			idleByGPU[gpu] += vram
+		}
 		slots := 1
 		var gpus []int
 		if gpu >= 0 {
 			gpus = []int{gpu}
 		}
-		if s := r.stanzaOf(item.id); s != nil {
+		s := r.stanzaOf(item.id)
+		if s != nil {
 			slots = s.SlotCount()
 			if splitPlacement(s) {
 				gpus = stanzaGPUs(s)
 			}
+		}
+		// An unshared model still counts toward the free figures above, but
+		// peers are not told it runs here.
+		if s != nil && !s.Shared() {
+			continue
 		}
 		lm := LoadedModel{
 			ID: instanceModel(item.id), Freshness: freshness, VramMB: vram, GPU: gpu, GPUs: gpus,
@@ -2473,9 +2534,6 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 			lm.Instance = item.id
 		}
 		loaded = append(loaded, lm)
-		if gpu >= 0 && item.inFlight == 0 {
-			idleByGPU[gpu] += vram
-		}
 	}
 	// Every published free figure is after headroom, so peers never pick
 	// this node for a load it must refuse.
@@ -2505,11 +2563,14 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 	return t
 }
 
-// localModelIDs lists every local stanza id and filter-set alias.
+// localModelIDs lists every shared local stanza id and filter-set alias.
 func (r *Router) localModelIDs() []string {
 	cfg := r.cfg()
 	out := make([]string, 0, len(cfg.Stanzas))
 	for i := range cfg.Stanzas {
+		if !cfg.Stanzas[i].Shared() {
+			continue
+		}
 		out = append(out, cfg.Stanzas[i].ModelID)
 		out = append(out, cfg.Stanzas[i].FilterIDs()...)
 	}

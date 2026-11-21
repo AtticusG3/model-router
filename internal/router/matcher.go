@@ -122,7 +122,9 @@ func resolveRef(raw string, cfg *config.Config) ModelRef {
 //     a unique path_default for that prefix was set at parse.
 //  3. The api_type the path serves (pathAPITypes): its path_default stanza, or
 //     its only one. Several candidates and no default is an ambiguousTypeError.
-func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
+//
+// advertised reports whether a peer serves an id that is not local.
+func matchRequest(r *http.Request, cfg *config.Config, advertised func(string) bool) (ModelRef, error) {
 	mb, err := readMatchBody(r, cfg.MaxRequestBodyBytes())
 	if err != nil {
 		return ModelRef{}, err
@@ -134,7 +136,7 @@ func matchRequest(r *http.Request, cfg *config.Config) (ModelRef, error) {
 	}
 	if m != "" {
 		ref := resolveRef(m, cfg)
-		if ref.Local == "" && ref.Pool == "" && ref.Peer == "" && !cfg.PeerAdvertises(m) {
+		if ref.Local == "" && ref.Pool == "" && ref.Peer == "" && !advertised(m) {
 			mb.cleanup()
 			return ModelRef{}, fmt.Errorf("%w: %q", ErrNoModel, m)
 		}
