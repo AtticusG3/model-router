@@ -254,7 +254,7 @@ stanzas:
   - model_id: ideogram4
     name: "Ideogram 4"
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
+      /opt/ai/bin/sd-router-shim {port} --prompt-enhance --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
       --diffusion-model /home/kevyn/models/ideogram4/ideogram4-Q8_0.gguf
       --uncond-diffusion-model /home/kevyn/models/ideogram4/ideogram4_uncond-Q8_0.gguf
@@ -265,7 +265,7 @@ stanzas:
       --vae-tiling
       --seed -1
       -W 1024 -H 1024
-    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0", "SHIM_ENHANCER_URL=http://127.0.0.1:18080/v1", "SHIM_ENHANCER_TIMEOUT=20"]
     vram_mb: 22000
     device: "0|1|2"
     spin_up_seconds: 60
