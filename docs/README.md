@@ -25,11 +25,14 @@ flowchart TD
   D -- No --> F{peer_spill<br/>allows spill?}:::decision
   F -- Yes --> G
   F -- No --> W[Wait up to<br/>admit_timeout_seconds]:::process
-  W --> D
+  W -- room frees --> D
+  W -- timeout --> X
   G --> H{Peer accepts<br/>POST /_router/load?}:::decision
   H -- No --> I{More peers?}:::decision
   I -- Yes --> G
-  I -- No --> X([503 with Retry-After]):::stop
+  I -- No --> L[Pick a node that lists<br/>the model; it waits or evicts]:::process
+  L --> J
+  X([503 with Retry-After]):::stop
   H -- Yes --> J[Stream reply<br/>through the peer]:::process
   E --> K([Stream reply<br/>from backend]):::done
   J --> K
@@ -40,7 +43,7 @@ flowchart TD
   classDef stop fill:#b71c1c,stroke:#7f0000,color:#ffffff
 ```
 
-The detail behind each box is in [SPEC.md](../SPEC.md) and the three decision records below.
+Simplified: `on_failure` retries after an admit timeout and edge cases are left out. The detail behind each box is in [SPEC.md](../SPEC.md) and the three decision records below.
 
 ## All pages
 
@@ -53,7 +56,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Repo root | [PLAN](../PLAN.md) | Explanation | 🟡 needs review (internal addresses, #184) | n/a |
 | Repo root | [Glossary](../GLOSSARY.md) | Reference | 🟢 current | n/a |
 | Repo root | [CHANGELOG](../CHANGELOG.md) | Reference | 🟢 current | 2026-11-22 |
-| Operations | [Deploy README](../deploy/README.md) | How-to | 🟢 current | n/a |
+| Operations | [Deploy README](../deploy/README.md) | How-to | 🟢 current | 2026-11-22 |
 | Operations | [Swap-over procedure](../deploy/swap-over.md) | How-to | 🟢 current | n/a |
 | Operations | [Backends](../deploy/backends.md) | Reference | 🟢 current | n/a |
 | Reference | [VRAM fit ladder](vram-fit-ladder.md) | Reference | 🟢 current | 2026-11-22 |
