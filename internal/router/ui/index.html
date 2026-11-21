@@ -89,7 +89,7 @@ A cat sat on the mat.</textarea></label><button class="primary" id="rerank-submi
         <article class="panel chart-card"><div class="chart-head"><h2>Duration</h2><span class="subtle" id="chart-dur-label">ms</span></div><svg class="spark" id="chart-dur" viewBox="0 0 320 96" role="img" aria-label="Request duration"></svg></article>
         <article class="panel chart-card"><div class="chart-head"><h2>Time to first token</h2><span class="subtle" id="chart-ttft-label">ms</span></div><svg class="spark" id="chart-ttft" viewBox="0 0 320 96" role="img" aria-label="Time to first token"></svg></article>
       </section>
-      <section class="section"><div class="section-heading"><div><h2>Generation requests</h2><p>Click a row to open the captured request and response.</p></div><span class="subtle" id="activity-hint">In-memory on this node</span></div>
+      <section class="section"><div class="section-heading"><div><h2>Generation requests</h2><p>Click a row to open the captured request and response.</p></div><div class="right"><select class="chip" id="act-peer" aria-label="Filter activity by peer"><option value="">All</option><option value="local">Local</option></select><span class="subtle" id="activity-hint">In-memory on this node</span></div></div>
         <div class="panel"><div class="table-wrap"><table class="table activity-table"><thead><tr><th>Time</th><th>Model</th><th>Path</th><th>Status</th><th>Prompt</th><th>Generated</th><th>Prompt tok/s</th><th>Gen tok/s</th><th>TTFT</th><th>Duration</th></tr></thead><tbody id="activity-rows"></tbody></table></div></div>
       </section>
     </main>

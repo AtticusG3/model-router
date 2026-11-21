@@ -276,6 +276,24 @@ func TestEmbeddedUIActivityStreamWithPollFallback(t *testing.T) {
 	}
 }
 
+// The Activity peer filter starts on All, offers Local and one option per peer
+// from /_router/status, and filters rows by target or from_peer.
+func TestEmbeddedUIActivityPeerFilter(t *testing.T) {
+	for _, want := range []string{
+		`<select class="chip" id="act-peer" aria-label="Filter activity by peer"><option value="">All</option><option value="local">Local</option></select>`,
+		"const peers=Object.keys(status.peers||{}).sort()",
+		`peers.map(p=>'<option value="p:'+esc(p)+'">'+esc(p)+'</option>')`,
+		"rows=rows.filter(actMatch)", "$('act-peer').onchange=()=>actPaint(actRows)",
+		"return !e.from_peer&&(!e.target||e.target===status.node)",
+		"return e.target===f.slice(2)||e.from_peer===f.slice(2)",
+		"'← '+e.from_peer", "'→ '+e.target",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
+
 // The fallback reads these keys, so the snapshot must keep them.
 func TestRouterLogsSnapshotFeedsUIFallback(t *testing.T) {
 	srv, logger := logTestServer(t)

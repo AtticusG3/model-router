@@ -42,6 +42,7 @@ code,.mono{font:12px/1.5 "SFMono-Regular",Consolas,"Liberation Mono",monospace}
 .chip:hover{color:var(--text);border-color:var(--line-strong);background:var(--panel-hover)}
 .chip.active{border-color:rgba(88,214,230,.45);background:var(--cyan-soft);color:var(--cyan)}
 .log-search{flex:1 1 220px;min-width:170px}
+.section-heading .right select{width:auto}
 .pause-toggle{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;white-space:nowrap;user-select:none;cursor:pointer}
 .pause-toggle input{accent-color:var(--cyan);margin:0}
 .log-view{height:calc(100vh - 270px);min-height:320px;padding:6px 0;overflow:auto;overscroll-behavior:contain;background:#080d15;border:1px solid var(--line);border-radius:9px;font:11px/1.6 "SFMono-Regular",Consolas,"Liberation Mono",monospace;color:#c5d0dc}
