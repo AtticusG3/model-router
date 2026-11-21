@@ -71,6 +71,7 @@ type Metrics struct {
 	models   map[string]*modelMetrics
 	media    map[string]*mediaTotals // api_type -> media row totals
 	inflight int64                   // atomic: requests currently being proxied
+	sessions map[string]int          // model -> open realtime sessions
 }
 
 // mediaTotals counts the media rows of one api_type and their media seconds.
@@ -99,6 +100,20 @@ func (m *Metrics) DecInflight() {
 		return
 	}
 	atomic.AddInt64(&m.inflight, -1)
+}
+
+// AddRealtimeSession moves the open realtime session count for model by d.
+// A model stays listed at 0 once its sessions close, so the gauge falls.
+func (m *Metrics) AddRealtimeSession(model string, d int) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sessions == nil {
+		m.sessions = map[string]int{}
+	}
+	m.sessions[model] += d
 }
 
 // Inflight reports the current in-flight request count.
@@ -244,6 +259,19 @@ func (m *Metrics) Render(node string) string {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if len(m.sessions) > 0 {
+		fmt.Fprintf(&sb, "# HELP model_router_realtime_sessions Open realtime websocket sessions by model.\n")
+		fmt.Fprintf(&sb, "# TYPE model_router_realtime_sessions gauge\n")
+		models := make([]string, 0, len(m.sessions))
+		for k := range m.sessions {
+			models = append(models, k)
+		}
+		sort.Strings(models)
+		for _, k := range models {
+			fmt.Fprintf(&sb, "model_router_realtime_sessions{model=%q} %d\n", k, m.sessions[k])
+		}
+	}
 
 	keys := make([]string, 0, len(m.models))
 	for k := range m.models {

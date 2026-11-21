@@ -119,9 +119,11 @@ fresh peer and streams the reply. The Image tab is the same for `api_type:
 image` (or Path default for the configured sd.cpp route).
 
 The Realtime tab opens a websocket session on `/v1/realtime?model=<id>` for an
-`api_type: realtime` entry and streams text replies. The router only passes the
-upgrade through to the backend or peer that serves the model; it adds no
-protocol of its own. A browser sends its UI sign-in key on the handshake.
+`api_type: realtime` entry and streams text replies. The router passes the
+upgrade through to the backend or peer that serves the model and holds the
+model loaded while the session is open. A client that cannot put the model in
+the URL can name it in its first `session.update` instead (SPEC.md, Realtime
+sessions). A browser sends its UI sign-in key on the handshake.
 
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,

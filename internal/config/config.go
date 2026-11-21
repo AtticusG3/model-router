@@ -455,6 +455,9 @@ type Config struct {
 	// JobTTLMinutes is the longest the router holds a model for one async job
 	// that never reports an end state. Default 60.
 	JobTTLMinutes int `yaml:"job_ttl_minutes"`
+	// SessionMaxMinutes closes a realtime websocket session that stays open
+	// longer, with close code 1001. 0 (default) means no cap.
+	SessionMaxMinutes int `yaml:"session_max_minutes"`
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`

@@ -414,24 +414,16 @@ func (w *activityWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-// Hijack hands a websocket upgrade the client connection, wrapped so the
-// session row can count frames each way. The 101 head still goes out through
-// the server's own writer, so it is not read as a frame; ReverseProxy writes
-// only that head to the ReadWriter and copies frames over the returned conn.
+// Hijack records the 101 and keeps the session's wsConn (sessionWriter wraps
+// every proxied websocket) so the row can count frames each way.
 func (w *activityWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	conn, brw, err := http.NewResponseController(w.ResponseWriter).Hijack()
 	if err != nil {
 		return nil, nil, err
 	}
-	// Bytes the server read ahead of the hijack come first, then the socket.
-	src := io.Reader(conn)
-	if n := brw.Reader.Buffered(); n > 0 {
-		ahead, _ := brw.Reader.Peek(n)
-		src = io.MultiReader(bytes.NewReader(ahead), conn)
-	}
-	w.ws = &wsConn{Conn: conn, r: src}
+	w.ws, _ = conn.(*wsConn)
 	w.status, w.wroteHead = http.StatusSwitchingProtocols, true
-	return w.ws, bufio.NewReadWriter(bufio.NewReader(w.ws), brw.Writer), nil
+	return conn, brw, nil
 }
 
 // wsConn is the client side of a proxied websocket session. It counts frames
@@ -442,6 +434,9 @@ type wsConn struct {
 	mu      sync.Mutex
 	in, out wsFrames
 	code    int
+	wmu     sync.Mutex // orders proxy writes with goAway's close frame
+	ending  bool       // goAway waits for the frame in flight to finish
+	ended   bool       // the close frame is out; later writes are refused
 }
 
 func (c *wsConn) Read(p []byte) (int, error) {
@@ -451,9 +446,45 @@ func (c *wsConn) Read(p []byte) (int, error) {
 }
 
 func (c *wsConn) Write(p []byte) (int, error) {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if c.ended {
+		return 0, net.ErrClosed
+	}
 	n, err := c.Conn.Write(p)
 	c.note(&c.out, p[:n])
+	if c.ending {
+		c.sendGoingAway()
+	}
 	return n, err
+}
+
+// goAway ends the session with close code 1001 (going away) as soon as the
+// client stream is between frames, so a close never lands inside a frame the
+// backend is part way through.
+func (c *wsConn) goAway() {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	c.ending = true
+	c.sendGoingAway()
+}
+
+// sendGoingAway writes the 1001 close frame if no frame is part sent, then
+// gives the client a second to answer before the proxy's read ends. The
+// caller holds wmu.
+func (c *wsConn) sendGoingAway() {
+	c.mu.Lock()
+	between := c.out.left == 0 && len(c.out.hdr) == 0
+	c.mu.Unlock()
+	if !between || c.ended {
+		return
+	}
+	c.ended = true
+	frame := []byte{0x88, 0x02, 0x03, 0xe9}
+	if _, err := c.Conn.Write(frame); err == nil {
+		c.note(&c.out, frame)
+	}
+	_ = c.Conn.SetReadDeadline(time.Now().Add(time.Second))
 }
 
 // CloseWrite keeps the half-close the proxy sends the client when the backend

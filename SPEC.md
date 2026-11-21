@@ -99,6 +99,7 @@ headroom_mb: 0            # MB left unbooked on every GPU; default 0
 max_request_body_mb: 256  # cap on one request body; over it is 413 before any load; default 256
 job_table_max: 256        # async jobs remembered; a full table drops the oldest finished one; default 256
 job_ttl_minutes: 60       # longest one async job holds its model; default 60
+session_max_minutes: 0    # close a realtime session open longer (code 1001); 0 = no cap (default)
 preload: [intent-model]   # load at startup; restored in config order if evicted
 
 telemetry:
@@ -398,6 +399,44 @@ per-stanza job config.
   `/metrics` has `model_router_jobs_running{model}`. Activity logs each job
   as one `POST /v1/videos` row, written when it ends, with `job_id`,
   `job_state` and the duration from submit to end.
+
+## Realtime sessions
+
+`GET /v1/realtime` with a websocket upgrade is one long-lived session on one
+instance. The router never reassembles messages. Frames, binary audio
+included, are copied straight through. `docs/research/realtime-backends.md`
+has the backend notes.
+
+- **Model.** `?model=` routes like any GET. With no `model` in the URL the
+  router answers the handshake itself, then waits up to 5 seconds for the
+  client's first frame. If that is a text frame with `session.model` (as in
+  `session.update`), the id is copied into the query and the session routes as
+  if the client had sent `?model=`. The frames read so far go to the backend
+  unchanged, ahead of the rest, and the backend's own `101` is dropped. With no
+  model in the frame, or no frame in time, the realtime `path_default` stanza
+  (or the only one) serves it. If nothing can serve it, the client gets a close
+  frame instead of an HTTP status, because the `101` is already out: `1008`
+  with the reason for a `4xx` (unknown model), `1011` otherwise. The router
+  echoes the client's first offered subprotocol and agrees no extensions.
+- **Pools** upgrade on the member they resolve to. Once the backend switches
+  protocols the attempt is committed, so there is no retry on the next target.
+- **Peers.** A session for a peer's model upgrades through the peer, with the
+  query `model` rewritten to the peer-local id. A model read from the first
+  frame is in the query by then, so it is rewritten the same way. The frame
+  itself is not edited.
+- **Hold.** An open session holds an occupancy slot on its instance until the
+  socket closes, the same as a request mid-generation. The idle sweep and
+  eviction leave the model alone, and a load that needs its VRAM waits or
+  spills. The idle clock starts when the session closes.
+- **Cap.** `session_max_minutes` (top level, default 0, no cap) closes a
+  session that stays open longer. The client gets close code `1001`, sent
+  between frames. After a second the router drops the connection to the
+  backend.
+- **Visibility.** `/metrics` has `model_router_realtime_sessions{model}`, the
+  sessions open now. Activity logs one row per session, written when it closes
+  (see Operator UI).
+- **Restart.** `http.Server.Shutdown` does not wait for hijacked connections,
+  so a router restart drops open sessions.
 
 ## Placement
 

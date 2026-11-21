@@ -1,12 +1,14 @@
 package router
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -1163,6 +1165,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.serveJob(w, req, id)
 		return
 	}
+	if isWebsocketUpgrade(req) && pathAPIType(req.URL.Path) == config.APITypeRealtime && req.URL.Query().Get("model") == "" {
+		if u := r.answerUpgrade(w, req); u != nil {
+			defer u.finish()
+			if u.gone {
+				return
+			}
+			w = u
+		}
+	}
 	ref, err := matchRequest(req, r.cfg())
 	if err != nil {
 		if errors.Is(err, ErrNoModel) {
@@ -1379,6 +1390,13 @@ func (a *attemptWriter) Write(b []byte) (int, error) {
 		return len(b), nil
 	}
 	return a.dst.Write(b)
+}
+
+// Hijack commits the attempt: a websocket session cannot be retried on the
+// next target once the backend has switched protocols.
+func (a *attemptWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	a.started = true
+	return http.NewResponseController(a.dst).Hijack()
 }
 
 func (a *attemptWriter) Flush() {
@@ -1749,6 +1767,11 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 	if r.metrics != nil {
 		r.metrics.IncInflight()
 		defer r.metrics.DecInflight()
+	}
+	if isWebsocketUpgrade(req) {
+		sw := &sessionWriter{ResponseWriter: w, r: r, model: instanceModel(model)}
+		defer sw.end()
+		w = sw
 	}
 	wrapped, done := r.wrapProxy(w, req, model, target)
 	defer done()

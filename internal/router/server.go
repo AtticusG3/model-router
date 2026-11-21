@@ -85,8 +85,8 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 		{"/v1/models", handleModels(r)},
 		// Prefixes cover OpenAI /v1, versionless /v, and sdapi. Exact natives
 		// still need their own entries because they are not under those trees.
-		// /v1/realtime upgrades to a websocket through this proxy.
-		// shortcut: the model comes from the query only (not a first session.update event) and a pool id cannot upgrade, add both when a client cannot put the model in the URL.
+		// /v1/realtime upgrades to a websocket through this proxy (see
+		// sessionWriter and answerUpgrade in realtime.go).
 		{"/v1/{path...}", proxy},
 		{"/v/{path...}", proxy},
 		{"/sdapi/v1/", proxy},
