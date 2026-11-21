@@ -23,12 +23,17 @@ var jobPollInterval = 2 * time.Second
 // the job id; anything larger is not a job record and passes straight through.
 const maxJobSubmitBody = 1 << 20
 
-// job is one async generation the router created through POST /v1/videos. It
-// holds one occupancy slot on its target until the backend reports an end
-// state, a DELETE ends it, or job_ttl_minutes passes. Fields after done are
-// guarded by r.mu; the rest never change.
+// jobCollections are the async job APIs the router records, holds and routes
+// by id. Both share one job shape: create, retrieve, content, delete.
+var jobCollections = []string{"/v1/videos", "/v1/audio/generations"}
+
+// job is one async generation the router created through a POST to one of
+// jobCollections. It holds one occupancy slot on its target until the backend
+// reports an end state, a DELETE ends it, or job_ttl_minutes passes. Fields
+// after done are guarded by r.mu; the rest never change.
 type job struct {
 	id      string
+	coll    string // the collection it was created in, e.g. /v1/videos
 	model   string // instance key or peer-local id, as proxyTo was given
 	target  string // this node's name or the peer's name
 	tgt     Target
@@ -39,19 +44,24 @@ type job struct {
 	state   string // last status the backend reported
 }
 
-// jobID returns the id in /v1/videos/{id} and /v1/videos/{id}/..., the
-// follow-up calls that name no model; "" for any other path.
-func jobID(path string) string {
-	rest, ok := strings.CutPrefix(path, "/v1/videos/")
-	if !ok {
-		return ""
+// jobPath splits a path under a job collection into the collection and the id
+// in {coll}/{id} and {coll}/{id}/..., the follow-up calls that name no model.
+// id is "" for the collection itself; both are "" for any other path.
+func jobPath(path string) (coll, id string) {
+	for _, c := range jobCollections {
+		if path == c {
+			return c, ""
+		}
+		if rest, ok := strings.CutPrefix(path, c+"/"); ok {
+			id, _, _ = strings.Cut(rest, "/")
+			return c, id
+		}
 	}
-	id, _, _ := strings.Cut(rest, "/")
-	return id
+	return "", ""
 }
 
-// proxyJobAware is proxyTo plus job bookkeeping: a 2xx answer to
-// POST /v1/videos, or to a remix POST /v1/videos/{id}/remix (which makes a new
+// proxyJobAware is proxyTo plus job bookkeeping: a 2xx answer to a POST to a
+// job collection, or to a remix POST {coll}/{id}/remix (which makes a new
 // job), records the job before the client sees its id.
 func (r *Router) proxyJobAware(w http.ResponseWriter, req *http.Request, t Target, baseURL, model, target string) {
 	wrapped, done := r.beginProxy(w, req, model, target)
@@ -62,7 +72,8 @@ func (r *Router) proxyJobAware(w http.ResponseWriter, req *http.Request, t Targe
 // proxyJobAwareWriter is proxyJobAware without the per-request metrics and
 // Activity capture; its caller owns one beginProxy pair for the whole exchange.
 func (r *Router) proxyJobAwareWriter(w http.ResponseWriter, req *http.Request, t Target, baseURL, model, target string) {
-	if req.Method != http.MethodPost || (req.URL.Path != "/v1/videos" && !strings.HasSuffix(req.URL.Path, "/remix")) {
+	coll, id := jobPath(req.URL.Path)
+	if req.Method != http.MethodPost || coll == "" || (id != "" && !strings.HasSuffix(req.URL.Path, "/remix")) {
 		r.proxyToWriter(w, req, baseURL, model, target)
 		return
 	}
@@ -84,7 +95,7 @@ func (r *Router) proxyJobAwareWriter(w http.ResponseWriter, req *http.Request, t
 			ID string `json:"id"`
 		}
 		if json.Unmarshal(hw.buf.Bytes(), &v) == nil && v.ID != "" {
-			r.recordJob(&job{id: v.ID, model: model, target: target, tgt: t, base: baseURL, code: hw.status(), created: time.Now()})
+			r.recordJob(&job{id: v.ID, coll: coll, model: model, target: target, tgt: t, base: baseURL, code: hw.status(), created: time.Now()})
 		}
 	}
 	hw.release()
@@ -168,7 +179,7 @@ func (r *Router) pollJob(j *job) (string, error) {
 	if r.videoJobAdapter(j.tgt) == config.JobAdapterSDCpp {
 		return r.pollSDCppJob(ctx, j.base, j.id)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.base+"/v1/videos/"+url.PathEscape(j.id), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.base+j.coll+"/"+url.PathEscape(j.id), nil)
 	if err != nil {
 		return "", err
 	}
@@ -215,7 +226,7 @@ func (r *Router) endJob(j *job, state string) {
 	if r.activity != nil {
 		r.activity.record(ActivityEntry{
 			Timestamp: j.created, Model: j.model, Target: j.target,
-			Method: http.MethodPost, Path: "/v1/videos", Status: j.code,
+			Method: http.MethodPost, Path: j.coll, Status: j.code,
 			DurationMs: int(took.Milliseconds()), JobID: j.id, JobState: state,
 		}, ActivityCapture{}, nil, "")
 	}
@@ -227,7 +238,7 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 	r.mu.Lock()
 	j := r.jobs[id]
 	r.mu.Unlock()
-	if j == nil {
+	if j == nil || !strings.HasPrefix(req.URL.Path, j.coll+"/") { // an id from the other collection is unknown here
 		http.Error(w, fmt.Sprintf("unknown job %q: the router keeps jobs in memory only, so a restart forgets them; submit it again", id), http.StatusNotFound)
 		return
 	}
@@ -245,7 +256,11 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 			// poll answers from the router's own record: a 404 reads as "no such
 			// job", not "the job failed".
 			if done && req.Method == http.MethodGet && !strings.HasSuffix(req.URL.Path, "/content") {
-				doc := map[string]any{"id": id, "object": "video", "status": videoStatus(state)}
+				object := "video"
+				if j.coll != "/v1/videos" {
+					object = "audio.generation"
+				}
+				doc := map[string]any{"id": id, "object": object, "status": videoStatus(state)}
 				if doc["status"] != "completed" {
 					doc["status"] = "failed"
 					doc["error"] = map[string]any{"message": fmt.Sprintf("job %q ended as %s; its model %s is no longer loaded", id, state, key)}

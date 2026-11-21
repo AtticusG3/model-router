@@ -110,6 +110,24 @@ func TestEmbeddedUITranscriptionOptions(t *testing.T) {
 	}
 }
 
+// The Music & SFX tab round-trips an audio job: submit prompt, lyrics,
+// duration and seed, poll the job until it ends, then fetch the content once
+// for an audio player and a download link.
+func TestEmbeddedUIAudioGenTab(t *testing.T) {
+	for _, want := range []string{
+		`id="pg-tab-audiogen"`, `aria-controls="pg-audiogen"`, `id="pg-audiogen" role="tabpanel" aria-labelledby="pg-tab-audiogen"`,
+		`<select id="audiogen-model" aria-label="Audio generation model"><option value="">Path default</option>`, "api_type==='audio_gen'",
+		`id="audiogen-prompt"`, `id="audiogen-lyrics"`, `id="audiogen-seconds"`, `id="audiogen-seed"`, `id="audiogen-output" class="output muted" aria-live="polite"`,
+		"window.sendAudioGen", "fetch('/v1/audio/generations',{method:'POST'", "body.lyrics=lyrics", "body.seconds=seconds", "body.seed=Number(seed)",
+		"'/v1/audio/generations/'+encodeURIComponent(job.id)", "while(job.status!=='completed')", "fetch(path+'/content')",
+		`<audio controls aria-label="Generated audio"`, `download="'+esc(job.id)+'.'+esc(ext)+'">Download audio</a>`,
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
+
 // Brand tokens, motion and the live activity table are part of the embedded shell.
 func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 	for _, want := range []string{

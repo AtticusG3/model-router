@@ -1163,7 +1163,7 @@ func (r *Router) pickPoolTarget(pool *config.Pool, skip map[string]bool) (Target
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	cs, req := withCleanups(req)
 	defer cs.run()
-	if id := jobID(req.URL.Path); id != "" {
+	if _, id := jobPath(req.URL.Path); id != "" {
 		r.serveJob(w, req, id)
 		return
 	}

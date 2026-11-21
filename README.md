@@ -78,7 +78,8 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/logs/{model_id}` | one model's ring as JSON, for the Logs page when a proxy buffers the live stream |
 | `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb`, `/_router/activity/{id}/audio` | in-memory generation request log, request/response captures, and the image thumbnail or speech audio |
 | `/v1/videos`, `/v1/videos/{id}[/content]` | async video jobs: create (JSON or multipart with `input_reference`), poll, fetch, delete |
-| `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
+| `/v1/audio/generations`, `/v1/audio/generations/{id}[/content]` | async music and sound-effect jobs, same job shape as video: create (JSON, or multipart with a reference clip), poll, fetch, delete |
+| `/ui/` | embedded operator WebUI (dashboard, activity, controls, Playground tabs including music and sound effects, logs/metrics) |
 | `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness, tokens by kind incl. prompt cache hits, prefill/decode phase tokens and seconds) |
 
 ## Video
@@ -105,6 +106,38 @@ The `sdcpp` adapter maps submit/poll/content/cancel onto sd-server's native
 itself, and an unknown id is always a local `404`. If the backend exits while a
 job runs, the job ends `failed` immediately instead of polling until
 `job_ttl_minutes`.
+
+## Music and sound effects
+
+`api_type: audio_gen` runs on the same job layer as video, under
+`/v1/audio/generations`: `POST` returns a job id at once, poll
+`GET /v1/audio/generations/{id}` until `completed`, fetch the audio from
+`GET /v1/audio/generations/{id}/content` (streamed, not buffered), and end it
+with `DELETE /v1/audio/generations/{id}`. Create with JSON (`prompt`,
+`lyrics`, `seconds`, `seed`, `response_format`, ...) or multipart to attach a
+`reference_audio` clip; the router reads only `model` and passes the rest on.
+A request with no `model` reaches the `audio_gen` stanza marked
+`path_default`, or the only one. The router holds the model while the job
+runs and logs one Activity row per job.
+
+The backend must speak `/v1/audio/generations` itself, or sit behind a small
+adapter in its stanza `command`; there is no `job` block for `audio_gen`.
+Backend choice and field mapping: `docs/research/music-sfx-backends.md`. The
+Playground **Music & SFX** tab takes a prompt, lyrics, duration and seed,
+follows the job, then plays the result and offers a download.
+
+```yaml
+  - model_id: music-gen
+    command: /opt/ai/bin/music-server --port {port}   # serves /v1/audio/generations
+    vram_mb: 12000
+    device: 0
+    api_type: audio_gen
+    capabilities: [audio_in, audio_out]
+    match: {path_default: true}
+    health_check: /health
+    idle_ttl_seconds: 900
+    port: 5940
+```
 
 ## API keys for public clients
 

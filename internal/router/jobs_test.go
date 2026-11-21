@@ -24,13 +24,15 @@ import (
 	"model-router/internal/config"
 )
 
-// jobBackend is a fake video backend with the /v1/videos job API. A job is
-// queued for the first third of d, in_progress until d, then completed. Ids are
-// random, as on real backends. submitDelay slows the submit answer.
+// jobBackend is a fake backend with the /v1/videos and /v1/audio/generations
+// job APIs. A job is queued for the first third of d, in_progress until d,
+// then completed. Ids are random, as on real backends. submitDelay slows the
+// submit answer; content, when set, writes the body of a finished job.
 type jobBackend struct {
 	srv         *httptest.Server
 	d           time.Duration
 	submitDelay time.Duration
+	content     func(http.ResponseWriter)
 	mu          sync.Mutex
 	jobs        map[string]time.Time
 	polls       atomic.Int32
@@ -42,14 +44,49 @@ func newJobBackend(t *testing.T, d time.Duration) *jobBackend {
 	b := &jobBackend{d: d, jobs: map[string]time.Time{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {})
-	mux.HandleFunc("POST /v1/videos", func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(b.submitDelay)
-		id := "video_" + rand.Text()
-		b.mu.Lock()
-		b.jobs[id] = time.Now()
-		b.mu.Unlock()
-		writeJSON(w, map[string]string{"id": id, "object": "video", "status": "queued"})
-	})
+	// The audio collection has the same shape, as in cmd/fake-model.
+	for _, c := range []struct{ coll, object, ctype, body string }{
+		{"/v1/videos", "video", "video/mp4", "fake-mp4-bytes"},
+		{"/v1/audio/generations", "audio.generation", "audio/mpeg", "fake-mp3-bytes"},
+	} {
+		mux.HandleFunc("POST "+c.coll, func(w http.ResponseWriter, req *http.Request) {
+			_, _ = io.Copy(io.Discard, req.Body)
+			time.Sleep(b.submitDelay)
+			id := c.object + "_" + rand.Text()
+			b.mu.Lock()
+			b.jobs[id] = time.Now()
+			b.mu.Unlock()
+			writeJSON(w, map[string]string{"id": id, "object": c.object, "status": "queued"})
+		})
+		mux.HandleFunc("GET "+c.coll+"/{id}", func(w http.ResponseWriter, req *http.Request) {
+			b.polls.Add(1)
+			st := b.status(req.PathValue("id"))
+			if st == "" {
+				http.Error(w, "no such job", http.StatusNotFound)
+				return
+			}
+			writeJSON(w, map[string]string{"id": req.PathValue("id"), "status": st})
+		})
+		mux.HandleFunc("GET "+c.coll+"/{id}/content", func(w http.ResponseWriter, req *http.Request) {
+			if b.status(req.PathValue("id")) != "completed" {
+				http.Error(w, "not ready", http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", c.ctype)
+			if b.content != nil {
+				b.content(w)
+				return
+			}
+			_, _ = w.Write([]byte(c.body))
+		})
+		mux.HandleFunc("DELETE "+c.coll+"/{id}", func(w http.ResponseWriter, req *http.Request) {
+			b.deletes.Add(1)
+			b.mu.Lock()
+			delete(b.jobs, req.PathValue("id"))
+			b.mu.Unlock()
+			writeJSON(w, map[string]any{"id": req.PathValue("id"), "deleted": true})
+		})
+	}
 	mux.HandleFunc("POST /v1/videos/{id}/remix", func(w http.ResponseWriter, req *http.Request) {
 		if b.status(req.PathValue("id")) == "" {
 			http.Error(w, "no such job", http.StatusNotFound)
@@ -60,30 +97,6 @@ func newJobBackend(t *testing.T, d time.Duration) *jobBackend {
 		b.jobs[id] = time.Now()
 		b.mu.Unlock()
 		writeJSON(w, map[string]string{"id": id, "object": "video", "status": "queued", "remixed_from_video_id": req.PathValue("id")})
-	})
-	mux.HandleFunc("GET /v1/videos/{id}", func(w http.ResponseWriter, req *http.Request) {
-		b.polls.Add(1)
-		st := b.status(req.PathValue("id"))
-		if st == "" {
-			http.Error(w, "no such job", http.StatusNotFound)
-			return
-		}
-		writeJSON(w, map[string]string{"id": req.PathValue("id"), "status": st})
-	})
-	mux.HandleFunc("GET /v1/videos/{id}/content", func(w http.ResponseWriter, req *http.Request) {
-		if b.status(req.PathValue("id")) != "completed" {
-			http.Error(w, "not ready", http.StatusConflict)
-			return
-		}
-		w.Header().Set("Content-Type", "video/mp4")
-		_, _ = w.Write([]byte("fake-mp4-bytes"))
-	})
-	mux.HandleFunc("DELETE /v1/videos/{id}", func(w http.ResponseWriter, req *http.Request) {
-		b.deletes.Add(1)
-		b.mu.Lock()
-		delete(b.jobs, req.PathValue("id"))
-		b.mu.Unlock()
-		writeJSON(w, map[string]any{"id": req.PathValue("id"), "deleted": true})
 	})
 	b.srv = httptest.NewServer(mux)
 	t.Cleanup(b.srv.Close)
@@ -828,11 +841,17 @@ func TestJobIDFromPath(t *testing.T) {
 		{"/v1/videos/", ""},
 		{"/v1/videos/video_1", "video_1"},
 		{"/v1/videos/video_1/content", "video_1"},
+		{"/v1/audio/generations/audio_1/content", "audio_1"},
+		{"/v1/audio/generations", ""},
 		{"/v1/audio/speech", ""},
+		{"/v1/videosx/video_1", ""},
 	} {
-		if got := jobID(c[0]); got != c[1] {
-			t.Errorf("jobID(%q) = %q, want %q", c[0], got, c[1])
+		if _, got := jobPath(c[0]); got != c[1] {
+			t.Errorf("jobPath(%q) id = %q, want %q", c[0], got, c[1])
 		}
+	}
+	if coll, _ := jobPath("/v1/audio/generations/a/content"); coll != "/v1/audio/generations" {
+		t.Errorf("jobPath collection = %q", coll)
 	}
 }
 
