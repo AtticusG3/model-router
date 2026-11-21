@@ -25,6 +25,15 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 		{"/_router/reload", handleReload(r)},
 		{"/_router/status", func(w http.ResponseWriter, req *http.Request) {
 			peers := r.Peers().Snapshot()
+			inPlay := make(map[string]bool, len(peers))
+			for _, p := range r.PeerList() {
+				inPlay[p.Name] = true
+			}
+			for name := range peers {
+				if !inPlay[name] {
+					delete(peers, name)
+				}
+			}
 			// Freshness is judged on this node's clock, not the peer's timestamp.
 			fresh := make(map[string]bool, len(peers))
 			for name := range peers {
@@ -36,6 +45,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 				"telemetry":   r.TelemetrySnapshot(),
 				"peers":       peers,
 				"peers_fresh": fresh,
+				"discovered":  r.DiscoveredPeers(),
 				"reload":      r.reloadStatus(),
 				"jobs":        r.RunningJobs(),
 			})
@@ -346,9 +356,7 @@ func handleMetrics(r *Router) http.HandlerFunc {
 
 		fmt.Fprintf(&sb, "# HELP model_router_peer_fresh 1 if peer telemetry is within the stale window\n")
 		fmt.Fprintf(&sb, "# TYPE model_router_peer_fresh gauge\n")
-		cfg := r.cfg()
-		for i := range cfg.Peers {
-			p := &cfg.Peers[i]
+		for _, p := range r.PeerList() {
 			if p.Kind != "router" {
 				continue
 			}
