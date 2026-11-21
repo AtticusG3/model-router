@@ -242,6 +242,7 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 		http.Error(w, fmt.Sprintf("unknown job %q: the router keeps jobs in memory only, so a restart forgets them; submit it again", id), http.StatusNotFound)
 		return
 	}
+	releaseHold := func() {}
 	if key := j.tgt.Local; key != "" {
 		r.mu.Lock()
 		m := r.managed[key]
@@ -271,7 +272,15 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 			http.Error(w, fmt.Sprintf("job %q: its model %s is no longer loaded", id, key), http.StatusNotFound)
 			return
 		}
-		defer r.releaseOccupancy(j.tgt)
+		released := false
+		releaseHold = func() {
+			if released {
+				return
+			}
+			released = true
+			r.releaseOccupancy(j.tgt)
+		}
+		defer releaseHold()
 		m.markUsed()
 		defer m.markUsed()
 	} else {
@@ -279,7 +288,11 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 	}
 	if adapter := r.videoJobAdapter(j.tgt); adapter == config.JobAdapterSDCpp {
 		if req.Method == http.MethodDelete {
-			if r.serveSDCppFollow(w, req, j.base, j.model, id) {
+			// Hold the answer until the job is ended and this request's own
+			// slot is freed: a client that checks occupancy the instant DELETE
+			// returns must not see the cancelled job still holding its model.
+			hw := &holdBackWriter{ResponseWriter: w}
+			if r.serveSDCppFollow(hw, req, j.base, j.model, id) {
 				r.endJob(j, "cancelled")
 				r.mu.Lock()
 				if r.jobs[id] == j {
@@ -287,6 +300,8 @@ func (r *Router) serveJob(w http.ResponseWriter, req *http.Request, id string) {
 				}
 				r.mu.Unlock()
 			}
+			releaseHold()
+			hw.release()
 			return
 		}
 		r.serveSDCppFollow(w, req, j.base, j.model, id)
