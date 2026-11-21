@@ -204,10 +204,11 @@ image_pipeline:
 ```
 
 `caption` is a format name, so another format can be added later; an unknown
-name is a load error. The enhancer names the model and timeout the caption step
-uses. `sd-server` and `ideogram4` are the presets; an unknown preset, or
-`image_pipeline` on a stanza that is not `api_type: image`, fails load with a
-message naming the valid values.
+name is a load error. The serving node advertises the format in its telemetry,
+so a peer spill prefers copies that run the same pipeline. The enhancer names
+the model and timeout the caption step uses. `sd-server` and `ideogram4` are
+the presets; an unknown preset, or `image_pipeline` on a stanza that is not
+`api_type: image`, fails load with a message naming the valid values.
 
 Every preset runs the img2img body checks on `POST /sdapi/v1/img2img` with a
 JSON object body: a missing or empty `init_images`, or an `init_images[0]`
@@ -822,8 +823,14 @@ The snapshot a node publishes:
 - Per GPU: index, name, total MB, free MB, free MB if stale models were
   evicted, free MB if idle models were evicted. All three free figures are
   after `headroom_mb`.
+- Per configured stanza that declares an `image_pipeline`: the advertised
+  `caption` format under `models`, keyed by `model_id` (an empty object means a
+  pipeline with no caption step). It is advertised whether or not the model is
+  loaded, so an idle-evicted copy still reports how it would serve a request.
+  The field is absent when no stanza has a pipeline, so older peers parse the
+  snapshot.
 - Each running instance: `model_id`, instance key when it is not instance 0,
-  `fresh` or `stale`, VRAM budget, GPU, slot count, in-flight count. A
+  `fresh` or `stale`, VRAM budget, GPU, slot count and in-flight count. A
   `device: cpu` instance has no GPU entry (`gpu: none`).
 
 Candidate selection treats a card as empty enough to try when idle-evicted
@@ -831,6 +838,15 @@ free is within 2 GB of the card total. nvidia-smi never reports a fully idle
 card. A peer that lists the model still fits when its card is empty even if
 this node's own `vram_mb` is larger than that card: the hint is local, and
 the peer admits against its own budget.
+
+When the local stanza's `image_pipeline.caption` is set, peers whose copy
+advertises the same caption are ranked first. A peer that advertises no
+caption (or an older peer that does not report the field) is only a fallback,
+tried when no matching peer can take the request; the default `auto` spill
+policy allows that fallback. The mesh log marks such a fallback:
+`peer walk ideogram4 -> plain (fallback: no ideogram4 caption)`. The no-peer
+line lists each peer's skip reason (`cooling`, `telemetry stale`,
+`refused`) without a caption hint.
 
 ## HTTP API
 

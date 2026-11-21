@@ -593,6 +593,123 @@ peers:
 	}
 }
 
+func TestResolveMeshPrefersPeerWithSameImageCaption(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: ideogram4
+    command: "x --port {port}"
+    vram_mb: 1000
+    api_type: image
+    image_pipeline: ideogram4
+peers:
+  - name: plain
+    kind: router
+    base_url: http://192.168.1.1:8081
+    models: [ideogram4]
+  - name: matching
+    kind: router
+    base_url: http://192.168.1.2:8081
+    models: [ideogram4]
+`)
+	r.peers.Set("plain", &Telemetry{
+		Node:         "plain",
+		LoadedModels: []LoadedModel{{ID: "ideogram4", Slots: 1}},
+	})
+	r.peers.Set("matching", &Telemetry{
+		Node:         "matching",
+		LoadedModels: []LoadedModel{{ID: "ideogram4", Slots: 1}},
+		Models:       map[string]*ImagePipelineInfo{"ideogram4": {Caption: "ideogram4"}},
+	})
+	tgt, err := r.resolveMesh("ideogram4")
+	if err != nil {
+		t.Fatalf("resolveMesh: %v", err)
+	}
+	if tgt.Peer != "matching" {
+		t.Fatalf("target = %+v, want matching (same caption), not plain", tgt)
+	}
+	ranked, _ := r.rankPeers("ideogram4", false)
+	if len(ranked) != 2 || ranked[0].Peer != "matching" || ranked[1].Peer != "plain" {
+		t.Fatalf("ranked = %+v, want matching first with plain kept as the fallback", ranked)
+	}
+
+	// With the matching peer unavailable, the default policy falls back to a
+	// peer that advertises no caption rather than 503.
+	fallback := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: ideogram4
+    command: "x --port {port}"
+    vram_mb: 1000
+    api_type: image
+    image_pipeline: ideogram4
+peers:
+  - name: plain
+    kind: router
+    base_url: http://192.168.1.1:8081
+    models: [ideogram4]
+  - name: matching
+    kind: router
+    base_url: http://192.168.1.2:8081
+    models: [ideogram4]
+`)
+	fallback.peers.Set("plain", &Telemetry{
+		Node:         "plain",
+		LoadedModels: []LoadedModel{{ID: "ideogram4", Slots: 1}},
+	})
+	tgt, err = fallback.resolveMesh("ideogram4")
+	if err != nil {
+		t.Fatalf("resolveMesh fallback: %v", err)
+	}
+	if tgt.Peer != "plain" {
+		t.Fatalf("target = %+v, want plain as the fallback", tgt)
+	}
+}
+
+func TestResolveMeshMatchesUnloadedPeerByAdvertisedPipeline(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: ideogram4
+    command: "x --port {port}"
+    vram_mb: 1000
+    api_type: image
+    image_pipeline: ideogram4
+peers:
+  - name: plain
+    kind: router
+    base_url: http://192.168.1.1:8081
+    models: [ideogram4]
+  - name: matching
+    kind: router
+    base_url: http://192.168.1.2:8081
+    models: [ideogram4]
+`)
+	// The plain peer has the model loaded and a free slot; the matching peer
+	// advertises the pipeline but has not loaded the model (or evicted it).
+	r.peers.Set("plain", &Telemetry{
+		Node:         "plain",
+		GPUs:         []*GPUState{gpu(0, 10000)},
+		LoadedModels: []LoadedModel{{ID: "ideogram4", Slots: 1}},
+	})
+	r.peers.Set("matching", &Telemetry{
+		Node:   "matching",
+		GPUs:   []*GPUState{gpu(0, 10000)},
+		Models: map[string]*ImagePipelineInfo{"ideogram4": {Caption: "ideogram4"}},
+	})
+	tgt, err := r.resolveMesh("ideogram4")
+	if err != nil {
+		t.Fatalf("resolveMesh: %v", err)
+	}
+	if tgt.Peer != "matching" {
+		t.Fatalf("target = %+v, want matching even with the model unloaded", tgt)
+	}
+	ranked, _ := r.rankPeers("ideogram4", false)
+	if len(ranked) != 2 || ranked[0].Peer != "matching" || ranked[1].Peer != "plain" {
+		t.Fatalf("ranked = %+v, want matching first with plain kept as the fallback", ranked)
+	}
+}
+
 func TestPeerEligibleWhenLoadedIgnoresLowFreeVRAM(t *testing.T) {
 	r := spilloverRouter(t, `
 start_port: 5900

@@ -23,8 +23,8 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
   so concurrent loads cannot double-book during spin-up. A node is the sole
   authority over its own GPUs (no split-brain).
 - Peers pull `GET /_router/telemetry` every few seconds: loaded models
-  (fresh/stale), live free VRAM, and free VRAM if stale or idle models were
-  evicted.
+  (fresh/stale), each copy's image pipeline caption, live free VRAM, and free
+  VRAM if stale or idle models were evicted.
 - Spills requests to peers when the local node can't serve them (model not
   local, or GPU full): `POST /_router/load` on the candidate, then a streamed
   transparent reverse proxy. If no peer is empty right now, the origin still

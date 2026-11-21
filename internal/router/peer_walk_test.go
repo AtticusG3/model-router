@@ -208,6 +208,66 @@ func TestPeerWalkSlotSpillWalksThenQueuesLocally(t *testing.T) {
 	}
 }
 
+func TestPeerWalkSlotSpillPrefersSameImageCaption(t *testing.T) {
+	plain := newWalkPeer(t, http.StatusOK, "")
+	matching := newWalkPeer(t, http.StatusOK, "")
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: ideogram4
+    command: "x --port {port}"
+    vram_mb: 1000
+    api_type: image
+    image_pipeline: ideogram4
+peers:
+  - name: plain
+    kind: router
+    base_url: http://127.0.0.1:9
+    models: [ideogram4]
+  - name: matching
+    kind: router
+    base_url: http://127.0.0.1:9
+    models: [ideogram4]
+`)
+	r.cfg().Peer("plain").BaseURL = plain.srv.URL
+	r.cfg().Peer("matching").BaseURL = matching.srv.URL
+	r.peers.Set("plain", &Telemetry{Node: "plain"})
+	r.peers.Set("matching", &Telemetry{
+		Node:   "matching",
+		Models: map[string]*ImagePipelineInfo{"ideogram4": {Caption: "ideogram4"}},
+	})
+	newReq := func() *http.Request {
+		return httptest.NewRequest("POST", "/v1/images/generations", bytes.NewBufferString(`{"model":"ideogram4"}`))
+	}
+
+	if !r.serveSlotSpill(httptest.NewRecorder(), newReq(), "ideogram4") {
+		t.Fatal("slot spill should reach the matching peer")
+	}
+	if matching.loads.Load() != 1 || plain.loads.Load() != 0 {
+		t.Fatalf("matching loads = %d, plain loads = %d, want the matching peer alone", matching.loads.Load(), plain.loads.Load())
+	}
+	if logs := strings.Join(r.logger.RecentMesh(0), "\n"); strings.Contains(logs, "fallback") {
+		t.Fatalf("mesh log = %q, want no fallback note for a matching peer", logs)
+	}
+
+	// The matching copy has no free slot, so the walk falls back to the plain
+	// peer and the log says why.
+	r.peers.Set("matching", &Telemetry{
+		Node:         "matching",
+		LoadedModels: []LoadedModel{{ID: "ideogram4", Slots: 1, InFlight: 1}},
+		Models:       map[string]*ImagePipelineInfo{"ideogram4": {Caption: "ideogram4"}},
+	})
+	if !r.serveSlotSpill(httptest.NewRecorder(), newReq(), "ideogram4") {
+		t.Fatal("slot spill should fall back to the plain peer")
+	}
+	if plain.loads.Load() != 1 || matching.loads.Load() != 1 {
+		t.Fatalf("plain loads = %d, matching loads = %d, want the plain fallback", plain.loads.Load(), matching.loads.Load())
+	}
+	if logs := strings.Join(r.logger.RecentMesh(0), "\n"); !strings.Contains(logs, "peer walk ideogram4 -> plain (fallback: no ideogram4 caption)") {
+		t.Fatalf("mesh log = %q, want the plain fallback named", logs)
+	}
+}
+
 func TestPeerWalkOpenAIPeerIsASingleHop(t *testing.T) {
 	var hits atomic.Int32
 	openai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
