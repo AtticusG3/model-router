@@ -967,7 +967,15 @@ Config section). A request that names a model, or a stanza's explicit
 Unload start and stop this node's stanzas only. Choosing a remote `model_id`
 in the Playground is an ordinary `/v1/...` request, so this node
 spills or proxies. Activity keeps the last 200 proxied requests, with at
-most 256 KB per body and 8 MB of captures, in memory only. An image response
+most 256 KB per body and 8 MB of captures, in memory only. A JSON body (up to
+8 MB buffered, 32 MB for an image response) or SSE stream over 256 KB is
+clipped inside so it still parses: the longest strings are cut to a common
+length with a `…[clipped 1.4 MB]` marker, base64 images become
+`[image 0: png 1.3 MB]`, and a long stream keeps its first and last events
+with the middle summarised as one SSE comment. The capture's `clipped_fields`
+names each clipped path (`request.messages[3].content`, `response.images[0]`,
+`response.events[40:2800]`); `truncated` is set only when a body was cut as
+raw bytes (not JSON, or over the buffer). An image response
 also keeps a downscaled thumbnail (160 px long edge, JPEG) in that budget. A
 media response (`audio/*`, `video/*`, `application/octet-stream`) is not
 captured as text; its row keeps the content type, byte count and a body hash

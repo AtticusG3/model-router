@@ -36,7 +36,7 @@ const (
 	// token counts entirely before this tail existed.
 	maxStatsTail    = 64 * 1024
 	maxCaptureBytes = 8 * 1024 * 1024
-	// maxImageBody is the extra buffer kept for an image-generation response so
+	// maxImageBody is how much of an image-generation response is buffered, so
 	// the thumbnail is decoded from the whole body, not the clipped capture.
 	// Longer responses are captured truncated with no thumbnail.
 	maxImageBody = 32 * 1024 * 1024
@@ -186,7 +186,11 @@ type ActivityCapture struct {
 	ReqBody     string              `json:"req_body"`
 	RespHeaders map[string][]string `json:"resp_headers"`
 	RespBody    string              `json:"resp_body"`
-	Truncated   bool                `json:"truncated"`
+	// Truncated is set only when a body had to be cut as raw bytes.
+	Truncated bool `json:"truncated"`
+	// ClippedFields names the JSON fields shortened to fit the capture, such as
+	// "request.messages[3].content" or "response.images[0]"; the bodies still parse.
+	ClippedFields []string `json:"clipped_fields,omitempty"`
 	// Notes are what an image_pipeline step changed, such as a rewritten
 	// prompt. The request body above stays the client's original.
 	Notes []string `json:"notes,omitempty"`
@@ -406,14 +410,9 @@ type activityWriter struct {
 	// tail keeps the last maxStatsTail bytes written past max, so token
 	// stats can still be parsed from a long stream's final chunk.
 	tail bytes.Buffer
-	// img keeps a full copy of an image response (up to imgMax) so the
-	// thumbnail can be decoded before the capture body is clipped.
-	img          bytes.Buffer
-	imgMax       int
-	imgTruncated bool
 	// A media response (audio, video, octet-stream) is never captured as
 	// text: only its byte count and a hash prefix are kept. keepMedia also
-	// keeps up to max bytes, so a short speech response can be replayed.
+	// keeps up to maxCaptureBody bytes, so a short speech response can be replayed.
 	media     bool
 	keepMedia bool
 	sniffed   string // body type sniffed when the head carried no Content-Type
@@ -485,22 +484,15 @@ func (w *activityWriter) captureMedia(p []byte) {
 	w.hashed += n
 }
 
-// captureBody buffers the response for the activity capture, clipped to max,
-// and fills the extra image buffer for a thumbnail.
+// captureBody buffers the response, up to max, for the activity capture and
+// thumbnail; recordProxy clips it to fit the ring.
 func (w *activityWriter) captureBody(p []byte) {
-	if w.imgMax > 0 {
-		n := w.imgMax - w.img.Len()
-		if n > len(p) {
-			n = len(p)
-		}
-		if n > 0 {
-			w.img.Write(p[:n])
-		}
-		if n < len(p) {
-			w.imgTruncated = true
-		}
+	limit := w.max
+	if w.media {
+		// Kept audio is served whole, so it must already fit the capture.
+		limit = min(limit, maxCaptureBody)
 	}
-	remain := w.max - w.body.Len()
+	remain := limit - w.body.Len()
 	switch {
 	case remain <= 0:
 		w.truncated = true
@@ -860,13 +852,6 @@ func copyHeaderMap(h http.Header) map[string][]string {
 	return out
 }
 
-func clipBody(b []byte) (string, bool) {
-	if len(b) <= maxCaptureBody {
-		return string(b), false
-	}
-	return string(b[:maxCaptureBody]), true
-}
-
 // thumbFromImageResponse returns a downscaled JPEG thumbnail decoded from the
 // first image in an image-generation response — sd.cpp's images[] or the
 // OpenAI data[].b64_json. The second return says why no thumbnail was made, so
@@ -1200,8 +1185,9 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	}
 	entry.RespBytes = rec.respBytes
 	entry.BodyHash = rec.bodyHash()
-	reqStr, clipped := clipBody(reqBody)
+	reqStr, fields, clipped := clipCapture(reqBody, "request.")
 	var respStr string
+	var respCut bool
 	var blob []byte
 	blobType := "image/jpeg"
 	if rec.media {
@@ -1214,21 +1200,26 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 			}
 		}
 	} else {
-		respStr = rec.body.String()
-		thumb, issue := thumbFromImageResponse(rec.img.Bytes())
-		if rec.imgTruncated {
-			thumb, issue = nil, fmt.Sprintf("response exceeds the %d MB image buffer", maxImageBody>>20)
+		var respFields []string
+		respStr, respFields, respCut = clipCapture(rec.body.Bytes(), "response.")
+		fields = append(fields, respFields...)
+		if isImageRequest(req.URL.Path) {
+			thumb, issue := thumbFromImageResponse(rec.body.Bytes())
+			if rec.truncated {
+				thumb, issue = nil, fmt.Sprintf("response exceeds the %d MB image buffer", maxImageBody>>20)
+			}
+			entry.ThumbIssue = issue
+			blob = thumb
 		}
-		entry.ThumbIssue = issue
-		blob = thumb
 	}
 	r.activity.record(entry, ActivityCapture{
-		ReqHeaders:  copyHeaderMap(req.Header),
-		ReqBody:     reqStr,
-		RespHeaders: copyHeaderMap(rec.Header()),
-		RespBody:    respStr,
-		Truncated:   reqTrunc || clipped || (rec.truncated && !rec.media),
-		Notes:       imageNotesFrom(req),
+		ReqHeaders:    copyHeaderMap(req.Header),
+		ReqBody:       reqStr,
+		RespHeaders:   copyHeaderMap(rec.Header()),
+		RespBody:      respStr,
+		Truncated:     reqTrunc || clipped || respCut || (rec.truncated && !rec.media),
+		ClippedFields: fields,
+		Notes:         imageNotesFrom(req),
 	}, blob, blobType)
 }
 
@@ -1415,9 +1406,9 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	}
 	started := time.Now()
 	// A logged request keeps its audio up to the capture cap for the player.
-	rec := &activityWriter{ResponseWriter: w, max: maxCaptureBody, started: started, keepMedia: isGenerationRequest(req.Method, req.URL.Path)}
+	rec := &activityWriter{ResponseWriter: w, max: maxClipSource, started: started, keepMedia: isGenerationRequest(req.Method, req.URL.Path)}
 	if isImageRequest(req.URL.Path) {
-		rec.imgMax = maxImageBody
+		rec.max = maxImageBody
 	}
 	// Tee the request body as the proxy streams it, instead of reading it all
 	// into memory first, so a large upload is not buffered a second time. An
@@ -1437,11 +1428,11 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	}
 	var cap *captureReader
 	if !isOriginal && req.Body != nil && req.Body != http.NoBody {
-		cap = &captureReader{rc: req.Body, max: maxCaptureBody}
+		cap = &captureReader{rc: req.Body, max: maxClipSource}
 		if live := rec.live; live != nil {
 			// The proxy reads the body as it starts sending, so the preview
 			// shows within moments of the request starting.
-			// shortcut: no preview for a body over the capture clip (large vision or upload), parse a prefix if that matters.
+			// shortcut: no preview for a body over maxClipSource (large vision or upload), parse a prefix if that matters.
 			cap.onEOF = func(b []byte) {
 				p := promptPreview(b)
 				r.activity.update(live, func(e *InProgressEntry) { e.Prompt = p })
@@ -1474,7 +1465,8 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 }
 
 // captureReader passes the request body through to the backend while keeping
-// the first maxCaptureBody bytes for the activity capture.
+// the first bytes for the activity capture: up to max of a JSON body, up to
+// maxCaptureBody of anything else.
 type captureReader struct {
 	rc        io.ReadCloser
 	buf       bytes.Buffer
@@ -1490,7 +1482,11 @@ func (c *captureReader) Read(p []byte) (int, error) {
 	n, err := c.rc.Read(p)
 	c.n += int64(n)
 	if n > 0 {
-		remain := c.max - c.buf.Len()
+		head := c.buf.Bytes()
+		if len(head) == 0 {
+			head = p[:n]
+		}
+		remain := captureLimit(head, c.max) - c.buf.Len()
 		switch {
 		case remain <= 0:
 			c.truncated = true
