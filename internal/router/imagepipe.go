@@ -219,6 +219,19 @@ func (r *Router) captionStep(p *config.ImagePipeline) func(*http.Request, http.H
 	}
 }
 
+// enhancerContext is the in-process chat request's context: a fresh one, so
+// the image request's values (Activity capture, pipeline notes) do not leak
+// into it, ending with the budget or the client and marked no-load so a
+// stopped enhancer is never started.
+func enhancerContext(parent context.Context, budget time.Duration) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	stop := context.AfterFunc(parent, cancel)
+	return context.WithValue(ctx, noLoadKey{}, true), func() {
+		stop()
+		cancel()
+	}
+}
+
 // askEnhancer asks the enhancer chat model for a caption of prompt on a width
 // by height canvas and returns the checked caption. The model must already be
 // running here or offered by a fresh peer: a cold load could evict the image
@@ -235,10 +248,8 @@ func (r *Router) askEnhancer(parent context.Context, p *config.ImagePipeline, pr
 	}
 	// A fresh context: the image request's values (Activity capture, pipeline
 	// notes) must not leak into the chat request. It still ends with the client.
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
-	stop := context.AfterFunc(parent, cancel)
-	defer stop()
+	ctx, finish := enhancerContext(parent, budget)
+	defer finish()
 
 	model := r.runningEnhancer(want)
 	if model == "" {
@@ -293,11 +304,24 @@ func (r *Router) askEnhancer(parent context.Context, p *config.ImagePipeline, pr
 }
 
 // runningEnhancer returns want when the catalogue lists it as running locally
-// or offered by a fresh peer. With no want it is the first such chat model that
-// is not an embedding or rerank model. "" means none.
+// or loaded on a fresh router peer. With no want it is the first such chat
+// model that is not an embedding or rerank model. "" means none.
 func (r *Router) runningEnhancer(want string) string {
 	for _, ms := range r.catalogStatuses() {
-		if ms.State != string(StateRunning) && ms.Origin != "remote" {
+		switch ms.Origin {
+		case "local":
+			if ms.State != string(StateRunning) {
+				continue
+			}
+		case "remote":
+			// A peer row only means the peer lists the model, not that it is
+			// loaded: the chat call would then ask the peer to load it and could
+			// evict the peer's own image model.
+			// shortcut: a peer evicting after this check can still cold-load, upgrade when peers accept a serve-only request
+			if !r.peerModelLoaded(ms.ID) {
+				continue
+			}
+		default:
 			continue
 		}
 		if want != "" {
@@ -312,6 +336,41 @@ func (r *Router) runningEnhancer(want string) string {
 		}
 	}
 	return ""
+}
+
+// peerModelLoaded reports whether any fresh router peer's telemetry lists id
+// as loaded. kind: openai peers have no telemetry and stay out, so a paid
+// upstream is never chosen to receive the prompt.
+func (r *Router) peerModelLoaded(id string) bool {
+	cfg := r.cfg()
+	for i := range cfg.Peers {
+		p := &cfg.Peers[i]
+		if p.Kind == "openai" {
+			continue
+		}
+		if r.peerLoads(p.Name, id) {
+			return true
+		}
+	}
+	return false
+}
+
+// peerLoads reports whether a fresh router peer's telemetry lists id as
+// loaded.
+func (r *Router) peerLoads(name, id string) bool {
+	if !r.peers.Fresh(name) {
+		return false
+	}
+	t := r.peers.Snapshot()[name]
+	if t == nil {
+		return false
+	}
+	for _, lm := range t.LoadedModels {
+		if lm.ID == id || lm.Instance == id {
+			return true
+		}
+	}
+	return false
 }
 
 // checkedCaption parses the enhancer's reply as a caption and applies the
