@@ -126,6 +126,7 @@ stanzas:
     health_check: /health
     idle_ttl_seconds: 600  # 0 = resident, never swept
     hold_seconds: 0        # seconds after healthy during which eviction skips it
+    peer_spill: auto       # auto | on_failure | never; see Local below
     max_request_body_mb: 256  # optional: override the top-level body cap
     port: 5901             # 0 = next free port from start_port
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
@@ -340,6 +341,14 @@ gets 400, not a 502.
      room; when it runs out the client gets `503` with `Retry-After`. The
      journal's mesh stream says why no peer was chosen (cooling, stale
      telemetry, not advertising).
+   - `peer_spill` (per stanza) decides when this local target may spill.
+     `auto` (default) spills as soon as local room is blocked or every slot
+     is busy. `on_failure` waits for local admission and the load instead,
+     and walks peers only when the local start fails hard (process died,
+     health timed out, start cooldown) or the admit wait runs out. `never`
+     also waits, but a hard start failure is answered here with `503`
+     instead of walked. A peer-qualified id and a request that arrived from
+     a peer are unaffected.
    - Load if needed (admission, below), wait until `health_check` returns
      200, then stream the reverse proxy. The client connection is held for
      the generation. `X-Accel-Buffering: no`.

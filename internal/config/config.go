@@ -111,7 +111,18 @@ const (
 	// translates it onto sd-server's /sdcpp/v1 job API.
 	JobAdapterOpenAI = "openai"
 	JobAdapterSDCpp  = "sdcpp"
+
+	// PeerSpillAuto spills a blocked or busy local target to a peer at once.
+	// PeerSpillOnFailure keeps the request local until the model fails to
+	// start hard or the admit wait runs out. PeerSpillNever is on_failure
+	// except that a hard start failure is returned instead of spilled.
+	PeerSpillAuto      = "auto"
+	PeerSpillOnFailure = "on_failure"
+	PeerSpillNever     = "never"
 )
+
+// PeerSpills is every value a stanza's peer_spill may take.
+var PeerSpills = []string{PeerSpillAuto, PeerSpillOnFailure, PeerSpillNever}
 
 // JobAdapters is every value a stanza's job.adapter may take.
 var JobAdapters = []string{JobAdapterOpenAI, JobAdapterSDCpp}
@@ -278,6 +289,13 @@ type Stanza struct {
 	// MaxRequestBodyMB overrides the top-level max_request_body_mb for this
 	// stanza. 0 = inherit.
 	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
+	// PeerSpill controls whether a request for this local model may walk to a
+	// peer when it cannot run here. auto (default) does so as soon as local
+	// room is blocked or every slot is busy. on_failure waits for local
+	// admission and the load, then walks only after a hard start failure or
+	// an admit timeout. never is on_failure except that a hard start failure
+	// is answered locally instead of walked.
+	PeerSpill string `yaml:"peer_spill"`
 	// PathRewrite swaps a request path prefix for the backend's own before
 	// the request is proxied to a local instance; the first matching from
 	// wins. For a backend that serves an OpenAI route under another path.
@@ -714,6 +732,13 @@ func Parse(raw []byte) (*Config, error) {
 		if !slices.Contains(APITypes, s.APIType) {
 			return nil, fmt.Errorf("stanza %q: api_type %q is not valid; must be one of %s",
 				s.ModelID, s.APIType, strings.Join(APITypes, ", "))
+		}
+		if s.PeerSpill == "" {
+			s.PeerSpill = PeerSpillAuto
+		}
+		if !slices.Contains(PeerSpills, s.PeerSpill) {
+			return nil, fmt.Errorf("stanza %q: peer_spill %q is not valid; must be one of %s",
+				s.ModelID, s.PeerSpill, strings.Join(PeerSpills, ", "))
 		}
 		for _, c := range s.Capabilities {
 			if !slices.Contains(Capabilities, c) {

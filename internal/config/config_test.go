@@ -692,6 +692,25 @@ func TestAPITypeValidation(t *testing.T) {
 	}
 }
 
+func TestPeerSpillValidation(t *testing.T) {
+	cfg, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x}\n"))
+	if err != nil {
+		t.Fatalf("empty peer_spill: %v", err)
+	}
+	if got := cfg.Stanza("a").PeerSpill; got != PeerSpillAuto {
+		t.Errorf("empty peer_spill = %q, want %q", got, PeerSpillAuto)
+	}
+	for _, mode := range PeerSpills {
+		if _, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, peer_spill: " + mode + "}\n")); err != nil {
+			t.Errorf("peer_spill %q rejected: %v", mode, err)
+		}
+	}
+	_, err = Parse([]byte("stanzas:\n  - {model_id: a, command: x, peer_spill: always}\n"))
+	if err == nil || !strings.Contains(err.Error(), `peer_spill "always" is not valid`) || !strings.Contains(err.Error(), PeerSpillOnFailure) || !strings.Contains(err.Error(), PeerSpillNever) {
+		t.Fatalf("always err = %v, want it named with the vocabulary listed", err)
+	}
+}
+
 func TestCapabilityValidation(t *testing.T) {
 	if _, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x, api_type: chat, capabilities: [vision, tools]}\n")); err != nil {
 		t.Fatalf("known capabilities rejected: %v", err)

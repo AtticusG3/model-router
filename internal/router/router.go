@@ -1218,22 +1218,24 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
+	s := r.cfg().Stanza(modelID)
 	// One admit budget for the whole local path: a sibling retry after the
 	// first slot wait times out must not start a second full wait.
-	if s := r.cfg().Stanza(modelID); s != nil && s.APIType == config.APITypeSpeech && isSynthesis(req) {
+	if s != nil && s.APIType == config.APITypeSpeech && isSynthesis(req) {
 		if _, ok := req.Context().Value(admitDeadlineKey{}).(time.Time); !ok {
 			req = req.WithContext(context.WithValue(req.Context(), admitDeadlineKey{}, time.Now().Add(r.cfg().AdmitTimeout())))
 		}
 	}
+	// auto offers a blocked request to a peer at once. on_failure and never
+	// skip both early spills and wait for local admission instead.
+	earlySpill := !incomingPeer && s != nil && peerSpillAuto(s)
 	// If this GPU cannot admit now, try an idle peer before waiting locally.
-	if !incomingPeer {
-		if s := r.cfg().Stanza(modelID); s != nil && !r.localCanServe(s) && r.spillWhileBlocked(w, req, s) {
-			return
-		}
+	if earlySpill && !r.localCanServe(s) && r.spillWhileBlocked(w, req, s) {
+		return
 	}
 	// A free slot on a running instance, or a new instance on a free GPU,
 	// beats sending the request off-node.
-	if s := r.cfg().Stanza(modelID); !incomingPeer && s != nil {
+	if !incomingPeer && s != nil {
 		if key, ok := r.acquireInstance(s, false); ok {
 			err := r.proxyLocalHeld(w, req, key)
 			r.releaseOccupancy(Target{Local: key})
@@ -1243,22 +1245,60 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 			if r.hasLiveSibling(key) && r.proxyLocal(w, req, modelID) == nil {
 				return
 			}
-			if r.serveSpill(w, req, modelID) {
+			if r.serveSpillAfterLocalFailure(w, req, modelID, s, err) {
 				return
 			}
 			loadFailed(w, err)
 			return
 		}
 	}
-	if !incomingPeer && r.serveSlotSpill(w, req, modelID) {
+	if earlySpill && r.serveSlotSpill(w, req, modelID) {
 		return
 	}
 	if err := r.proxyLocal(w, req, modelID); err != nil {
-		if !incomingPeer && r.serveSpill(w, req, modelID) {
+		if !incomingPeer && r.serveSpillAfterLocalFailure(w, req, modelID, s, err) {
 			return
 		}
 		loadFailed(w, err)
 	}
+}
+
+// peerSpillAuto reports whether s spills before trying local admission. An
+// unset field is auto (config.Parse sets it, but tests build stanzas directly).
+func peerSpillAuto(s *config.Stanza) bool {
+	return s == nil || s.PeerSpill == "" || s.PeerSpill == config.PeerSpillAuto
+}
+
+// serveSpillAfterLocalFailure walks to a peer after a local start or proxy
+// error, when s's peer_spill allows it. auto walks on any failure (today's
+// behaviour). on_failure walks only when the local copy cannot serve here: a
+// hard start failure, an open start cooldown, or an admit timeout. never also
+// skips the hard-failure walk, so the client gets this node's 503; an admit
+// timeout still walks.
+func (r *Router) serveSpillAfterLocalFailure(w http.ResponseWriter, req *http.Request, modelID string, s *config.Stanza, err error) bool {
+	if !peerSpillAuto(s) {
+		switch s.PeerSpill {
+		case config.PeerSpillOnFailure:
+			if !localStartCannotServe(err) {
+				return false
+			}
+		case config.PeerSpillNever:
+			var ae *admitError
+			if !errors.As(err, &ae) {
+				return false
+			}
+		}
+	}
+	return r.serveSpill(w, req, modelID)
+}
+
+// localStartCannotServe reports whether err means this node cannot run the
+// model here within the admit budget: the child died or timed out, its start
+// cooldown is open, or no GPU room came free in time.
+func localStartCannotServe(err error) bool {
+	var cd *startCooldownError
+	var ae *admitError
+	return hardStartFailure(err) || errors.As(err, &cd) || errors.As(err, &ae)
 }
 
 // admitDeadlineKey carries the end of a request's admit budget in its context,
