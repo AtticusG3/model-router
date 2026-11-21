@@ -1,0 +1,719 @@
+#!/usr/bin/env python3
+"""model-router <-> sd-server shim.
+
+Drop-in replacement for sd-health-proxy with pipeline hardening:
+
+- Answers GET /health for model-router (sd-server does not).
+- On ready, and before any request that names LoRAs, warms
+  GET /sdapi/v1/loras so sd-server's empty LoRA cache does not reject
+  ``QuadView_*.safetensors`` / identity adapters with ``invalid lora path``.
+- img2img: require non-empty init_images; reject undecodable payloads
+  instead of letting sd-server silently drop them and run as t2i.
+- Mirror the first init into ``extra_images`` when absent so vision-conditioned
+  ref_images get the hero (the edits path already does this).
+- One automatic re-warm + retry on ``invalid lora path``.
+- Optional txt2img prompt enhancement: rewrite a plain prompt into a
+  structured JSON caption with bboxes, with a deterministic template when
+  the enhancer is unavailable or returns junk.
+- Optional retry when the rendered image is the near-uniform grey card.
+
+Usage (model-router command):
+
+  sd-router-shim [--prompt-enhance] [--retry-blocked] {port} -- sd-server [args...]
+
+Do not pass --listen-ip/--listen-port to sd-server; the shim supplies them.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import random
+import re
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+PROXY_TIMEOUT_S = 1800
+READY_TIMEOUT_S = 300
+LORA_WARM_PATH = "/sdapi/v1/loras"
+ENHANCER_URL = "http://127.0.0.1:18080/v1"
+ENHANCER_TIMEOUT_S = 20.0
+BLOCKED_RETRIES = 1
+
+
+def find_free_port() -> int:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def _looks_like_image(raw: bytes) -> bool:
+    if len(raw) < 24:
+        return False
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if raw.startswith(b"\xff\xd8\xff"):
+        return True
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return True
+    return False
+
+
+def _decode_b64_image(value: str) -> bytes | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    payload = value.strip()
+    if payload.startswith("data:") and "," in payload:
+        payload = payload.split(",", 1)[1]
+    try:
+        raw = base64.b64decode(payload, validate=False)
+    except Exception:
+        return None
+    return raw if _looks_like_image(raw) else None
+
+
+def _truthy(value: str | None) -> bool:
+    return value is not None and value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.environ.get(name, ""))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, ""))
+    except ValueError:
+        return default
+
+
+CAPTION_SYSTEM_PROMPT = """You turn an image request into a structured caption as one JSON object.
+Return only the JSON object, with no markdown fence and no commentary.
+
+Schema:
+{
+  "high_level_description": "one sentence describing the whole image",
+  "compositional_deconstruction": {
+    "background": "what fills the frame behind the subjects",
+    "elements": [
+      {"type": "obj", "bbox": [x1, y1, x2, y2], "desc": "detailed neutral description"}
+    ]
+  },
+  "style_description": {
+    "aesthetics": "...",
+    "lighting": "...",
+    "photo": "...",
+    "medium": "..."
+  }
+}
+
+Rules:
+- bbox values are integers on a 0-1000 grid, x1 < x2 and y1 < y2, measured from the top-left.
+- Place elements so they fit the canvas given in the request.
+- Keep the subject, count, actions and intent of the request. Never add subjects that were not asked for.
+- Give every element a type, a bbox and a detailed neutral desc.
+- Include style_description only when the request asks for a style, medium, camera, lighting or aesthetic. Otherwise omit it.
+"""
+
+STYLE_WORDS = re.compile(
+    r"\b(photo|photograph|photoreal\w*|realistic|cinematic|anime|illustration|"
+    r"painting|watercolor|oil\s+paint\w*|sketch|drawing|render|3d|cgi|lighting|"
+    r"camera|lens|film|medium|style|aesthetic|pastel|pixel\s+art|graphic|"
+    r"cartoon|comic)\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_for_style(prompt: str) -> bool:
+    return STYLE_WORDS.search(prompt) is not None
+
+
+def _caption_template(prompt: str) -> dict:
+    return {
+        "high_level_description": prompt,
+        "compositional_deconstruction": {
+            "background": "a plain, evenly lit background",
+            "elements": [
+                {"type": "obj", "bbox": [200, 200, 800, 800], "desc": prompt}
+            ],
+        },
+    }
+
+
+def _valid_bbox(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 4
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)
+        and 0 <= value[0] < value[2] <= 1000
+        and 0 <= value[1] < value[3] <= 1000
+    )
+
+
+def _valid_caption(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    if not isinstance(value.get("high_level_description"), str):
+        return False
+    if not value["high_level_description"].strip():
+        return False
+    cd = value.get("compositional_deconstruction")
+    if not isinstance(cd, dict):
+        return False
+    background = cd.get("background")
+    if not isinstance(background, (str, dict)) or not background:
+        return False
+    elements = cd.get("elements")
+    if not isinstance(elements, list):
+        return False
+    return any(
+        isinstance(el, dict)
+        and isinstance(el.get("type"), str)
+        and isinstance(el.get("desc"), str)
+        and bool(el["desc"].strip())
+        and _valid_bbox(el.get("bbox"))
+        for el in elements
+    )
+
+
+def _strip_code_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def _enhancer_model(base: str, timeout: float) -> str | None:
+    """Use the configured model, or a model the router already has running.
+
+    Never ask the router to cold-load: that can evict the image model. A
+    stopped model therefore yields None and the caller uses the template.
+    """
+    configured = os.environ.get("SHIM_ENHANCER_MODEL", "").strip()
+    try:
+        with urlopen(base + "/models", timeout=min(timeout, 3)) as resp:
+            catalog = json.loads(resp.read())
+    except Exception:
+        return configured or None
+    rows = catalog.get("data") if isinstance(catalog, dict) else None
+    if not isinstance(rows, list):
+        return configured or None
+
+    def running(row: dict) -> bool:
+        status = row.get("status")
+        state = status.get("value") if isinstance(status, dict) else None
+        meta = row.get("meta")
+        origin = meta.get("modelrouter", {}).get("origin") if isinstance(meta, dict) else None
+        return state == "running" or origin == "remote"
+
+    if configured:
+        row = next((r for r in rows if isinstance(r, dict) and r.get("id") == configured), None)
+        if row is not None and not running(row):
+            return None
+        return configured
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        model = row["id"]
+        if "embed" in model.lower() or "rerank" in model.lower():
+            continue
+        if running(row):
+            return model
+    return None
+
+
+def _enhance_prompt(prompt: str, width: int, height: int) -> str | None:
+    """Return a validated compact caption from the enhancer, or None."""
+    base = os.environ.get("SHIM_ENHANCER_URL", ENHANCER_URL).rstrip("/")
+    timeout = _env_float("SHIM_ENHANCER_TIMEOUT", ENHANCER_TIMEOUT_S)
+    model = _enhancer_model(base, timeout)
+    if not model:
+        sys.stderr.write("sd-router-shim: enhancer model not running; using template\n")
+        return None
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": f"Canvas: {width}x{height} pixels.\n\nRequest: {prompt}",
+            },
+        ],
+        "temperature": 0,
+    }
+    req = Request(
+        base + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            reply = json.loads(resp.read())
+        content = reply["choices"][0]["message"]["content"]
+        caption = json.loads(_strip_code_fence(content))
+    except Exception as exc:
+        sys.stderr.write(f"sd-router-shim: prompt enhancer failed: {exc}\n")
+        return None
+    if not _valid_caption(caption):
+        sys.stderr.write("sd-router-shim: prompt enhancer returned an invalid caption\n")
+        return None
+    if not _asks_for_style(prompt):
+        caption.pop("style_description", None)
+    return json.dumps(caption, separators=(",", ":"), ensure_ascii=False)
+
+
+def _enhance_txt2img(path: str, data: bytes | None, enabled: bool) -> tuple[bytes | None, str | None, str | None]:
+    """Return (body, original prompt, enhanced prompt). None prompts = untouched."""
+    if not enabled or path != "/sdapi/v1/txt2img" or not data:
+        return data, None, None
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except Exception:
+        return data, None, None
+    if not isinstance(body, dict) or body.get("enhance_prompt") is False:
+        return data, None, None
+    prompt = body.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        return data, None, None
+    try:
+        if isinstance(json.loads(prompt), dict):
+            return data, None, None
+    except Exception:
+        pass
+    width = _dimension(body.get("width"), 1024)
+    height = _dimension(body.get("height"), 1024)
+    enhanced = _enhance_prompt(prompt, width, height)
+    if enhanced is None:
+        enhanced = json.dumps(_caption_template(prompt), separators=(",", ":"), ensure_ascii=False)
+    body["prompt"] = enhanced
+    return json.dumps(body, separators=(",", ":"), ensure_ascii=False).encode("utf-8"), prompt, enhanced
+
+
+def _dimension(value: object, default: int) -> int:
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
+
+
+def _paeth(a: int, b: int, c: int) -> int:
+    p = a + b - c
+    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+    if pa <= pb and pa <= pc:
+        return a
+    return b if pb <= pc else c
+
+
+def _png_pixels(raw: bytes) -> tuple[list[bytes], int, int, int] | None:
+    """Decode an 8-bit RGB/RGBA, non-interlaced PNG into unfiltered rows."""
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    pos, ihdr, idat = 8, None, []
+    while pos + 8 <= len(raw):
+        length = struct.unpack(">I", raw[pos : pos + 4])[0]
+        kind = raw[pos + 4 : pos + 8]
+        pos += 8
+        chunk = raw[pos : pos + length]
+        pos += length + 4
+        if kind == b"IHDR":
+            ihdr = chunk
+        elif kind == b"IDAT":
+            idat.append(chunk)
+        elif kind == b"IEND":
+            break
+    if ihdr is None or len(ihdr) < 13:
+        return None
+    width, height, depth, color, _comp, _filter, interlace = struct.unpack(">IIBBBBB", ihdr)
+    if depth != 8 or color not in (2, 6) or interlace != 0 or width == 0 or height == 0:
+        return None
+    channels = 3 if color == 2 else 4
+    stride = width * channels
+    try:
+        stream = zlib.decompress(b"".join(idat))
+    except zlib.error:
+        return None
+    if len(stream) < height * (stride + 1):
+        return None
+    rows, prev = [], bytearray(stride)
+    for y in range(height):
+        start = y * (stride + 1)
+        filt = stream[start]
+        row = bytearray(stream[start + 1 : start + 1 + stride])
+        for x in range(stride):
+            a = row[x - channels] if x >= channels else 0
+            b = prev[x]
+            c = prev[x - channels] if x >= channels else 0
+            if filt == 1:
+                row[x] = (row[x] + a) & 255
+            elif filt == 2:
+                row[x] = (row[x] + b) & 255
+            elif filt == 3:
+                row[x] = (row[x] + (a + b) // 2) & 255
+            elif filt == 4:
+                row[x] = (row[x] + _paeth(a, b, c)) & 255
+        rows.append(bytes(row))
+        prev = row
+    return rows, width, height, channels
+
+
+def _png_is_flat_grey(raw: bytes) -> bool:
+    """True for the near-uniform grey safety card (not a filter itself)."""
+    decoded = _png_pixels(raw)
+    if decoded is None:
+        return False
+    rows, width, height, channels = decoded
+    total = width * height
+    step = max(1, total // 4096)
+    lum, colour = [], 0
+    for index in range(0, total, step):
+        y, x = divmod(index, width)
+        px = rows[y][x * channels : x * channels + 3]
+        if len(px) < 3:
+            continue
+        r, g, b = px
+        lum.append((r + g + b) / 3)
+        colour = max(colour, max(abs(r - g), abs(g - b), abs(r - b)))
+    if not lum:
+        return False
+    return max(lum) - min(lum) <= 24 and 60 <= sum(lum) / len(lum) <= 220 and colour <= 8
+
+
+def _response_is_blocked_card(body: bytes) -> bool:
+    try:
+        reply = json.loads(body)
+    except Exception:
+        return False
+    images = reply.get("images") if isinstance(reply, dict) else None
+    if not isinstance(images, list) or not images or not isinstance(images[0], str):
+        return False
+    payload = images[0].split(",", 1)[-1]
+    try:
+        return _png_is_flat_grey(base64.b64decode(payload))
+    except Exception:
+        return False
+
+
+def _rewrite_sdapi_body(path: str, data: bytes | None) -> tuple[bytes | None, str | None]:
+    """Return (body, error). error is a client-facing message when rejecting."""
+    if not data:
+        return data, None
+    path_only = path.split("?", 1)[0]
+    if path_only not in ("/sdapi/v1/img2img", "/sdapi/v1/txt2img"):
+        return data, None
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except Exception:
+        return data, None
+    if not isinstance(body, dict):
+        return data, None
+
+    changed = False
+    is_img2img = path_only.endswith("/img2img")
+
+    if is_img2img:
+        inits = body.get("init_images")
+        if not isinstance(inits, list) or not inits:
+            return None, "img2img requires non-empty init_images"
+        decoded = _decode_b64_image(inits[0])
+        if decoded is None:
+            return None, "init_images[0] is not a decodable PNG/JPEG/WEBP"
+        # Keep client payload; only validate. Re-encode only if we must fix
+        # data-URL wrappers for downstream consistency.
+        if isinstance(inits[0], str) and inits[0].startswith("data:"):
+            body["init_images"] = [base64.b64encode(decoded).decode("ascii")]
+            changed = True
+
+        extras = body.get("extra_images")
+        if not isinstance(extras, list) or not extras:
+            body["extra_images"] = [body["init_images"][0]]
+            changed = True
+
+    if changed:
+        return json.dumps(body, separators=(",", ":")).encode("utf-8"), None
+    return data, None
+
+
+def _body_requests_lora(data: bytes | None) -> bool:
+    if not data:
+        return False
+    try:
+        body = json.loads(data.decode("utf-8"))
+    except Exception:
+        return False
+    if not isinstance(body, dict):
+        return False
+    lora = body.get("lora")
+    return isinstance(lora, list) and len(lora) > 0
+
+
+def _response_is_invalid_lora(status: int, body: bytes) -> bool:
+    if status != 400:
+        return False
+    try:
+        text = body.decode("utf-8", "replace").lower()
+    except Exception:
+        return False
+    return "invalid lora path" in text
+
+
+USAGE = "usage: sd-router-shim [--prompt-enhance] [--retry-blocked] <outer-port> -- <sd-server> [args...]\n"
+
+
+def _parse_args(argv: list[str]) -> tuple[int, bool, bool, list[str]] | None:
+    if "--" not in argv:
+        return None
+    idx = argv.index("--")
+    head, sd_cmd = argv[:idx], argv[idx + 1 :]
+    port = None
+    enhance = _truthy(os.environ.get("SHIM_PROMPT_ENHANCE"))
+    retry = False
+    for arg in head:
+        if arg == "--prompt-enhance":
+            enhance = True
+        elif arg == "--retry-blocked":
+            retry = True
+        elif arg.isdigit() and port is None:
+            port = int(arg)
+        else:
+            return None
+    if port is None:
+        return None
+    return port, enhance, retry, sd_cmd
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    parsed = _parse_args(args)
+    if parsed is None:
+        sys.stderr.write(USAGE)
+        return 2
+    outer, enhance_prompt, retry_blocked, sd_cmd = parsed
+    if not sd_cmd:
+        sys.stderr.write("sd-router-shim: no sd-server command given\n")
+        return 2
+
+    inner = find_free_port()
+    proc = subprocess.Popen(sd_cmd + ["--listen-ip", "127.0.0.1", "--listen-port", str(inner)])
+
+    def _watch() -> None:
+        rc = proc.wait()
+        sys.stderr.write(f"sd-router-shim: sd-server exited rc={rc}\n")
+        os._exit(1)
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+    def _sig(_signum, _frame) -> None:
+        proc.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _sig)
+    signal.signal(signal.SIGINT, _sig)
+
+    backend = f"http://127.0.0.1:{inner}"
+    ready = False
+    deadline = time.time() + READY_TIMEOUT_S
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            sys.stderr.write(
+                f"sd-router-shim: sd-server exited rc={proc.returncode} before ready\n"
+            )
+            return proc.returncode or 1
+        try:
+            with urlopen(backend + "/v1/models", timeout=3) as resp:
+                if resp.status == 200:
+                    ready = True
+                    break
+        except Exception:
+            pass
+        time.sleep(1)
+    if not ready:
+        sys.stderr.write("sd-router-shim: sd-server did not become ready in 300s\n")
+        proc.terminate()
+        return 1
+
+    lora_state = {"warmed": False, "lock": threading.Lock()}
+
+    def warm_loras(*, force: bool = False) -> bool:
+        with lora_state["lock"]:
+            if lora_state["warmed"] and not force:
+                return True
+            try:
+                with urlopen(backend + LORA_WARM_PATH, timeout=30) as resp:
+                    raw = resp.read()
+                    ok = resp.status == 200
+            except Exception as exc:
+                sys.stderr.write(f"sd-router-shim: LoRA warm failed: {exc}\n")
+                return False
+            if ok:
+                lora_state["warmed"] = True
+                sys.stderr.write(
+                    f"sd-router-shim: LoRA cache warmed ({len(raw)} bytes)\n"
+                )
+            return ok
+
+    # Populate cache immediately so the first pipeline img2img with LoRA works.
+    warm_loras()
+
+    health_cache = {"ok": None, "t": 0.0}
+
+    def backend_ok() -> bool:
+        now = time.time()
+        if health_cache["ok"] is not None and health_cache["t"] > now - 3:
+            return bool(health_cache["ok"])
+        ok = False
+        try:
+            with urlopen(backend + "/v1/models", timeout=3) as resp:
+                ok = resp.status == 200
+        except Exception:
+            ok = False
+        health_cache["ok"] = ok
+        health_cache["t"] = now
+        return ok
+
+    def proxy_once(method: str, path: str, data: bytes | None, hdrs: dict) -> tuple[int, bytes, str]:
+        req = Request(backend + path, data=data, method=method, headers=hdrs)
+        try:
+            with urlopen(req, timeout=PROXY_TIMEOUT_S) as resp:
+                return resp.status, resp.read(), resp.headers.get(
+                    "Content-Type", "application/octet-stream"
+                )
+        except HTTPError as exc:
+            return (
+                exc.code,
+                exc.read(),
+                exc.headers.get("Content-Type", "application/json"),
+            )
+        except URLError as exc:
+            return 502, str(exc).encode(), "text/plain"
+
+    class Handler(BaseHTTPRequestHandler):
+        def _handle(self) -> None:
+            path = self.path
+            path_only = path.split("?", 1)[0]
+
+            if path_only == "/health":
+                ok = backend_ok()
+                body = b'{"status":"ok"}' if ok else b'{"status":"loading"}'
+                self.send_response(200 if ok else 503)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            length = int(self.headers.get("Content-Length", 0) or 0)
+            data = self.rfile.read(length) if length else None
+            hdrs = {
+                key: value
+                for key, value in self.headers.items()
+                if key.lower()
+                not in ("host", "content-length", "connection", "accept-encoding")
+            }
+
+            prompt_original = prompt_enhanced = None
+            if self.command == "POST":
+                rewritten, err = _rewrite_sdapi_body(path_only, data)
+                if err is not None:
+                    body = json.dumps({"error": err}).encode("utf-8")
+                    self.send_response(400)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("X-SD-Shim", "reject")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                data = rewritten
+                data, prompt_original, prompt_enhanced = _enhance_txt2img(
+                    path_only, data, enhance_prompt
+                )
+                if _body_requests_lora(data):
+                    warm_loras()
+
+            retries = (
+                max(0, _env_int("SHIM_BLOCKED_RETRIES", BLOCKED_RETRIES))
+                if retry_blocked
+                else 0
+            )
+            for attempt in range(retries + 1):
+                status, body, ctype = proxy_once(self.command, path, data, hdrs)
+                if (
+                    path_only != "/sdapi/v1/txt2img"
+                    or attempt >= retries
+                    or not _response_is_blocked_card(body)
+                ):
+                    break
+                seed = random.randrange(1, 2**31 - 1)
+                if data:
+                    try:
+                        req_body = json.loads(data.decode("utf-8"))
+                        if isinstance(req_body, dict):
+                            req_body["seed"] = seed
+                            data = json.dumps(req_body, separators=(",", ":")).encode("utf-8")
+                    except Exception:
+                        pass
+                sys.stderr.write(
+                    "sd-router-shim: blocked card detected; "
+                    f"retry {attempt + 1}/{retries} with seed {seed}\n"
+                )
+
+            if (
+                self.command == "POST"
+                and _body_requests_lora(data)
+                and _response_is_invalid_lora(status, body)
+            ):
+                sys.stderr.write(
+                    "sd-router-shim: invalid lora path; re-warming and retrying once\n"
+                )
+                warm_loras(force=True)
+                status, body, ctype = proxy_once(self.command, path, data, hdrs)
+
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-SD-Shim", "1")
+            if prompt_original is not None:
+                self.send_header("X-SD-Shim-Prompt-Original", quote(prompt_original, safe=""))
+                self.send_header("X-SD-Shim-Prompt-Enhanced", quote(prompt_enhanced, safe=""))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = _handle
+
+        def log_message(self, *_args) -> None:
+            return
+
+    ThreadingHTTPServer.daemon_threads = True
+    try:
+        ThreadingHTTPServer(("127.0.0.1", outer), Handler).serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
