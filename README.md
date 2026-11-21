@@ -22,9 +22,11 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
 - Admission uses live nvidia-smi free VRAM, with a per-GPU reservation ledger
   so concurrent loads cannot double-book during spin-up. A node is the sole
   authority over its own GPUs (no split-brain).
-- Peers pull `GET /_router/telemetry` every few seconds: loaded models
-  (fresh/stale), each copy's image pipeline caption, live free VRAM, and free
-  VRAM if stale or idle models were evicted. Optional LAN discovery scans
+- Peers pull `GET /_router/telemetry` every few seconds: the catalog of
+  local models it shares, loaded models (fresh/stale), each copy's image
+  pipeline caption, live free VRAM, and free VRAM if stale or idle models were
+  evicted. A router peer serves whatever its catalog advertises, so
+  `peers[].models` is only needed for `kind: openai` peers and older routers. Optional LAN discovery scans
   private /24s at startup and on a backoff timer for router peers the config
   does not name.
 - Spills requests to peers when the local node can't serve them (model not
@@ -249,6 +251,13 @@ walking peers only after a hard start failure or an admit timeout. `never`
 also waits, but a hard start failure is answered here with `503` instead of
 walked. A peer-qualified id and a request proxied in from a peer are
 unaffected.
+
+`share: false` (per stanza, default `true`) keeps a model off the mesh: it is
+left out of the telemetry catalog and loaded list, and a request proxied in from
+a peer (or a peer's `POST /_router/load` or `/upstream/`) for it gets
+`404 model not shared`, even if that peer's config still names it, and whether
+it is named by id, alias, filter-set id or a pool (a pool skips unshared members
+for a peer). Local clients are unaffected.
 
 `max_request_body_mb` (top level, default 256, at most 1048576 = 1 TiB; a stanza may override it) caps
 one request body. Over the cap the client gets `413` before any model is

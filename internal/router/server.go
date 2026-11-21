@@ -126,7 +126,7 @@ func handleLoad(r *Router) http.HandlerFunc {
 			return
 		}
 		id, ok := decodeModelID(w, req)
-		if !ok {
+		if !ok || r.refuseUnshared(w, req, id) {
 			return
 		}
 		if err := r.HandleLoad(req.Context(), id); err != nil {
@@ -431,6 +431,9 @@ func handleUpstream(r *Router) http.HandlerFunc {
 		ref := resolveRef(id, r.cfg())
 		if ref.Local == "" {
 			http.Error(w, fmt.Sprintf("unknown local model %q", id), http.StatusNotFound)
+			return
+		}
+		if r.refuseUnshared(w, req, ref.Local) {
 			return
 		}
 		if !slash {

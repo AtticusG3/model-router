@@ -43,7 +43,7 @@ func TestResolveRefPool(t *testing.T) {
 func TestMatchPeerQualifiedFull(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"digger/remote-model","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}

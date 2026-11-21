@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"testing"
@@ -45,6 +46,12 @@ peers:
 	return cfg
 }
 
+// meshOf is the server's own mesh lookup over cfg's peers, so matcher tests
+// exercise the code ServeHTTP runs.
+func meshOf(cfg *config.Config) func(string) bool {
+	return New(cfg, NewLogger(io.Discard, false), "test").meshAdvertises
+}
+
 func newReq(method, target, ct, body string) *http.Request {
 	req, _ := http.NewRequest(method, target, bytes.NewBufferString(body))
 	if ct != "" {
@@ -74,7 +81,7 @@ func multipartReq(t *testing.T, fields ...[2]string) *http.Request {
 func TestMatchBodyField(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"agents-a1","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -86,7 +93,7 @@ func TestMatchBodyField(t *testing.T) {
 func TestMatchPool(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"coding-pool","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -98,7 +105,7 @@ func TestMatchPool(t *testing.T) {
 func TestMatchPeerQualified(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"digger/coding-model","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -110,7 +117,7 @@ func TestMatchPeerQualified(t *testing.T) {
 func TestMatchPeerAdvertisedUnqualified(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"coding-model","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -125,7 +132,7 @@ func TestMatchPeerAdvertisedUnqualified(t *testing.T) {
 func TestMatchUnknownModelStillFails(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"nope","messages":[]}`)
-	if _, err := matchRequest(req, cfg); err == nil {
+	if _, err := matchRequest(req, cfg, meshOf(cfg)); err == nil {
 		t.Fatal("unknown model should fail")
 	}
 }
@@ -134,7 +141,7 @@ func TestMatchPathDefault(t *testing.T) {
 	cfg := testConfig(t)
 	// No model in body -> falls back to path_default stanza.
 	req := newReq("POST", "http://x/sdapi/v1/txt2img", "application/json", `{"prompt":"cat"}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -159,7 +166,7 @@ stanzas:
 		t.Fatalf("config: %v", err)
 	}
 	req := newReq("POST", "http://x/sdapi/v1/txt2img", "application/json", `{"prompt":"cat"}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -185,7 +192,7 @@ stanzas:
 		t.Fatalf("config: %v", err)
 	}
 	req := newReq("POST", "http://x/sdapi/v1/txt2img", "application/json", `{"prompt":"cat"}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -198,7 +205,7 @@ func TestMatchPathWithBodyModelWins(t *testing.T) {
 	cfg := testConfig(t)
 	// Body model wins over path default.
 	req := newReq("POST", "http://x/sdapi/v1/txt2img", "application/json", `{"model":"krea-2-redcraft","prompt":"cat"}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -210,7 +217,7 @@ func TestMatchPathWithBodyModelWins(t *testing.T) {
 func TestMatchNoModel404(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"messages":[]}`)
-	if _, err := matchRequest(req, cfg); err == nil {
+	if _, err := matchRequest(req, cfg, meshOf(cfg)); err == nil {
 		t.Fatal("expected ErrNoModel")
 	}
 }
@@ -226,7 +233,7 @@ stanzas:
 		t.Fatalf("config: %v", err)
 	}
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model":"coding-model","messages":[]}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -238,7 +245,7 @@ stanzas:
 func TestMatchQuery(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("GET", "http://x/props?model=agents-a1", "", "")
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -259,7 +266,7 @@ stanzas:
 		t.Fatalf("config: %v", err)
 	}
 	req := newReq("POST", "http://x/v1/chat/completions", "application/json", `{"model_name":"sdxl-turbo","prompt":"cat"}`)
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -271,7 +278,7 @@ stanzas:
 func TestMatchURLEncodedForm(t *testing.T) {
 	cfg := testConfig(t)
 	req := newReq("POST", "http://x/v1/chat/completions", "application/x-www-form-urlencoded", "model=agents-a1&n=1")
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -283,7 +290,7 @@ func TestMatchURLEncodedForm(t *testing.T) {
 func TestMatchMultipartForm(t *testing.T) {
 	cfg := testConfig(t)
 	req := multipartReq(t, [2]string{"model", "agents-a1"}, [2]string{"prompt", "cat"})
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -297,7 +304,7 @@ func TestMatchMultipartFormSkipsOtherParts(t *testing.T) {
 	// The model part comes after a non-model part; the parser must drain and
 	// skip it to reach "model".
 	req := multipartReq(t, [2]string{"image", "iVBORw0KGgo="}, [2]string{"model", "agents-a1"})
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
@@ -310,7 +317,7 @@ func TestMatchFormFallsBackToQuery(t *testing.T) {
 	cfg := testConfig(t)
 	// Form body has no "model" field; the query string supplies it.
 	req := newReq("POST", "http://x/v1/chat/completions?model=agents-a1", "application/x-www-form-urlencoded", "prompt=cat")
-	ref, err := matchRequest(req, cfg)
+	ref, err := matchRequest(req, cfg, meshOf(cfg))
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}

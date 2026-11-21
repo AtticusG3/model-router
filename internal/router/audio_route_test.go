@@ -112,7 +112,7 @@ stanzas:
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref, err := matchRequest(newReq("POST", "http://x/v1/audio/speech", "application/json", `{"input":"hi"}`), cfg)
+	ref, err := matchRequest(newReq("POST", "http://x/v1/audio/speech", "application/json", `{"input":"hi"}`), cfg, meshOf(cfg))
 	if err != nil || ref.Local != "speech-b" {
 		t.Fatalf("ref = %+v err = %v, want speech-b", ref, err)
 	}
@@ -134,11 +134,11 @@ stanzas:
 		t.Fatal(err)
 	}
 	// No video stanza here.
-	if _, err := matchRequest(newReq("POST", "http://x/v1/videos", "application/json", `{}`), cfg); err == nil {
+	if _, err := matchRequest(newReq("POST", "http://x/v1/videos", "application/json", `{}`), cfg, meshOf(cfg)); err == nil {
 		t.Fatal("a path with no stanza of its type must fail")
 	}
 	// chat is not in the path table.
-	if _, err := matchRequest(newReq("POST", "http://x/v1/chat/completions", "application/json", `{}`), cfg); err == nil {
+	if _, err := matchRequest(newReq("POST", "http://x/v1/chat/completions", "application/json", `{}`), cfg, meshOf(cfg)); err == nil {
 		t.Fatal("chat must stay model-routed")
 	}
 }

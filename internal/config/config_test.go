@@ -92,12 +92,6 @@ func TestParse(t *testing.T) {
 	if cfg.Peer("digger") == nil {
 		t.Error("peer lookup failed")
 	}
-	if !cfg.PeerAdvertises("coding-model") {
-		t.Error("PeerAdvertises(coding-model) = false")
-	}
-	if cfg.PeerAdvertises("agents-a1") {
-		t.Error("PeerAdvertises(agents-a1) = true, want false")
-	}
 	if cfg.Peer("digger").Kind != "router" {
 		t.Errorf("peer kind = %q", cfg.Peer("digger").Kind)
 	}
@@ -160,6 +154,23 @@ stanzas:
 	}
 	if got := cfg.MaxRequestBodyBytes(); got != 1024<<20 {
 		t.Fatalf("MaxRequestBodyBytes = %d MB, want 1024 MB", got>>20)
+	}
+}
+
+func TestStanzaShareDefaultsOn(t *testing.T) {
+	cfg, err := Parse([]byte(`
+stanzas:
+  - model_id: open
+    command: "x"
+  - model_id: private
+    command: "y"
+    share: false
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !cfg.Stanza("open").Shared() || cfg.Stanza("private").Shared() {
+		t.Fatalf("shared: open=%v private=%v, want true false", cfg.Stanza("open").Shared(), cfg.Stanza("private").Shared())
 	}
 }
 

@@ -208,7 +208,7 @@ func TestVoicesModelLessGoesToTypeDefault(t *testing.T) {
 		newReq("GET", "http://x/v1/audio/voices/narrator", "", ""),
 		newReq("DELETE", "http://x/v1/audio/voices/narrator", "", ""),
 	} {
-		if ref, err := matchRequest(req, cfg); err != nil || ref.Local != "tts-main" {
+		if ref, err := matchRequest(req, cfg, meshOf(cfg)); err != nil || ref.Local != "tts-main" {
 			t.Errorf("%s %s: ref %+v err %v, want tts-main", req.Method, req.URL.Path, ref, err)
 		}
 	}

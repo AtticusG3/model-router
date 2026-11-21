@@ -139,6 +139,7 @@ stanzas:
     idle_ttl_seconds: 600  # 0 = resident, never swept
     hold_seconds: 0        # seconds after healthy during which eviction skips it
     peer_spill: auto       # auto | on_failure | never; see Local below
+    share: true            # false keeps this model off the mesh; see Peer
     max_request_body_mb: 256  # optional: override the top-level body cap
     port: 5901             # 0 = next free port from start_port
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
@@ -175,7 +176,7 @@ peers:
   - name: digger
     kind: router           # router | openai
     base_url: http://192.168.1.36:8082
-    models: [sdxl-turbo, qwen3-embedding-4b]
+    models: [sdxl-turbo, qwen3-embedding-4b]  # optional: telemetry catalog adds to it
     body_field: model      # field rewritten to the peer-local id before proxy
   - name: openrouter
     kind: openai           # proxy only; no /_router, no telemetry
@@ -379,7 +380,12 @@ gets 400, not a 502.
    - `peer/model` → that peer, if its `models` list contains the id.
    - Bare id that only a peer lists → mesh pick (below).
 4. **Local.** If the request arrived from another router
-   (`X-Model-Router-Peer`), it stays here. No spill back.
+   (`X-Model-Router-Peer`), it stays here. No spill back. A stanza with
+   `share: false` answers such a request (and a peer's `POST /_router/load`
+   or `/upstream/{model_id}`) with `404 model not shared`, whether it is named
+   by id, alias or filter-set id. A pool named in such a request skips its
+   `share: false` members; a pool with only unshared members answers
+   `404 model not shared`.
    - If this node cannot serve it now, try a spill first: later targets of
      any pool that names this model, then a peer that lists the same
      `model_id`.
@@ -413,6 +419,11 @@ gets 400, not a 502.
    the peer-local id (the peer's `body_field`), set `X-Model-Router-Peer` to
    this node's name, and stream the original path to the peer. `kind: openai`:
    no load call; proxy straight to `base_url`.
+
+   A router peer serves its configured `models` plus the `catalog` its cached
+   telemetry advertises, so a router peer needs no `models` list. `models`
+   still covers `kind: openai` peers and router peers on older builds that
+   send no catalog.
 6. No local capacity and no reachable peer that lists the model → `503` with
    the reason. No silent hang.
 
@@ -905,9 +916,15 @@ The snapshot a node publishes:
   loaded, so an idle-evicted copy still reports how it would serve a request.
   The field is absent when no stanza has a pipeline, so older peers parse the
   snapshot.
-- `catalog`: every local stanza `model_id` and filter-set alias this node can
-  serve, so a discovered peer knows what to ask it for without a second
-  request.
+- `catalog`: every local stanza `model_id` and filter-set alias this node
+  shares, so a peer knows what to ask it for without listing it in config.
+  A stanza with `share: false` is left out of `catalog`, `models` and the
+  running instances below. Peer model advertisement reuses this existing
+  string list rather than adding a `models` array of objects, because
+  `models` already carries the image-pipeline map above and older peers parse
+  it as that map. So an advertised peer model carries only its id: its catalog
+  family, owner and parameter count come from the shared metadata file, and it
+  shows no `api_type`, capabilities or VRAM size.
 - Each running instance: `model_id`, instance key when it is not instance 0,
   `fresh` or `stale`, VRAM budget, GPU, slot count and in-flight count. A
   `device: cpu` instance has no GPU entry (`gpu: none`).
