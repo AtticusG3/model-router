@@ -23,6 +23,10 @@ type Telemetry struct {
 	// loaded or not. Older peers omit it.
 	Models    map[string]*ImagePipelineInfo `json:"models,omitempty"`
 	Timestamp int64                         `json:"timestamp"`
+	// InProgress is the node's running logged requests and Recent its newest
+	// finished rows; node plus id keys a request across the mesh.
+	InProgress []InProgressEntry `json:"in_progress,omitempty"`
+	Recent     []RecentEntry     `json:"recent,omitempty"`
 }
 
 // LoadedModel is one locally running backend as advertised to peers.

@@ -17,6 +17,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,6 +106,47 @@ type ActivityEntry struct {
 	// ends: DurationMs then runs from submit to that end state.
 	JobID    string `json:"job_id,omitempty"`
 	JobState string `json:"job_state,omitempty"`
+	// FromPeer is the node that proxied the request here, from its
+	// X-Model-Router-Peer header; empty for a client request.
+	FromPeer string `json:"from_peer,omitempty"`
+}
+
+// maxInProgress caps the running requests listed in the Activity API and
+// telemetry; maxRecent is how many finished rows telemetry summarises.
+const (
+	maxInProgress = 50
+	maxRecent     = 20
+)
+
+// InProgressEntry is a logged request that has started and not yet finished.
+// ID is the Activity id its finished row will get; with the telemetry's node
+// it keys the request across the mesh.
+type InProgressEntry struct {
+	ID       int       `json:"id"`
+	Model    string    `json:"model"`
+	Target   string    `json:"target,omitempty"`
+	Method   string    `json:"method"`
+	Path     string    `json:"path"`
+	Started  time.Time `json:"started"`
+	FromPeer string    `json:"from_peer,omitempty"`
+	TTFTMs   int       `json:"ttft_ms,omitempty"`
+	// Tokens is the streamed chunks so far, about one per generated token.
+	Tokens int `json:"tokens,omitempty"`
+	// Prompt is the first 120 characters of the prompt or last message.
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// RecentEntry summarises a finished Activity row for peers, so a request they
+// saw in progress can be shown as finished.
+type RecentEntry struct {
+	ID         int    `json:"id"`
+	Model      string `json:"model"`
+	Path       string `json:"path"`
+	Status     int    `json:"status"`
+	DurationMs int    `json:"duration_ms"`
+	Tokens     int    `json:"tokens,omitempty"`
+	Target     string `json:"target,omitempty"`
+	FromPeer   string `json:"from_peer,omitempty"`
 }
 
 // voiceAdminKind is the MediaStats kind of a voice library write or delete.
@@ -167,10 +209,63 @@ type ActivityLog struct {
 	entries   []ActivityEntry
 	captures  map[int]storedCapture
 	captureSz int
+	running   map[int]*InProgressEntry
 }
 
 func NewActivityLog() *ActivityLog {
-	return &ActivityLog{captures: map[int]storedCapture{}}
+	return &ActivityLog{captures: map[int]storedCapture{}, running: map[int]*InProgressEntry{}}
+}
+
+// begin registers a running request and reserves the Activity id its row
+// will be written under.
+func (a *ActivityLog) begin(e InProgressEntry) *InProgressEntry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.nextID++
+	e.ID = a.nextID
+	a.running[e.ID] = &e
+	return &e
+}
+
+// end drops a running request; it is safe to call after record already did.
+func (a *ActivityLog) end(id int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.running, id)
+}
+
+// update changes a running entry under the log's lock.
+func (a *ActivityLog) update(e *InProgressEntry, f func(*InProgressEntry)) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	f(e)
+}
+
+// InProgress returns newest-first copies of the running requests, capped at
+// maxInProgress.
+func (a *ActivityLog) InProgress() []InProgressEntry {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]InProgressEntry, 0, len(a.running))
+	for _, e := range a.running {
+		out = append(out, *e)
+	}
+	slices.SortFunc(out, func(x, y InProgressEntry) int { return y.ID - x.ID })
+	return out[:min(len(out), maxInProgress)]
+}
+
+// Recent summarises the newest maxRecent finished rows.
+func (a *ActivityLog) Recent() []RecentEntry {
+	rows := a.List()
+	rows = rows[:min(len(rows), maxRecent)]
+	out := make([]RecentEntry, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, RecentEntry{
+			ID: e.ID, Model: e.Model, Path: e.Path, Status: e.Status, DurationMs: e.DurationMs,
+			Tokens: e.Tokens.CompletionTokens, Target: e.Target, FromPeer: e.FromPeer,
+		})
+	}
+	return out
 }
 
 // List returns newest-first copies of recent activity rows.
@@ -227,8 +322,13 @@ func (a *ActivityLog) dropOldestCapture() {
 func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []byte, blobType string) ActivityEntry {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.nextID++
-	entry.ID = a.nextID
+	// A proxied row reserved its id when the request began; a job row has none.
+	if entry.ID == 0 {
+		a.nextID++
+		entry.ID = a.nextID
+	}
+	// The finished row replaces the running entry under the same lock.
+	delete(a.running, entry.ID)
 	cap.ID = entry.ID
 	size := len(cap.ReqBody) + len(cap.RespBody) + len(blob)
 	for a.captureSz+size > maxCaptureBytes && len(a.captures) > 0 {
@@ -284,6 +384,9 @@ type activityWriter struct {
 	hashed    int
 	// ws is set once a websocket upgrade hijacks the connection.
 	ws *wsConn
+	// live is this request's in-progress entry, nil when it is not logged.
+	live *InProgressEntry
+	log  *ActivityLog
 }
 
 func (w *activityWriter) WriteHeader(code int) {
@@ -314,6 +417,7 @@ func (w *activityWriter) Write(p []byte) (int, error) {
 		w.media = isMediaResponse(w.sniffed)
 	}
 	w.noteFirstToken(p)
+	w.noteProgress(p)
 	if w.media {
 		w.captureMedia(p)
 	}
@@ -603,6 +707,20 @@ func (w *activityWriter) noteFirstToken(p []byte) {
 	}
 	w.ttftSet = true
 	w.scan.Reset()
+}
+
+// noteProgress copies the first-token time and the streamed chunk count to the
+// in-progress entry once a streamed token has been seen.
+// shortcut: counts SSE "data:" events (the usage and [DONE] events too), parse the deltas if a backend batches tokens per event.
+func (w *activityWriter) noteProgress(p []byte) {
+	if w.live == nil || !w.ttftSet {
+		return
+	}
+	n := bytes.Count(p, []byte("data:"))
+	w.log.update(w.live, func(e *InProgressEntry) {
+		e.TTFTMs = w.ttftMs
+		e.Tokens += n
+	})
 }
 
 func trimScan(buf *bytes.Buffer) {
@@ -1024,6 +1142,10 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 		DurationMs:  int(time.Since(started).Milliseconds()),
 		TTFTMs:      ttft,
 		Tokens:      tokens,
+		FromPeer:    r.fromPeer(req),
+	}
+	if rec.live != nil {
+		entry.ID = rec.live.ID
 	}
 	// A realtime session is logged once, when its websocket closes.
 	logged := rec.ws != nil || isGenerationRequest(req.Method, req.URL.Path) || isVoiceAdmin(req.Method, req.URL.Path)
@@ -1184,6 +1306,60 @@ func multipartFileName(body []byte) string {
 	return string(rest[:j])
 }
 
+// promptPreview is the first 120 characters of a JSON request's prompt: the
+// last chat message, or the prompt or input field. "" for any other body.
+func promptPreview(body []byte) string {
+	var b struct {
+		Prompt   any `json:"prompt"`
+		Input    any `json:"input"`
+		Messages []struct {
+			Content any `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &b) != nil {
+		return ""
+	}
+	s := firstText(b.Prompt)
+	if n := len(b.Messages); n > 0 {
+		s = firstText(b.Messages[n-1].Content)
+	}
+	if s == "" {
+		s = firstText(b.Input)
+	}
+	return clipRunes(s, 120)
+}
+
+// firstText is the first non-empty string in a prompt, a list of prompts or
+// content parts ({"type":"text","text":...}).
+func firstText(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []any:
+		for _, e := range t {
+			if s := firstText(e); s != "" {
+				return s
+			}
+		}
+	case map[string]any:
+		if s := firstText(t["text"]); s != "" {
+			return s
+		}
+		return firstText(t["content"])
+	}
+	return ""
+}
+
+// fromPeer is the node that proxied req here. The header this router stamps
+// on its own forward to a peer does not count: a peer-proxied request is never
+// forwarded again, so a forward always began here.
+func (r *Router) fromPeer(req *http.Request) string {
+	if p := req.Header.Get("X-Model-Router-Peer"); p != r.node {
+		return p
+	}
+	return ""
+}
+
 // clipRunes returns the first n characters of s.
 func clipRunes(s string, n int) string {
 	for i := range s {
@@ -1210,12 +1386,36 @@ func (r *Router) wrapProxy(w http.ResponseWriter, req *http.Request, model, targ
 	// image pipeline that rewrites the body already kept the client's original
 	// bytes, so the capture keeps those instead.
 	original, isOriginal := req.Context().Value(originalImageBodyKey{}).(*originalImageBody)
+	// Same rule as recordProxy's logged, known before the upgrade is answered.
+	if isWebsocketUpgrade(req) || isGenerationRequest(req.Method, req.URL.Path) || isVoiceAdmin(req.Method, req.URL.Path) {
+		e := InProgressEntry{
+			Model: model, Target: target, Method: req.Method, Path: req.URL.Path,
+			Started: started, FromPeer: r.fromPeer(req),
+		}
+		if isOriginal {
+			e.Prompt = promptPreview(original.body)
+		}
+		rec.log, rec.live = r.activity, r.activity.begin(e)
+	}
 	var cap *captureReader
 	if !isOriginal && req.Body != nil && req.Body != http.NoBody {
 		cap = &captureReader{rc: req.Body, max: maxCaptureBody}
+		if live := rec.live; live != nil {
+			// The proxy reads the body as it starts sending, so the preview
+			// shows within moments of the request starting.
+			// shortcut: no preview for a body over the capture clip (large vision or upload), parse a prefix if that matters.
+			cap.onEOF = func(b []byte) {
+				p := promptPreview(b)
+				r.activity.update(live, func(e *InProgressEntry) { e.Prompt = p })
+			}
+		}
 		req.Body = cap
 	}
 	return rec, func() {
+		if rec.live != nil {
+			// Whatever the outcome, panics and client disconnects included.
+			defer r.activity.end(rec.live.ID)
+		}
 		if isOriginal {
 			// A backend that answers before reading the upload leaves the rest
 			// unread, the same as the captureReader path below.
@@ -1244,6 +1444,8 @@ type captureReader struct {
 	truncated bool
 	eof       bool  // the body was read to its end
 	n         int64 // bytes read in total, captured or not
+	// onEOF, when set, gets the whole body once it is read and not clipped.
+	onEOF func([]byte)
 }
 
 func (c *captureReader) Read(p []byte) (int, error) {
@@ -1262,6 +1464,9 @@ func (c *captureReader) Read(p []byte) (int, error) {
 		}
 	}
 	if err == io.EOF {
+		if !c.eof && !c.truncated && c.onEOF != nil {
+			c.onEOF(c.buf.Bytes())
+		}
 		c.eof = true
 	} else if err != nil {
 		// The client went away or the body hit the cap: the capture is partial.
