@@ -238,7 +238,9 @@ async job API: `openai` (default, the backend speaks `/v1/videos`) or `sdcpp`
 on the node that owns the stanza, for local clients and for requests proxied
 in from peers. A preset name selects the steps, or a map names them:
 
-- `sd-server` — the sd-server checks.
+- `sd-server` — the sd-server checks: warm the LoRA cache when the backend
+  becomes ready and before a request that names a LoRA, and retry once when
+  sd-server still answers `invalid lora path`.
 - `ideogram4` — `sd-server` plus ideogram4-format caption enhancement.
 - `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: 0|1}`
   — the map form; `caption` is a format name (unknown names fail load), the
@@ -246,16 +248,15 @@ in from peers. A preset name selects the steps, or a map names them:
   0 or 1 blocked-response retry (the hook retries at most once for now).
 
 The step list this build ships is empty, so a preset parses and validates but
-changes no request yet. Keep the shim on a stanza that needs the sd-server
-checks, LoRA warm-up or caption enhancement until #120–#123 land.
+changes no request yet beyond the LoRA warm-up. Keep the shim on a stanza that
+needs caption enhancement or a blocked-card retry until #120–#123 land.
 
-A bare sd-server stanza needs no shim once its preset's steps ship: `sd-server
---listen-ip 127.0.0.1 --listen-port {port}` with `health_check: /v1/models`
-(sd-server has no `/health`) and `image_pipeline: sd-server`. Until then keep
-the shim for that stanza. The Python shim in `deploy/` stays supported for
-nodes that still wrap sd-server with it. The Activity capture keeps the
-client's original request body; a pipeline step can attach notes (such as a
-rewritten prompt) shown with it.
+A bare sd-server stanza needs no shim: run it with `sd-server --listen-ip
+127.0.0.1 --listen-port {port}` with `health_check: /v1/models` (sd-server has
+no `/health`) and `image_pipeline: sd-server`. The Python shim in `deploy/`
+stays supported for nodes that still wrap sd-server with it. The Activity
+capture keeps the client's original request body; a pipeline step can attach
+notes (such as a rewritten prompt) shown with it.
 
 A request with no `model` falls back by path: `match.path_prefix` first, then
 the `api_type` that path serves — `/v1/audio/speech` and `/v1/audio/voices` → `speech`,

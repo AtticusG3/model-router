@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"model-router/internal/config"
 )
@@ -53,6 +55,233 @@ func imageBackend(t *testing.T, txt2img http.HandlerFunc) http.Handler {
 	})
 	mux.HandleFunc("/sdapi/v1/txt2img", txt2img)
 	return mux
+}
+
+// imageBackendWithLoras is imageBackend plus the sd-server LoRA endpoint. warm
+// runs on every GET /sdapi/v1/loras.
+func imageBackendWithLoras(t *testing.T, warm func(), txt2img http.HandlerFunc) http.Handler {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"object":"list","data":[]}`)
+	})
+	mux.HandleFunc("/sdapi/v1/loras", func(w http.ResponseWriter, req *http.Request) {
+		warm()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `[]`)
+	})
+	mux.HandleFunc("/sdapi/v1/txt2img", txt2img)
+	return mux
+}
+
+func TestImagePipelineWarmsLoRABeforeFirstRequest(t *testing.T) {
+	var mu sync.Mutex
+	warmed := false
+	warmCalls, rejected, generated := 0, 0, 0
+	r := imageTestRouter(t, imageBackendWithLoras(t, func() {
+		mu.Lock()
+		warmed = true
+		warmCalls++
+		mu.Unlock()
+	}, func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			LoRA []string `json:"lora"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		mu.Lock()
+		isWarm := warmed
+		namesLora := len(body.LoRA) > 0
+		if namesLora && !isWarm {
+			rejected++
+		} else {
+			generated++
+		}
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if namesLora && !isWarm {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"invalid lora path"}`)
+			return
+		}
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	}))
+
+	if _, err := r.Load("sd-bare"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/txt2img", strings.NewReader(`{"prompt":"cat","lora":["QuadView_identity.safetensors"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if warmCalls != 1 {
+		t.Fatalf("warm calls = %d, want 1", warmCalls)
+	}
+	if rejected != 0 {
+		t.Fatalf("LoRA requests rejected = %d, want 0", rejected)
+	}
+	if generated != 1 {
+		t.Fatalf("generated = %d, want 1", generated)
+	}
+}
+
+func TestImagePipelineRetriesInvalidLoRAOnce(t *testing.T) {
+	var mu sync.Mutex
+	warmCalls, attempts := 0, 0
+	r := imageTestRouter(t, imageBackendWithLoras(t, func() {
+		mu.Lock()
+		warmCalls++
+		mu.Unlock()
+	}, func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			LoRA []string `json:"lora"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		mu.Lock()
+		attempts++
+		n := attempts
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if len(body.LoRA) > 0 && n == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"invalid lora path"}`)
+			return
+		}
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	}))
+
+	if _, err := r.Load("sd-bare"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/txt2img", strings.NewReader(`{"prompt":"cat","lora":["QuadView_identity.safetensors"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"images"`) {
+		t.Fatalf("response = %d %s, want the retried success", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want one retry", attempts)
+	}
+	if warmCalls != 2 {
+		t.Fatalf("warm calls = %d, want the ready warm and the forced re-warm", warmCalls)
+	}
+}
+
+func TestImagePipelineInvalidLoRASecondFailureIsReturned(t *testing.T) {
+	var mu sync.Mutex
+	warmCalls, attempts := 0, 0
+	r := imageTestRouter(t, imageBackendWithLoras(t, func() {
+		mu.Lock()
+		warmCalls++
+		mu.Unlock()
+	}, func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			LoRA []string `json:"lora"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if len(body.LoRA) > 0 {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":"invalid lora path"}`)
+			return
+		}
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	}))
+
+	if _, err := r.Load("sd-bare"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/txt2img", strings.NewReader(`{"prompt":"cat","lora":["QuadView_identity.safetensors"]}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid lora path") {
+		t.Fatalf("response = %d %s, want the second failure as is", rec.Code, rec.Body.String())
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want two and no loop", attempts)
+	}
+	if warmCalls != 2 {
+		t.Fatalf("warm calls = %d, want the ready warm and the forced re-warm", warmCalls)
+	}
+}
+
+func TestImagePipelineNoLoraDoesNotWarmAfterReady(t *testing.T) {
+	warmCh := make(chan struct{}, 8)
+	r := imageTestRouter(t, imageBackendWithLoras(t, func() {
+		warmCh <- struct{}{}
+	}, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	}))
+
+	if _, err := r.Load("sd-bare"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	select {
+	case <-warmCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ready warm not called")
+	}
+	for i := range 2 {
+		req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/txt2img", strings.NewReader(`{"prompt":"cat"}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d status = %d", i, rec.Code)
+		}
+	}
+	select {
+	case <-warmCh:
+		t.Fatal("a request without lora triggered another warm")
+	default:
+	}
+}
+
+func TestImagePipelineWarmResetsOnRestart(t *testing.T) {
+	warmCh := make(chan struct{}, 8)
+	r := imageTestRouter(t, imageBackendWithLoras(t, func() {
+		warmCh <- struct{}{}
+	}, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	}))
+
+	waitWarm := func() {
+		select {
+		case <-warmCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("ready warm not called")
+		}
+	}
+	if _, err := r.Load("sd-bare"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	waitWarm()
+	if err := r.Unload("sd-bare"); err != nil {
+		t.Fatalf("Unload: %v", err)
+	}
+	if _, err := r.Load("sd-bare"); err != nil {
+		t.Fatalf("Load again: %v", err)
+	}
+	waitWarm()
 }
 
 func TestImagePipelineBareSdServer(t *testing.T) {

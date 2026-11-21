@@ -1651,7 +1651,7 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			defer release()
 		}
 		if s.ImagePipeline != nil {
-			r.proxyImage(w, req, Target{Local: key}, m.proxy(), key, r.node, s)
+			r.proxyImage(w, req, Target{Local: key}, m, m.proxy(), key, r.node, s)
 			return nil
 		}
 		if err := filterLocal(req, s); err != nil {

@@ -4,10 +4,11 @@ Wrapper between model-router and sd-server, installed as the stanza command so
 the router sees one healthy endpoint. This copy is the source of truth; the
 installed binary is replaced by copying this file.
 
-A stanza that sets `image_pipeline` parses and validates the same checks in the
-router, but the step list this build ships is empty: keep the shim on a stanza
-that needs those checks until #120–#123 land. This shim stays supported for
-nodes that still wrap sd-server with it. See `SPEC.md` for the option and its
+A stanza that sets `image_pipeline` now warms sd-server's LoRA cache and
+retries one `invalid lora path` reply in the router; the other steps still
+ship empty, so keep the shim on a stanza that needs caption enhancement or a
+blocked-card retry until #120–#123 land. This shim stays supported for nodes
+that still wrap sd-server with it. See `SPEC.md` for the option and its
 presets.
 
 Backend runtime layout (environments, torch tracks, weights, ports, probe):
