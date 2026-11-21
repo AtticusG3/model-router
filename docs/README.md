@@ -52,12 +52,12 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Section | Page | Type | Status | Last reviewed |
 |---|---|---|---|---|
 | Repo root | [README](../README.md) | Reference | 🟢 current | 2026-11-22 |
-| Repo root | [SPEC](../SPEC.md) | Explanation | 🟢 current | n/a |
-| Repo root | [PLAN](../PLAN.md) | Explanation | 🟡 needs review (internal addresses, #184) | n/a |
+| Repo root | [SPEC](../SPEC.md) | Explanation | 🟢 current | 2026-11-22 |
+| Repo root | [PLAN](../PLAN.md) | Explanation | 🟡 needs review (internal addresses, #184) | 2026-11-22 |
 | Repo root | [Glossary](../GLOSSARY.md) | Reference | 🟢 current | n/a |
 | Repo root | [CHANGELOG](../CHANGELOG.md) | Reference | 🟢 current | 2026-11-22 |
 | Operations | [Deploy README](../deploy/README.md) | How-to | 🟢 current | 2026-11-22 |
-| Operations | [Swap-over procedure](../deploy/swap-over.md) | How-to | 🟢 current | n/a |
+| Operations | [Swap-over procedure](../deploy/swap-over.md) | How-to | 🟢 current | 2026-11-22 |
 | Operations | [Backends](../deploy/backends.md) | Reference | 🟢 current | n/a |
 | Reference | [VRAM fit ladder](vram-fit-ladder.md) | Reference | 🟢 current | 2026-11-22 |
 | Decisions | [0001 Start cooldown is not a crash restart](adr/0001-start-cooldown-is-not-a-crash-restart.md) | Explanation | 🟢 current | 2026-11-22 |
@@ -85,7 +85,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [A failed load tries the next router peer](adr/0003-a-failed-load-tries-the-next-router-peer.md)
 - [Domain Docs](agents/domain.md)
 - [Headroom is MB the node will not book](adr/0002-headroom-is-mb-the-node-will-not-book.md)
-- [Issue tracker: GitHub](agents/issue-tracker.md)
+- [Issue tracker: Gitea](agents/issue-tracker.md)
 - [Local music and sound-effect generation backends](research/music-sfx-backends.md)
 - [Local realtime and speech-to-speech backends](research/realtime-backends.md)
 - [Local speech-to-text backends](research/stt-backends.md)

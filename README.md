@@ -72,7 +72,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/model-router ./cmd/mo
 
 `configs/buster.yaml` is a **byte-identical mirror of the live production config**
 at `/opt/ai/config/model-router.yaml`. Production is the authority; this copy exists
-so the repo shows what the box actually runs. Do not hand-edit it, edit
+so the repo shows what the box actually runs. Do not hand-edit it; edit
 `/opt/ai/config/model-router.yaml` (or here and then install it), and re-sync:
 
 ```bash
@@ -207,7 +207,7 @@ The **Peers** cell has one chip per configured peer that serves the id:
 or `stale` (its telemetry is too old to trust); hover a chip for when it was
 last seen. Remote rows are mesh routed: the router picks a peer when a request
 names that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
-`qwen3.8-27b`), choose the id in the **Playground** Chat tab and send, that is a normal
+`qwen3.8-27b`), choose the id in the **Playground** Chat tab and send. That is a normal
 `/v1/chat/completions` request, so the node `POST`s `/_router/load` on a
 fresh peer and streams the reply. The Image tab is the same for `api_type:
 image` (or Path default for the configured sd.cpp route).
@@ -355,10 +355,10 @@ async job API: `openai` (default, the backend speaks `/v1/videos`) or `sdcpp`
 on the node that owns the stanza, for local clients and for requests proxied
 in from peers. A preset name selects the steps, or a map names them:
 
-- `sd-server`, the sd-server checks: warm the LoRA cache when the backend
+- `sd-server`: the sd-server checks, which warm the LoRA cache when the backend
   becomes ready and before a request that names a LoRA, and retry once when
   sd-server still answers `invalid lora path`.
-- `ideogram4`, `sd-server` plus ideogram4-format caption enhancement.
+- `ideogram4`: `sd-server` plus ideogram4-format caption enhancement.
 - `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
   enhancer model and timeout feed the caption step, and `retry_blocked` resends
   a blocked `txt2img` request with a new random seed up to N times (default 0;
@@ -387,7 +387,7 @@ capture keeps the client's original request body; a pipeline step can attach
 notes (such as a rewritten prompt) shown with it.
 
 A request with no `model` falls back by path: `match.path_prefix` first, then
-the `api_type` that path serves, `/v1/audio/speech` and `/v1/audio/voices` → `speech`,
+the `api_type` that path serves: `/v1/audio/speech` and `/v1/audio/voices` → `speech`,
 `/v1/audio/transcriptions` and `/v1/audio/translations` → `transcription`,
 `/v1/realtime` → `realtime`, `/v1/videos` → `video`,
 `/v1/audio/generations` → `audio_gen`, `/v1/images/*` and `/sdapi/v1/*` →
@@ -492,7 +492,7 @@ test/run-smoke.sh start             # two-router + fake-backend smoke test
 test/run-smoke.sh stop
 ```
 
-The smoke test runs on spare ports (18099/18100) with fake backends, it never
+The smoke test runs on spare ports (18099/18100) with fake backends. It never
 touches real models, GPUs, or the running llama-swap.
 
 ## Layout

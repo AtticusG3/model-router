@@ -1,4 +1,6 @@
-# Model Router, v0.1 Implementation Plan
+# Model Router: v0.1 Implementation Plan
+
+> **Last reviewed:** 2026-11-22
 
 This plan is the result of probing the fleet (buster, digger, gareths-homelab, nomad;
 nugget offline) and comparing reality against the original v0.1 sketch. It records
@@ -24,17 +26,17 @@ they disagree, `SPEC.md` and the code win.
 ### Current llama-swap behaviour observed
 - **Model extraction is body/query-only.** llama-swap reads `model` from the JSON
   body, multipart form, or `?model=` query. There is **no path-prefix routing and no
-  default-model fallback**, a request without a resolvable `model` returns
+  default-model fallback**. A request without a resolvable `model` returns
   `404 no model id could be identified`. So today, every sd.cpp request on digger
   must carry `model` in the body. This is the single biggest behavioural gap the
-  SPEC's `match.path_prefix` must solve (and it must be done carefully, see §3).
+  SPEC's `match.path_prefix` must solve (and it must be done carefully; see §3).
 - `/v1/models` lists local models, **selectors** (`meta.llamaswap.type=selector`),
   and **peers** (`type=peer`, id `peer/model`). Clients (rag-proxy) depend on this.
 - Selectors use `strategy: spillover` with `targets` (local ids and `peer/model`
-  ids). buster also uses llama-swap's `matrix` DSL (vars/sets/evict_costs), that is
+  ids). buster also uses llama-swap's `matrix` DSL (vars/sets/evict_costs). That is
   an eviction-policy feature the SPEC defers; v0.1 does not port it.
 - Peers are static `proxy: http://ip:port` + `models:` lists. Nomad/digger point at
-  buster `:8081` which is **rag-proxy** (python), not llama-swap directly, rag-proxy
+  buster `:8081` which is **rag-proxy** (python), not llama-swap directly. rag-proxy
   forwards to `:18080`. The router will let peers talk directly to the router port.
 
 ### Backend binaries in use
@@ -50,7 +52,7 @@ they disagree, `SPEC.md` and the code win.
 
 ## 2. Pitfalls & gaps in SPEC vs. fleet
 
-1. **Multi-GPU placement (buster), SPEC misses it.** `vram_mb` is a single number but
+1. **Multi-GPU placement (buster): SPEC misses it.** `vram_mb` is a single number but
    buster has 2 GPUs and every stanza pins `--split-mode none --device CUDA0|CUDA1`.
    Admission control must be **per-GPU** and telemetry must report **per-GPU free VRAM**.
    → Add `device` to the stanza; admission ledger keyed by GPU index.
@@ -88,12 +90,12 @@ they disagree, `SPEC.md` and the code win.
     support `kind: openai` (proxy-only) vs `kind: router` (has control API).
 11. **Nugget offline.** Offline peers must be excluded via telemetry staleness (SPEC
     covers this) and requests must fall through with a clear 503. Also: buster's
-    selectors reference `nugget/...` targets that will never resolve, the pool
+    selectors reference `nugget/...` targets that will never resolve. The pool
     resolver must skip unreachable peers, not fail the whole selector.
 12. **VRAM numbers are estimates.** `vram_mb` reserves worst-case; actual usage differs
     (agents-a1 is a 22 GB file with `-ngl 30`). Treat `vram_mb` as the reservation and
     log actual nvidia-smi deltas for later calibration. Buster's 4060 is nearly full
-    today (956 MB free), admission must handle "no room" gracefully.
+    today (956 MB free). Admission must handle "no room" gracefully.
 13. **Streaming/SSE.** Reverse proxy must flush immediately and set
     `X-Accel-Buffering: no`; long image-gen and slow spin-ups (colibri) need long
     timeouts and must not be killed by a client disconnect mid-spin.
@@ -204,7 +206,7 @@ Implemented and verified locally (two-router smoke test on spare ports with fake
 backends; real llama-swap untouched):
 
 - ✅ Matcher: body/query model → pool → peer-qualified → path_prefix with
-  path_default fallback (llama-swap has no path routing at all, 404s).
+  path_default fallback (llama-swap has no path routing at all; it 404s).
 - ✅ Admission ledger: per-GPU reservation, device pinning, auto-pick, release on
   unload/failed spin-up; serialized (no split-brain).
 - ✅ Supervisor: spawn (process-group aware), health poll to spin-up deadline,
