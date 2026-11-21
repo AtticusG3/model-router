@@ -359,8 +359,7 @@ in from peers. A preset name selects the steps, or a map names them:
   becomes ready and before a request that names a LoRA, and retry once when
   sd-server still answers `invalid lora path`.
 - `ideogram4`, `sd-server` plus ideogram4-format caption enhancement.
-- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`
- , the map form; `caption` is a format name (unknown names fail load), the
+- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
   enhancer model and timeout feed the caption step, and `retry_blocked` resends
   a blocked `txt2img` request with a new random seed up to N times (default 0;
   above 5 fails load).

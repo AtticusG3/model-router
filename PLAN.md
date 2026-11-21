@@ -83,7 +83,7 @@ they disagree, `SPEC.md` and the code win.
    *router* port directly for control (`load()`), not through rag-proxy. peers.yaml
    will point at router ports (buster:18080, nomad:8081, digger:8082, gareth:8081 via
    nginx). gareth's nginx needs SSE-safe proxy settings (already partially present).
-10. **OpenRouter peers (gareth).** gareth's config lists `openrouter/...` peers , 
+10. **OpenRouter peers (gareth).** gareth's config lists `openrouter/...` peers:
     plain OpenAI-compatible upstreams with no control endpoint. peers.yaml must
     support `kind: openai` (proxy-only) vs `kind: router` (has control API).
 11. **Nugget offline.** Offline peers must be excluded via telemetry staleness (SPEC
