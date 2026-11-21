@@ -78,7 +78,7 @@ Flags: `-config` (default `/opt/ai/config/model-router.yaml`), `-listen`
 | `/_router/logs/{model_id}` | one model's ring as JSON, for the Logs page when a proxy buffers the live stream |
 | `/_router/activity`, `/_router/activity/{id}`, `/_router/activity/{id}/thumb`, `/_router/activity/{id}/audio` | in-memory generation request log, request/response captures, and the image thumbnail or speech audio |
 | `/ui/` | embedded operator WebUI (dashboard, activity, controls, chat, image, logs/metrics) |
-| `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness) |
+| `/health`, `/metrics` | health + Prometheus (up, running models, GPU free/reclaim, peer freshness, tokens by kind incl. prompt cache hits, prefill/decode phase tokens and seconds) |
 
 ## API keys for public clients
 

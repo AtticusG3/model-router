@@ -548,7 +548,7 @@ the peer admits against its own budget.
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
 | `GET /health` | `OK`. |
-| `GET /metrics` | Prometheus: up, running models, running async jobs per model, GPU free and reclaimable, peer freshness. |
+| `GET /metrics` | Prometheus: up, running models, running async jobs per model, GPU free and reclaimable, peer freshness, requests, latency, tokens by kind (`prompt` includes cache hits, `cached`, `completion`), and prefill/decode phase tokens and seconds (`model_router_phase_tokens_total` / `model_router_phase_seconds_total{phase="prefill"|"decode"}`; tokens ÷ seconds is pp or tg speed). |
 
 `api_type` and `capabilities` are published in `/v1/models` and
 `/_router/status` (each catalog row carries `api_type` and `capabilities`), and

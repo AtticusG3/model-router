@@ -48,6 +48,14 @@ type modelMetrics struct {
 	ttft       *histogram
 	prompt     uint64
 	completion uint64
+	cached     uint64 // prompt tokens served from the prompt cache
+	// Prefill (pp) and decode (tg) phase totals, from upstream timings. Only
+	// requests that report a phase duration count, so tokens/seconds is the
+	// engine's real pp or tg speed.
+	prefillTokens  uint64
+	prefillSeconds float64
+	decodeTokens   uint64
+	decodeSeconds  float64
 }
 
 // Metrics collects request counters, latency histograms, and token totals for
@@ -153,6 +161,17 @@ func (m *Metrics) Observe(e ActivityEntry) {
 	if e.Tokens.CompletionTokens > 0 {
 		mm.completion += uint64(e.Tokens.CompletionTokens)
 	}
+	if c := e.Tokens.CachedTokens; c > 0 {
+		mm.cached += uint64(c)
+	}
+	if n, sec := prefillPhase(e.Tokens); n > 0 && sec > 0 {
+		mm.prefillTokens += uint64(n)
+		mm.prefillSeconds += sec
+	}
+	if n, sec := decodePhase(e.Tokens); n > 0 && sec > 0 {
+		mm.decodeTokens += uint64(n)
+		mm.decodeSeconds += sec
+	}
 	if e.TTFTMs > 0 {
 		mm.ttft.observe(ttftBuckets, float64(e.TTFTMs)/1000)
 	}
@@ -169,6 +188,38 @@ func (m *Metrics) Observe(e ActivityEntry) {
 		mt.count++
 		mt.seconds += e.Media.Seconds
 	}
+}
+
+// prefillPhase returns the prompt tokens the engine evaluated and the prefill
+// seconds. timings.prompt_n already excludes cache hits; without it the
+// cached count is taken off usage.prompt_tokens.
+func prefillPhase(t TokenStats) (int, float64) {
+	if t.PromptMs <= 0 {
+		return 0, 0
+	}
+	n := t.PromptEvalTokens
+	if n == 0 {
+		n = t.PromptTokens - t.CachedTokens
+	}
+	if n <= 0 {
+		return 0, 0
+	}
+	return n, t.PromptMs / 1000
+}
+
+// decodePhase returns generated tokens and decode seconds, from
+// timings.predicted_ms or, failing that, predicted_per_second.
+func decodePhase(t TokenStats) (int, float64) {
+	if t.CompletionTokens <= 0 {
+		return 0, 0
+	}
+	if t.PredictedMs > 0 {
+		return t.CompletionTokens, t.PredictedMs / 1000
+	}
+	if t.TokensPerSecond > 0 {
+		return t.CompletionTokens, float64(t.CompletionTokens) / t.TokensPerSecond
+	}
+	return 0, 0
 }
 
 // Render writes the collector in Prometheus text exposition format (0.0.4).
@@ -255,6 +306,34 @@ func (m *Metrics) Render(node string) string {
 			if mm.completion > 0 {
 				fmt.Fprintf(&sb, "model_router_tokens_total{model=%q,kind=\"completion\"} %d\n", k, mm.completion)
 			}
+			if mm.cached > 0 {
+				fmt.Fprintf(&sb, "model_router_tokens_total{model=%q,kind=\"cached\"} %d\n", k, mm.cached)
+			}
+		}
+	}
+
+	// Phase series: HELP/TYPE are always written so a scraper can tell this
+	// build apart from one without them, even before the first timed request.
+	fmt.Fprintf(&sb, "# HELP model_router_phase_tokens_total Tokens processed per phase (prefill excludes prompt cache hits), from upstream timings.\n")
+	fmt.Fprintf(&sb, "# TYPE model_router_phase_tokens_total counter\n")
+	for _, k := range keys {
+		mm := m.models[k]
+		if mm.prefillTokens > 0 {
+			fmt.Fprintf(&sb, "model_router_phase_tokens_total{model=%q,phase=\"prefill\"} %d\n", k, mm.prefillTokens)
+		}
+		if mm.decodeTokens > 0 {
+			fmt.Fprintf(&sb, "model_router_phase_tokens_total{model=%q,phase=\"decode\"} %d\n", k, mm.decodeTokens)
+		}
+	}
+	fmt.Fprintf(&sb, "# HELP model_router_phase_seconds_total Seconds spent per phase, from upstream timings.\n")
+	fmt.Fprintf(&sb, "# TYPE model_router_phase_seconds_total counter\n")
+	for _, k := range keys {
+		mm := m.models[k]
+		if mm.prefillTokens > 0 {
+			fmt.Fprintf(&sb, "model_router_phase_seconds_total{model=%q,phase=\"prefill\"} %.3f\n", k, mm.prefillSeconds)
+		}
+		if mm.decodeTokens > 0 {
+			fmt.Fprintf(&sb, "model_router_phase_seconds_total{model=%q,phase=\"decode\"} %.3f\n", k, mm.decodeSeconds)
 		}
 	}
 

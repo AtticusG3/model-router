@@ -181,3 +181,53 @@ llamacpp:requests_deferred nope`
 		t.Errorf("error text produced series: %v", got)
 	}
 }
+
+func TestMetricsPrefillDecodeAndCache(t *testing.T) {
+	m := NewMetrics()
+	// llama.cpp shape: usage.prompt_tokens includes cache hits, timings.prompt_n
+	// does not.
+	m.Observe(ActivityEntry{
+		Model:  "qwen",
+		Status: 200,
+		Tokens: TokenStats{
+			PromptTokens: 55000, CachedTokens: 54858, PromptEvalTokens: 142, PromptMs: 944,
+			CompletionTokens: 132, PredictedMs: 1430, TokensPerSecond: 92.3,
+		},
+	})
+	// No predicted_ms: decode seconds come from predicted_per_second. No
+	// prompt_n: evaluated prompt is prompt minus cached.
+	m.Observe(ActivityEntry{
+		Model:  "qwen",
+		Status: 200,
+		Tokens: TokenStats{PromptTokens: 300, CachedTokens: 100, PromptMs: 500, CompletionTokens: 50, TokensPerSecond: 50},
+	})
+	// Embedding: prompt tokens, no timings. Counts as prompt, not as a phase.
+	m.Observe(ActivityEntry{Model: "embed", Status: 200, Tokens: TokenStats{PromptTokens: 12}})
+
+	out := m.Render("buster")
+	for _, want := range []string{
+		`model_router_tokens_total{model="qwen",kind="prompt"} 55300`,
+		`model_router_tokens_total{model="qwen",kind="cached"} 54958`,
+		`model_router_tokens_total{model="qwen",kind="completion"} 182`,
+		`model_router_phase_tokens_total{model="qwen",phase="prefill"} 342`,
+		`model_router_phase_seconds_total{model="qwen",phase="prefill"} 1.444`,
+		`model_router_phase_tokens_total{model="qwen",phase="decode"} 182`,
+		`model_router_phase_seconds_total{model="qwen",phase="decode"} 2.430`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing %q\n---\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `model_router_phase_tokens_total{model="embed"`) || strings.Contains(out, `{model="embed",kind="cached"}`) {
+		t.Fatalf("embedding without timings must not emit phase or cached series:\n%s", out)
+	}
+}
+
+func TestMetricsPhaseHeadersAlwaysRendered(t *testing.T) {
+	out := NewMetrics().Render("n")
+	for _, want := range []string{"# TYPE model_router_phase_tokens_total counter", "# TYPE model_router_phase_seconds_total counter"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("fresh render missing %q", want)
+		}
+	}
+}
