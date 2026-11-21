@@ -804,6 +804,62 @@ This repo
   `internal/config/config.go`, `cmd/fake-model/main.go`
 - the GPU host's and the 24 GB image node's configs under `configs/`
 
+## 10. Deployed on buster (2026-11-21)
+
+`ltx-2.5-video` is live as the first `api_type: video` stanza: GPU0, port 5938,
+`job.adapter: sdcpp`, `match: {path_default: true}`, `capabilities: [audio_out]`,
+`vram_mb: 22000`, `hold_seconds: 900`, `idle_ttl_seconds: 900`.
+
+**Weights.** LTX-2.5 22B distilled `Q5_K_M` (15.6 GB), the **conv** video VAE
+(the default `ltx-2.5-video-vae-bf16` is a diffusion decoder sd.cpp does not
+implement), the audio VAE, and the Gemma4-12B-with-projection text encoder
+converted to **Q8_0** (`sd-cli -M convert`, 26.3 GB bf16 -> 15.0 GB, 123 s) so
+the encoder fits the CPU/RAM side of `--offload-to-cpu`. No
+`--embeddings-connectors`: 2.5 bundles the projection.
+
+**Build.** `~/infra/stable-diffusion.cpp` at `532d2c1` built into `build-video/`
+with `-DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="70;86"`.
+
+Measured, 3090 (sm_86), 768x512, 121 frames, 24 fps, cfg 1.0:
+
+| steps | wall | s/step | s per output second | output | peak VRAM |
+|---|---|---|---|---|---|
+| 8 | 440 s | 48 | 66 | 7 s request -> 6.7 s clip | 18.7 GB |
+| 16 | 544 s | 33 | 116 | 5 s request -> 4.7 s clip | 18.4 GB |
+| 24 | 802 s | 33 | 170 | 5 s request -> 4.7 s clip | 18.7 GB |
+
+The 24-step run is the ten-minute gate: 13 min 22 s wall through `:18080` with the
+model held for the whole job and released only after the poll reported
+`completed`.
+
+Base VRAM on the host (chat model + embed server) is ~4.9 GB, so the stanza
+needs 22 GB booked on a 24 GB card and cannot share it. `--offload-to-cpu`
+keeps the text encoder out of VRAM; the transformer and both VAEs are on the
+card.
+
+**Adapter work this needed (all in the same PR):**
+
+- `sample_params`. sd-server's `/sdcpp/v1/vid_gen` reads sampling under
+  `sample_params`; a flat `steps` is accepted and **silently ignored**, so every
+  job ran at the recipe default (20 steps) whatever the client asked. `steps` /
+  `num_inference_steps` now become `sample_params.sample_steps`, `cfg_scale`
+  becomes `sample_params.guidance.txt_cfg`, `scheduler` moves inside too.
+- **MP4.** sd-server writes `webm`, `webp`, `avi` only, and its WebM carries
+  **PCM** audio, which browsers play silent (#2233). `/content?format=mp4` (or
+  `Accept: video/mp4`) now transcodes H.264 + AAC through ffmpeg with a
+  `Content-Length`; `?fps=N` forces a constant frame rate for clips whose WebM
+  arrived without timestamps (a 9-frame clip reported 0.001 s and collapsed to a
+  single frame). ffmpeg must write the MP4 **by path**: with `pipe:1` it calls
+  the output non-seekable and refuses `+faststart`.
+- A job holds the card. Asking for another GPU0 model mid-job returns
+  `503 no GPU can take <model> now and no peer served it` instead of evicting
+  the video model: no eviction, no lost job.
+
+**Not tried on a V100.** Both 32 GB cards are occupied by `qwen38-flash-next`
+(the router's own chat model); a video load there evicts it for ~7 minutes and
+would need `device: "1|2"`, `CUDA_VISIBLE_DEVICES={gpu}`, `vram_mb: 30000`.
+Recorded as a follow-up rather than measured.
+
 ## See also
 
 - [Docs index](../README.md): every docs page, by reader.

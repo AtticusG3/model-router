@@ -531,20 +531,17 @@ func TestRouterLogsSnapshotFeedsUIFallback(t *testing.T) {
 	}
 }
 
-// The model catalog has a Peers cell with one escaped chip per peer, and
-// remote-only rows no longer say "Mesh routed".
+// The model catalog folds peers into the Origin column (#188); the rendered
+// rows are checked in testdata/model_family_test.js. Remote-only rows no
+// longer say "Mesh routed".
 func TestEmbeddedUIModelCatalogPeers(t *testing.T) {
-	for _, want := range []string{
-		"<th>State</th><th>Peers</th><th>VRAM</th>", "<td>'+peerChips(m.peers)+'</td>",
-		"function peerChips", "esc(bits.join(' · '))", "'Last seen '+new Date(p.last_seen*1000)",
-		".state.loaded{", `colspan="6"`,
-	} {
-		if !strings.Contains(webUIHTML, want) {
-			t.Errorf("embedded UI missing %q", want)
-		}
+	if !strings.Contains(webUIHTML, "<th>Model</th><th>Origin</th><th>State</th><th>VRAM</th><th>Actions</th>") {
+		t.Error("catalog header is not Model, Origin, State, VRAM, Actions")
 	}
-	if strings.Contains(webUIHTML, "Mesh routed") {
-		t.Error("remote rows still say Mesh routed instead of showing peer chips")
+	for _, gone := range []string{"<th>Peers</th>", "peerChips", "peer-chips", "Mesh routed"} {
+		if strings.Contains(webUIHTML, gone) {
+			t.Errorf("embedded UI still has %q", gone)
+		}
 	}
 }
 
@@ -573,7 +570,6 @@ func TestEmbeddedUIFamilyIcons(t *testing.T) {
 		"iu=m.info&&m.info.icon_url,fi=iu&&safeUrl(iu)?",
 		":f&&Object.hasOwn(FAMILY_ICONS,f.id)&&FAMILY_ICONS[f.id],", `role="img" aria-label="'+esc(fl)+'"`,
 		"(fi||icon(origin==='remote'?'peer':'model'))",
-		"<td>'+peerChips(m.peers)+'</td>",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)

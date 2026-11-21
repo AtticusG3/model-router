@@ -128,6 +128,7 @@ func TestHTTPServerWebUI(t *testing.T) {
 	if !strings.Contains(uiJS, "/_router/activity") || !strings.Contains(uiJS, "openCapture") {
 		t.Fatal("UI missing activity poll or capture opener")
 	}
+	// Enabled/disabled gating is checked on rendered rows in TestEmbeddedUIModelCatalogRows.
 	if !strings.Contains(uiJS, "/upstream/") || !strings.Contains(uiJS, "Open UI") || !strings.Contains(uiJS, "encodeURIComponent(m.id)") {
 		t.Fatal("UI missing Open UI link to /upstream/{id}/")
 	}
