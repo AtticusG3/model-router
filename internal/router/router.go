@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -2109,6 +2110,52 @@ type ModelStatus struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 	// GPUs lists where running local instances sit, one entry per instance.
 	GPUs []int `json:"gpus,omitempty"`
+	// Peers lists every configured peer that serves this id, in config order.
+	Peers []PeerModelStatus `json:"peers,omitempty"`
+}
+
+// PeerModelStatus is one peer's copy of a catalog model.
+type PeerModelStatus struct {
+	Name     string `json:"name"`
+	State    string `json:"state"` // loaded | available (advertised, not running) | stale
+	GPUs     []int  `json:"gpus,omitempty"`
+	InFlight int    `json:"in_flight,omitempty"`
+	Slots    int    `json:"slots,omitempty"`
+	LastSeen int64  `json:"last_seen,omitempty"` // unix seconds of the last telemetry received
+}
+
+// peerModelStatus reads one peer's state for model id from its cached
+// telemetry. Stale telemetry says nothing about what is loaded now.
+func peerModelStatus(p *config.Peer, id string, t *Telemetry, seen time.Time, fresh bool) PeerModelStatus {
+	ps := PeerModelStatus{Name: p.Name, State: "available"}
+	if !seen.IsZero() {
+		ps.LastSeen = seen.Unix()
+	}
+	if p.Kind == "openai" {
+		return ps // no telemetry to read; routable whenever configured
+	}
+	if !fresh {
+		ps.State = "stale"
+		return ps
+	}
+	for _, lm := range t.LoadedModels {
+		if lm.ID != id {
+			continue
+		}
+		ps.State = "loaded"
+		gpus := lm.GPUs
+		if len(gpus) == 0 && lm.GPU >= 0 {
+			gpus = []int{lm.GPU} // older peers send only the first GPU
+		}
+		for _, g := range gpus {
+			if !slices.Contains(ps.GPUs, g) {
+				ps.GPUs = append(ps.GPUs, g)
+			}
+		}
+		ps.InFlight += lm.InFlight
+		ps.Slots += max(lm.Slots, 1) // as peerSlotInfo: no slot count means one
+	}
+	return ps
 }
 
 // LocalModelStatuses lists unique mesh models (local + reachable remotes).
@@ -2176,18 +2223,22 @@ func (r *Router) catalogStatuses() []ModelStatus {
 			seen[a] = true
 		}
 	}
+	onPeers := map[string][]PeerModelStatus{}
 	for i := range cfg.Peers {
 		p := &cfg.Peers[i]
-		if p.Kind != "openai" && !r.peers.Fresh(p.Name) {
-			continue
-		}
+		t, lastSeen, fresh := r.peers.Entry(p.Name)
 		for _, m := range p.Models {
-			if seen[m] {
+			onPeers[m] = append(onPeers[m], peerModelStatus(p, m, t, lastSeen, fresh))
+			// Only a routable peer adds a row of its own.
+			if seen[m] || (p.Kind != "openai" && !fresh) {
 				continue
 			}
 			seen[m] = true
 			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available"})
 		}
+	}
+	for i := range out {
+		out[i].Peers = onPeers[out[i].ID]
 	}
 	return out
 }

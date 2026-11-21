@@ -1,11 +1,14 @@
 package router
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"model-router/internal/config"
 )
@@ -400,6 +403,75 @@ peers:
 	}
 	if _, ok := got["local-only"]; !ok {
 		t.Fatal("local-only missing from catalog")
+	}
+}
+
+// Each catalog row lists the peers serving it: loaded (from fresh telemetry),
+// available (advertised, not running) or stale (telemetry too old to trust).
+func TestCatalogListsPeersWithState(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: x
+    command: "x --port {port}"
+peers:
+  - name: alpha
+    kind: router
+    base_url: http://alpha.invalid:8081
+    models: [x, y]
+  - name: bravo
+    kind: router
+    base_url: http://bravo.invalid:8081
+    models: [x, y]
+  - name: charlie
+    kind: router
+    base_url: http://charlie.invalid:8081
+    models: [x]
+`)
+	r.peers.Set("alpha", &Telemetry{Node: "alpha", LoadedModels: []LoadedModel{
+		{ID: "x", GPU: 1, GPUs: []int{1}, Slots: 2, InFlight: 1},
+	}})
+	r.peers.Set("bravo", &Telemetry{Node: "bravo"})
+	// charlie still reports x loaded, but its telemetry is past the stale window.
+	r.peers.Set("charlie", &Telemetry{Node: "charlie", LoadedModels: []LoadedModel{{ID: "x", GPU: 0, Slots: 1}}})
+	r.peers.mu.Lock()
+	r.peers.peers["charlie"].Seen = time.Now().Add(-time.Hour)
+	r.peers.mu.Unlock()
+
+	rec := httptest.NewRecorder()
+	NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, httptest.NewRequest("GET", "/_router/status", nil))
+	var body struct {
+		Models []ModelStatus `json:"models"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("/_router/status: %v %s", err, rec.Body.String())
+	}
+	got := map[string]ModelStatus{}
+	for _, ms := range body.Models {
+		got[ms.ID] = ms
+	}
+
+	x := got["x"]
+	if x.Origin != "local" || x.State != string(StateStopped) {
+		t.Fatalf("x = %s/%s, want its local state", x.Origin, x.State)
+	}
+	if len(x.Peers) != 3 {
+		t.Fatalf("x peers = %+v, want alpha, bravo, charlie", x.Peers)
+	}
+	a, b, c := x.Peers[0], x.Peers[1], x.Peers[2]
+	if a.Name != "alpha" || a.State != "loaded" || !slices.Equal(a.GPUs, []int{1}) || a.InFlight != 1 || a.Slots != 2 || a.LastSeen == 0 {
+		t.Errorf("alpha = %+v, want loaded on gpu1 with 1/2", a)
+	}
+	if b.Name != "bravo" || b.State != "available" || b.GPUs != nil || b.Slots != 0 {
+		t.Errorf("bravo = %+v, want available", b)
+	}
+	if c.Name != "charlie" || c.State != "stale" || c.GPUs != nil {
+		t.Errorf("charlie = %+v, want stale, not loaded", c)
+	}
+
+	y := got["y"]
+	if y.Origin != "remote" || len(y.Peers) != 2 || y.Peers[0].State != "available" || y.Peers[1].State != "available" {
+		t.Errorf("y = %+v, want a remote row listing alpha and bravo as available", y)
 	}
 }
 
