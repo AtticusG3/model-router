@@ -114,7 +114,8 @@ type ImagePipeline struct {
 	Caption string `yaml:"caption"`
 	// Enhancer names the model and timeout used by a caption step.
 	Enhancer *ImageEnhancer `yaml:"enhancer"`
-	// RetryBlocked is how many times a blocked response may be retried.
+	// RetryBlocked is how many times a blocked response may be retried. The
+	// hook retries once, so use 0 or 1 until a retry step honours higher values.
 	RetryBlocked int `yaml:"retry_blocked"`
 
 	// preset is the bare-string form, expanded by Parse so an unknown name is

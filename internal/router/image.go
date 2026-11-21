@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"slices"
 	"sync"
 
 	"model-router/internal/config"
@@ -18,7 +19,8 @@ type imageStep struct {
 	Rewrite func(req *http.Request, notes *imageNotes) error
 	// After inspects the backend reply. It may add headers to h and change req
 	// headers for a retry; true sends the same rewritten body once more. A
-	// second reply is not retried.
+	// second reply is not retried. Headers a step sets on the first reply are
+	// carried to the final one unless the retry sets the same name.
 	After func(req *http.Request, status int, h http.Header, body []byte, notes *imageNotes) bool
 }
 
@@ -58,11 +60,14 @@ func imageNotesFrom(req *http.Request) []string {
 }
 
 // originalImageBody is the client's request body as received, kept for the
-// Activity capture when pipeline steps rewrite it.
+// Activity capture when pipeline steps rewrite it. eof records whether the whole
+// body was read; a backend that answers early leaves it false.
 type originalImageBody struct {
 	body      []byte
 	bytes     int64
 	truncated bool
+	hasBody   bool
+	eof       bool
 }
 
 type originalImageBodyKey struct{}
@@ -72,8 +77,10 @@ type originalImageBodyKey struct{}
 func captureOriginalImageBody(req *http.Request) (*originalImageBody, error) {
 	ob := &originalImageBody{}
 	if req.Body == nil || req.Body == http.NoBody {
+		ob.eof = true
 		return ob, nil
 	}
+	ob.hasBody = true
 	read, err := io.ReadAll(io.LimitReader(req.Body, maxCaptureBody+1))
 	if err != nil {
 		return nil, err
@@ -82,14 +89,41 @@ func captureOriginalImageBody(req *http.Request) (*originalImageBody, error) {
 	if len(read) > maxCaptureBody {
 		ob.body = read[:maxCaptureBody]
 		ob.truncated = true
-	}
-	ob.bytes = int64(len(read))
-	if req.ContentLength > 0 {
-		ob.bytes = req.ContentLength
+	} else {
+		// ReadAll stopped at the body's end, not at the capture cap.
+		ob.eof = true
 	}
 	old := req.Body
-	req.Body = &prefixedBody{Reader: io.MultiReader(bytes.NewReader(read), old), Closer: old}
+	ob.bytes = int64(len(read))
+	var rest io.Reader
+	if req.ContentLength > 0 {
+		ob.bytes = req.ContentLength
+		rest = &countingReader{rc: old, eof: &ob.eof}
+	} else {
+		// A chunked upload has no total up front: count the rest as it passes.
+		rest = &countingReader{rc: old, n: &ob.bytes, eof: &ob.eof}
+	}
+	req.Body = &prefixedBody{Reader: io.MultiReader(bytes.NewReader(read), rest), Closer: old}
 	return ob, nil
+}
+
+// countingReader tallies the client body bytes as the request streams them and
+// records that the body reached its end.
+type countingReader struct {
+	rc  io.ReadCloser
+	n   *int64 // nil when the total came from Content-Length
+	eof *bool
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.rc.Read(p)
+	if c.n != nil {
+		*c.n += int64(n)
+	}
+	if err == io.EOF {
+		*c.eof = true
+	}
+	return n, err
 }
 
 // prefixedBody replays the prefix read for the Activity capture and then the
@@ -143,19 +177,25 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 		r.writeBodyError(w, req, err)
 		return
 	}
-	send := func(dst http.ResponseWriter) {
+
+	// One capture for the whole exchange: a retried attempt must not leave a
+	// second Activity entry or inflight count for the discarded reply.
+	wrapped, done := r.beginProxy(w, req, model, target)
+	defer done()
+	send := func(dst *imageReply) {
 		if err := snap.install(req); err != nil {
 			http.Error(dst, "could not replay request body", http.StatusInternalServerError)
 			return
 		}
-		r.proxyJobAware(dst, req, t, baseURL, model, target)
+		r.proxyJobAwareWriter(dst, req, t, baseURL, model, target)
 	}
 
-	held := newImageReply(w, maxImageBody)
+	held := newImageReply(wrapped, maxImageBody)
 	send(held)
 	if held.committed {
 		return
 	}
+	before := held.Header().Clone()
 	retry := false
 	for _, st := range steps {
 		if st.After != nil && st.After(req, held.status(), held.Header(), held.buf.Bytes(), notes) {
@@ -163,6 +203,7 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 		}
 	}
 	if retry {
+		added := headerDelta(before, held.Header())
 		held.reset()
 		send(held)
 		if held.committed {
@@ -173,8 +214,30 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 				st.After(req, held.status(), held.Header(), held.buf.Bytes(), notes)
 			}
 		}
+		carryHeaders(held.Header(), added)
 	}
 	held.commit()
+}
+
+// headerDelta returns the headers in after that differ from before.
+func headerDelta(before, after http.Header) http.Header {
+	d := http.Header{}
+	for k, v := range after {
+		if !slices.Equal(before[k], v) {
+			d[k] = v
+		}
+	}
+	return d
+}
+
+// carryHeaders adds headers a step set on the first reply, keeping any value
+// the retried reply set for the same name.
+func carryHeaders(h, added http.Header) {
+	for k, v := range added {
+		if _, ok := h[k]; !ok {
+			h[k] = v
+		}
+	}
 }
 
 // imageReply holds a backend reply back from the client so pipeline steps can

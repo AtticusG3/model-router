@@ -1756,25 +1756,47 @@ func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) e
 	return nil
 }
 
+// beginProxy starts the in-flight metric and Activity capture for one client
+// request. A caller that retries holds one pair for the whole exchange, so the
+// request is counted and logged once. done is always safe to call.
+func (r *Router) beginProxy(w http.ResponseWriter, req *http.Request, model, target string) (http.ResponseWriter, func()) {
+	var sw *sessionWriter
+	if isWebsocketUpgrade(req) {
+		sw = &sessionWriter{ResponseWriter: w, r: r, model: instanceModel(model)}
+		w = sw
+	}
+	wrapped, done := r.wrapProxy(w, req, model, target)
+	finish := func() {
+		if r.metrics != nil {
+			r.metrics.DecInflight()
+		}
+		done()
+		if sw != nil {
+			sw.end()
+		}
+	}
+	if r.metrics != nil {
+		r.metrics.IncInflight()
+	}
+	return wrapped, finish
+}
+
 // proxyTo reverse-proxies the request to baseURL, preserving path and body and
 // streaming SSE responses. Buffering is disabled for streaming.
 func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, model, target string) {
+	wrapped, done := r.beginProxy(w, req, model, target)
+	defer done()
+	r.proxyToWriter(wrapped, req, baseURL, model, target)
+}
+
+// proxyToWriter is proxyTo without the per-request metrics and Activity
+// capture; its caller owns one beginProxy pair for the whole exchange.
+func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL, model, target string) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if r.metrics != nil {
-		r.metrics.IncInflight()
-		defer r.metrics.DecInflight()
-	}
-	if isWebsocketUpgrade(req) {
-		sw := &sessionWriter{ResponseWriter: w, r: r, model: instanceModel(model)}
-		defer sw.end()
-		w = sw
-	}
-	wrapped, done := r.wrapProxy(w, req, model, target)
-	defer done()
 	// The matcher left r.Body on the prepared request body: in-memory JSON, a
 	// stream (prefix plus the rest of the client body), or a temp file. The
 	// ReverseProxy streams it to the backend without another full copy.
@@ -1805,8 +1827,8 @@ func (r *Router) proxyTo(w http.ResponseWriter, req *http.Request, baseURL, mode
 		},
 	}
 	// Tell any fronting proxy (nginx on gareth) not to buffer SSE.
-	wrapped.Header().Set("X-Accel-Buffering", "no")
-	proxy.ServeHTTP(wrapped, req)
+	w.Header().Set("X-Accel-Buffering", "no")
+	proxy.ServeHTTP(w, req)
 }
 
 // peerIsOpenAI is false for an unknown peer: a reload may have removed it

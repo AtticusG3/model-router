@@ -164,8 +164,12 @@ func TestImagePipelineResponseStepRetriesOnce(t *testing.T) {
 	r.imageSteps = func(*config.Stanza) []imageStep {
 		return []imageStep{{
 			After: func(req *http.Request, status int, h http.Header, body []byte, notes *imageNotes) bool {
+				blocked := bytes.Contains(body, []byte(`"blocked":true`))
+				if blocked {
+					h.Set("X-Image-Retried", "1")
+				}
 				h.Set("X-Image-Pipeline", "checked")
-				return bytes.Contains(body, []byte(`"blocked":true`))
+				return blocked
 			},
 		}}
 	}
@@ -183,5 +187,68 @@ func TestImagePipelineResponseStepRetriesOnce(t *testing.T) {
 	}
 	if got := rec.Header().Get("X-Image-Pipeline"); got != "checked" {
 		t.Fatalf("response header = %q, want checked", got)
+	}
+	if got := rec.Header().Get("X-Image-Retried"); got != "1" {
+		t.Fatalf("first-pass header = %q, want it carried past the retry", got)
+	}
+	if entries := r.Activity().List(); len(entries) != 1 {
+		t.Fatalf("activity entries = %d, want one for the client request", len(entries))
+	}
+	entries := r.Activity().List()
+	cap, ok := r.Activity().Capture(entries[0].ID)
+	if !ok {
+		t.Fatal("no activity capture")
+	}
+	if strings.Contains(cap.RespBody, `"blocked"`) || !strings.Contains(cap.RespBody, `"images"`) {
+		t.Fatalf("captured reply = %q, want the retried reply", cap.RespBody)
+	}
+	if got := r.metrics.Inflight(); got != 0 {
+		t.Fatalf("inflight after the exchange = %d, want 0", got)
+	}
+}
+
+func TestImagePipelineCountsChunkedUploadBytes(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), maxCaptureBody+4096)
+	req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/img2img", strings.NewReader(string(payload)))
+	req.ContentLength = -1
+	ob, err := captureOriginalImageBody(req)
+	if err != nil {
+		t.Fatalf("capture: %v", err)
+	}
+	if _, err := io.Copy(io.Discard, req.Body); err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if ob.bytes != int64(len(payload)) {
+		t.Fatalf("bytes = %d, want all %d chunked upload bytes", ob.bytes, len(payload))
+	}
+	if !ob.truncated || len(ob.body) != maxCaptureBody {
+		t.Fatalf("capture = truncated %v, %d bytes; want truncated at %d", ob.truncated, len(ob.body), maxCaptureBody)
+	}
+}
+
+func TestImagePipelineEarlyReplyMarksCapturePartial(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), 8*maxCaptureBody)
+	r := imageTestRouter(t, imageBackend(t, func(w http.ResponseWriter, req *http.Request) {
+		// Answer without reading the upload, so the body never reaches its end.
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/img2img", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = int64(len(payload))
+	rec := httptest.NewRecorder()
+	NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+
+	entries := r.Activity().List()
+	if len(entries) != 1 {
+		t.Fatalf("activity entries = %d, want one", len(entries))
+	}
+	cap, ok := r.Activity().Capture(entries[0].ID)
+	if !ok {
+		t.Fatal("no activity capture")
+	}
+	if !cap.Truncated {
+		t.Fatal("capture not marked partial after an early backend reply")
 	}
 }
