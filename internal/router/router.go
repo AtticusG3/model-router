@@ -2110,6 +2110,8 @@ type ModelStatus struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 	// GPUs lists where running local instances sit, one entry per instance.
 	GPUs []int `json:"gpus,omitempty"`
+	// Family is the model's family and maker; nil when unknown.
+	Family *Family `json:"family,omitempty"`
 	// Peers lists every configured peer that serves this id, in config order.
 	Peers []PeerModelStatus `json:"peers,omitempty"`
 }
@@ -2209,7 +2211,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
-			Capabilities: s.Capabilities, GPUs: gpus,
+			Capabilities: s.Capabilities, GPUs: gpus, Family: modelFamily(s.Family, id, s.Name),
 		})
 		seen[id] = true
 		// A filter-set id is a catalog row of its own, sharing the stanza's state.
@@ -2234,7 +2236,8 @@ func (r *Router) catalogStatuses() []ModelStatus {
 				continue
 			}
 			seen[m] = true
-			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available"})
+			// A remote id has no stanza here, so an owning node's family: override is not visible; #132 shares it.
+			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available", Family: modelFamily("", m, "")})
 		}
 	}
 	for i := range out {

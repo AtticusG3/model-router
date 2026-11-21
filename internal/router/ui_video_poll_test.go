@@ -15,7 +15,7 @@ func TestEmbeddedUIVideoJobPolling(t *testing.T) {
 		t.Skip("node is not installed; the video polling regression runs where node is available")
 	}
 	app := filepath.Join(t.TempDir(), "app.js")
-	if err := os.WriteFile(app, []byte(uiJS), 0o600); err != nil {
+	if err := os.WriteFile(app, []byte(uiAppJS), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(node, "testdata/video_poll_test.js", app).CombinedOutput()

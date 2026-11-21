@@ -124,6 +124,7 @@ stanzas:
     spin_up_seconds: 60    # 0 = default 60
     api_type: chat         # see api_type below; empty means chat
     capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning; video: duration, resolution, seed
+    family: qwen           # optional: catalog family icon; default is guessed from the id, then the name
     match:
       body_field: model    # XOR path_prefix
     health_check: /health

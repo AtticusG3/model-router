@@ -250,3 +250,31 @@ func TestEmbeddedUIModelCatalogPeers(t *testing.T) {
 		t.Error("remote rows still say Mesh routed instead of showing peer chips")
 	}
 }
+
+// Catalog rows of a known family show its bundled icon, labelled with the
+// family and maker; other rows keep the generic model or peer glyph.
+func TestEmbeddedUIFamilyIcons(t *testing.T) {
+	if strings.Contains(webUIHTML, "__EMBED_FAMILY_ICONS__") {
+		t.Fatal("family icon placeholder was not filled")
+	}
+	var icons map[string]string
+	if err := json.Unmarshal([]byte(familyIconsJSON()), &icons); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range families {
+		svg := icons[e.f.ID]
+		if !strings.HasPrefix(svg, "<svg ") || !strings.Contains(svg, `aria-hidden="true"`) {
+			t.Errorf("family %s has no usable icon: %q", e.f.ID, svg)
+		}
+	}
+	for _, want := range []string{
+		"const FAMILY_ICONS={", "\"qwen\":\"\\" + "u003csvg", // json.Marshal escapes the opening bracket
+		"fi=f&&Object.hasOwn(FAMILY_ICONS,f.id)&&FAMILY_ICONS[f.id]", `role="img" aria-label="'+esc(fl)+'"`,
+		"(fi||icon(origin==='remote'?'peer':'model'))",
+		"<td>'+peerChips(m.peers)+'</td>",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
