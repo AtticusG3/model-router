@@ -180,6 +180,45 @@ func TestMaxRequestBodyMBOverLimitRejected(t *testing.T) {
 	}
 }
 
+// path_rewrite swaps the first matching prefix and keeps the rest of the path;
+// a relative from or to, or a negative request_timeout_seconds, is refused.
+func TestPathRewriteAndRequestTimeout(t *testing.T) {
+	cfg, err := Parse([]byte(`
+stanzas:
+  - model_id: a
+    command: "x"
+    request_timeout_seconds: 7200
+    path_rewrite:
+      - {from: /v1/audio/transcriptions, to: /inference}
+      - {from: /v1/audio, to: /audio}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Stanza("a")
+	for in, want := range map[string]string{
+		"/v1/audio/transcriptions": "/inference",
+		"/v1/audio/translations":   "/audio/translations",
+		"/v1/chat/completions":     "/v1/chat/completions",
+	} {
+		if got := s.BackendPath(in); got != want {
+			t.Errorf("BackendPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if s.RequestTimeoutSeconds != 7200 {
+		t.Errorf("request_timeout_seconds = %d", s.RequestTimeoutSeconds)
+	}
+	for name, extra := range map[string]string{
+		"relative from":    "    path_rewrite: [{from: v1/audio, to: /audio}]\n",
+		"empty to":         "    path_rewrite: [{from: /v1/audio}]\n",
+		"negative timeout": "    request_timeout_seconds: -1\n",
+	} {
+		if _, err := Parse([]byte("stanzas:\n  - model_id: a\n    command: \"x\"\n" + extra)); err == nil {
+			t.Errorf("%s: parsed, want an error", name)
+		}
+	}
+}
+
 func TestDuplicateModelIDRejected(t *testing.T) {
 	cfg := `
 stanzas:

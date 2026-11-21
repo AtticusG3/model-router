@@ -247,6 +247,14 @@ type Stanza struct {
 	// MaxRequestBodyMB overrides the top-level max_request_body_mb for this
 	// stanza. 0 = inherit.
 	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
+	// PathRewrite swaps a request path prefix for the backend's own before
+	// the request is proxied to a local instance; the first matching from
+	// wins. For a backend that serves an OpenAI route under another path.
+	PathRewrite []PathRewrite `yaml:"path_rewrite"`
+	// RequestTimeoutSeconds cuts one proxied request to a local instance off
+	// after this many seconds (504). 0 = no limit: the router itself never
+	// times out a request in flight, however long the audio.
+	RequestTimeoutSeconds int `yaml:"request_timeout_seconds"`
 
 	// InstancePorts holds the backend port of each instance; [0] is Port.
 	// Derived by Parse from MaxInstances.
@@ -254,6 +262,23 @@ type Stanza struct {
 	// rawCommand is Command before {port} substitution, so extra instances
 	// can be rendered on their own ports.
 	rawCommand string
+}
+
+// PathRewrite is one path_rewrite entry: a path that starts with From is sent
+// to the backend with From replaced by To.
+type PathRewrite struct {
+	From string `yaml:"from"`
+	To   string `yaml:"to"`
+}
+
+// BackendPath is path as the backend serves it, after path_rewrite.
+func (s *Stanza) BackendPath(path string) string {
+	for _, rw := range s.PathRewrite {
+		if rest, ok := strings.CutPrefix(path, rw.From); ok {
+			return rw.To + rest
+		}
+	}
+	return path
 }
 
 // SlotCount is the in-flight request cap for this stanza. Always >= 1.
@@ -692,6 +717,14 @@ func Parse(raw []byte) (*Config, error) {
 		}
 		if s.MaxRequestBodyMB < 0 || s.MaxRequestBodyMB > MaxRequestBodyMBLimit {
 			return nil, fmt.Errorf("stanza %q: max_request_body_mb must be between 0 and %d", s.ModelID, MaxRequestBodyMBLimit)
+		}
+		if s.RequestTimeoutSeconds < 0 {
+			return nil, fmt.Errorf("stanza %q: request_timeout_seconds must not be negative", s.ModelID)
+		}
+		for _, rw := range s.PathRewrite {
+			if !strings.HasPrefix(rw.From, "/") || !strings.HasPrefix(rw.To, "/") {
+				return nil, fmt.Errorf("stanza %q: path_rewrite from and to must both start with /", s.ModelID)
+			}
 		}
 		customProxy := s.Proxy != ""
 		// Allocate a port.

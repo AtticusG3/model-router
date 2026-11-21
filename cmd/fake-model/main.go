@@ -247,7 +247,10 @@ func (f *fakeModel) audioUpload(w http.ResponseWriter, r *http.Request) {
 	format := r.FormValue("response_format")
 	switch format {
 	case "text", "srt", "vtt":
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		// whisper-server's own types: the router must map these to text/plain.
+		w.Header().Set("Content-Type", map[string]string{
+			"text": "text/html", "srt": "application/x-subrip", "vtt": "text/vtt",
+		}[format])
 		fmt.Fprintf(w, "transcribed %s (%d bytes) with %s", hdr.Filename, n, model)
 	case "verbose_json":
 		writeJSON(w, map[string]any{

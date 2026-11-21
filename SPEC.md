@@ -146,6 +146,10 @@ stanzas:
     vram_mb: 0             # CPU-only: no card, no reservation, never evicted
     device: cpu
     api_type: transcription
+    slots: 1               # a transcription stanza never overbooks its slots
+    request_timeout_seconds: 0   # 0 = no limit; else 504 after this long
+    path_rewrite:          # optional; the backend's own path for a client path
+      - {from: /v1/audio/transcriptions, to: /inference}
 
 pools:
   embed-pool:
@@ -306,7 +310,8 @@ gets 400, not a 502.
      `max_instances` allows and a GPU fits that copy without evicting
      anything. Otherwise slot-spill to a peer that has a free slot or can
      admit a fresh load. If nothing can take it, queue on the least-loaded
-     local instance.
+     local instance. A `transcription` stanza instead waits in the router
+     for a free slot (see Transcription).
    - While the model cannot be placed here (for example pinned models hold
      every card it may use), the spill is retried every few seconds. A model
      that can never fit because pinned models hold the room fails at once.
@@ -442,6 +447,60 @@ has the backend notes.
   (see Operator UI).
 - **Restart.** `http.Server.Shutdown` does not wait for hijacked connections,
   so a router restart drops open sessions.
+
+## Transcription
+
+`api_type: transcription` serves the OpenAI `/v1/audio/transcriptions`
+multipart upload. The backend chosen in `docs/research/stt-backends.md` is
+whisper.cpp `whisper-server`, started on the OpenAI path, so it needs no
+rewrite:
+
+```yaml
+  - model_id: whisper-large-v3-turbo
+    name: "Whisper large-v3 Turbo (ggml Q5_0, STT)"
+    aliases: [whisper-1, stt, transcription]
+    command: >
+      /opt/ai/bin/whisper-server
+      --model /opt/ai/models/ggml-large-v3-turbo-q5_0.bin
+      --vad-model /opt/ai/models/ggml-silero-v6.2.0.bin
+      --host 127.0.0.1 --port {port}
+      --request-path /v1/audio --inference-path /transcriptions
+      --language auto --convert --vad --flash-attn --threads 8
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 2000
+    device: 0
+    spin_up_seconds: 60
+    api_type: transcription
+    match: {body_field: model}
+    health_check: /v1/audio/health
+    idle_ttl_seconds: 300
+    slots: 1
+```
+
+- **Routing.** By the multipart `model` field (or `?model=`), else the
+  `path_default` transcription stanza, else the only one. `peer/model` and a
+  spill rewrite the multipart `model` part and stream the file part unchanged.
+- **Formats.** Every `response_format` (`json`, `text`, `srt`, `vtt`,
+  `verbose_json`) and `timestamp_granularities[]` passes through. `json` and
+  `verbose_json` keep the backend's `application/json`. `text`, `srt` and
+  `vtt` reach the client as `text/plain; charset=utf-8`, whatever type the
+  backend sent (`whisper-server` answers `text/html`, `application/x-subrip`
+  and `text/vtt`). A streamed (SSE or chunked) answer is flushed per chunk.
+- **Translations.** This stanza serves transcriptions only: `whisper-server`
+  has no translation path. Send `translate=true` on the transcription path, or
+  run a second process; `docs/research/stt-backends.md` explains both.
+- **Slots.** A transcription backend runs one upload at a time and holds each
+  upload it accepts in memory, so the router never sends a stanza more than
+  `slots` uploads at once. The rest wait in the router, unread, for up to
+  `admit_timeout_seconds`, then get `503` with `Retry-After`. Other types still
+  queue on the backend.
+- **Long audio.** The router sets no timeout on a proxied request. A stanza's
+  `request_timeout_seconds` (default none) cuts its requests off with `504`
+  after that long; the load before it does not count.
+- **Other paths.** `path_rewrite` (any stanza) is a list of `{from, to}`; the
+  first `from` that prefixes the request path is replaced by `to` on the way to
+  a local instance. Activity and metrics keep the client's path. A peer gets
+  the client's path and applies its own rewrite.
 
 ## Placement
 

@@ -1562,12 +1562,46 @@ func (r *Router) proxyLocal(w http.ResponseWriter, req *http.Request, modelID st
 	if s == nil {
 		return fmt.Errorf("unknown local model %q", modelID)
 	}
-	key, ok := r.acquireInstance(s, true)
-	if !ok {
-		return fmt.Errorf("router shutting down")
+	var key string
+	if s.APIType == config.APITypeTranscription {
+		var err error
+		if key, err = r.waitFreeSlot(req.Context(), s); err != nil {
+			return err
+		}
+	} else {
+		var ok bool
+		if key, ok = r.acquireInstance(s, true); !ok {
+			return fmt.Errorf("router shutting down")
+		}
 	}
 	defer r.releaseOccupancy(Target{Local: key})
 	return r.proxyLocalHeld(w, req, key)
+}
+
+// backendPathKey carries a request's path after the stanza's path_rewrite.
+type backendPathKey struct{}
+
+// waitFreeSlot takes a slot on s without overbooking it, waiting up to the
+// request's admit budget. A transcription backend runs one upload at a time
+// and holds each one it has accepted in memory, so extra uploads wait here,
+// unread, rather than queue on the backend. Past the budget it is a 503 with
+// Retry-After, like any other admit wait.
+func (r *Router) waitFreeSlot(ctx context.Context, s *config.Stanza) (string, error) {
+	deadline := time.Now().Add(r.cfg().AdmitTimeout())
+	if d, ok := ctx.Value(admitDeadlineKey{}).(time.Time); ok && d.Before(deadline) {
+		deadline = d
+	}
+	for {
+		if key, ok := r.acquireInstance(s, false); ok {
+			return key, nil
+		}
+		if time.Now().After(deadline) {
+			return "", &admitError{fmt.Sprintf("every slot of %s is busy", s.ModelID)}
+		}
+		if err := r.waitAdmit(ctx); err != nil {
+			return "", err
+		}
+	}
 }
 
 // proxyLocalHeld loads instance key if needed and proxies to it. The caller
@@ -1604,6 +1638,19 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 		if err := filterLocal(req, s); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return nil
+		}
+		if s.APIType == config.APITypeTranscription {
+			w = &transcriptionWriter{ResponseWriter: w}
+		}
+		// The rewrite rides on the context so activity and metrics keep the
+		// client's path; only proxyTo's Director sends the backend's.
+		if p := s.BackendPath(req.URL.Path); p != req.URL.Path {
+			req = req.WithContext(context.WithValue(req.Context(), backendPathKey{}, p))
+		}
+		if s.RequestTimeoutSeconds > 0 {
+			ctx, cancel := context.WithTimeout(req.Context(), time.Duration(s.RequestTimeoutSeconds)*time.Second)
+			defer cancel()
+			req = req.WithContext(ctx)
 		}
 	}
 	r.proxyJobAware(w, req, Target{Local: key}, m.proxy(), key, r.node)
@@ -1756,6 +1803,30 @@ func (r *Router) peerLoad(ctx context.Context, p *config.Peer, modelID string) e
 	return nil
 }
 
+// transcriptionWriter gives a text transcript the type the OpenAI API
+// specifies. whisper-server answers text as text/html and srt as
+// application/x-subrip, which clients and browsers would treat as markup.
+type transcriptionWriter struct{ http.ResponseWriter }
+
+func (w *transcriptionWriter) WriteHeader(code int) {
+	if code >= 200 && code < 300 {
+		ct, _, _ := strings.Cut(w.Header().Get("Content-Type"), ";")
+		switch strings.TrimSpace(ct) {
+		case "text/html", "application/x-subrip", "text/vtt":
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *transcriptionWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+// Flush keeps a streamed transcript flushing through the wrappers that test
+// for http.Flusher.
+func (w *transcriptionWriter) Flush() {
+	_ = http.NewResponseController(w.ResponseWriter).Flush()
+}
+
 // beginProxy starts the in-flight metric and Activity capture for one client
 // request. A caller that retries holds one pair for the whole exchange, so the
 // request is counted and logged once. done is always safe to call.
@@ -1805,8 +1876,12 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 			r.URL.Scheme = u.Scheme
 			r.URL.Host = u.Host
 			r.Host = u.Host
-			// Keep the original path (peer router / backend routes on it).
+			// Keep the original path (peer router / backend routes on it),
+			// unless the stanza's path_rewrite gave the backend's own.
 			r.URL.Path = req.URL.Path
+			if p, ok := req.Context().Value(backendPathKey{}).(string); ok {
+				r.URL.Path, r.URL.RawPath = p, ""
+			}
 			r.URL.RawQuery = req.URL.RawQuery
 		},
 		// Flush every chunk: SSE, streamed TTS audio and other media start
@@ -1821,6 +1896,10 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 			}
 			if errors.Is(err, errBadMultipart) {
 				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				http.Error(w, "upstream timed out: "+err.Error(), http.StatusGatewayTimeout)
 				return
 			}
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
