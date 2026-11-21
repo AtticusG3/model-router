@@ -1,8 +1,11 @@
 package router
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
+
+	"model-router/internal/config"
 )
 
 func TestPeerCacheFreshSetErrAndStale(t *testing.T) {
@@ -128,6 +131,31 @@ func TestTelemetrySnapshotListsEveryGPUOfASplitModel(t *testing.T) {
 	}
 	if len(got["b"]) != 1 || got["b"][0] != 0 {
 		t.Fatalf("single-GPU model gpus = %v, want [0]", got["b"])
+	}
+}
+
+func TestTelemetrySnapshotAdvertisesImagePipeline(t *testing.T) {
+	r := loadTestRouter(t)
+	r.cfg().Stanza("a").ImagePipeline = &config.ImagePipeline{Caption: "ideogram4"}
+	got := r.TelemetrySnapshot().Models["a"]
+	if got == nil || got.Caption != "ideogram4" {
+		t.Fatalf("models = %+v, want a with caption ideogram4", got)
+	}
+	// Advertised before the model runs, so a peer that idle-evicted it still
+	// ranks as matching.
+	if len(r.TelemetrySnapshot().LoadedModels) != 0 {
+		t.Fatal("model must not be reported loaded")
+	}
+}
+
+func TestTelemetryParsesWithoutImagePipeline(t *testing.T) {
+	var tel Telemetry
+	raw := `{"node":"old","loaded_models":[{"id":"m","freshness":"fresh","gpu":0,"slots":1,"in_flight":0}]}`
+	if err := json.Unmarshal([]byte(raw), &tel); err != nil {
+		t.Fatalf("older telemetry must parse: %v", err)
+	}
+	if len(tel.LoadedModels) != 1 || tel.Models != nil {
+		t.Fatalf("loaded_models = %+v, models = %+v, want no image pipeline", tel.LoadedModels, tel.Models)
 	}
 }
 

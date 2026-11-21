@@ -780,18 +780,29 @@ func (r *Router) resolveMesh(modelID string) (Target, error) {
 // loaded and a slot free (or an openai peer) comes first, then one that can
 // admit a fresh load, then one that must wait or evict (that node queues it),
 // then a loaded peer whose slots are full. Each tier keeps config order.
+// When the local stanza enhances prompts, peers whose copy advertises the same
+// caption format are ranked before the rest, which are only a fallback.
 // slotSpill drops the loaded-but-full tier so the caller can queue locally.
 // A router peer inside a remembered Retry-After is left out; soonest is the
 // shortest such window still to run, 0 if none was left out.
 func (r *Router) rankPeers(modelID string, slotSpill bool) (ranked []Target, soonest time.Duration) {
-	var ready, admit, wait, full []Target
+	type rankedPeer struct {
+		target Target
+		match  bool
+	}
+	var ready, admit, wait, full []rankedPeer
+	wantCaption, allowFallback := r.localImageCaption(modelID)
 	cfg := r.cfg()
 	for i := range cfg.Peers {
 		p := &cfg.Peers[i]
 		if !r.peerHasModel(p, modelID) {
 			continue
 		}
-		t := Target{Peer: p.Name, PeerID: modelID}
+		match := wantCaption == "" || r.peerMatchesImagePipeline(p.Name, modelID, wantCaption)
+		if !match && !allowFallback {
+			continue
+		}
+		t := rankedPeer{target: Target{Peer: p.Name, PeerID: modelID}, match: match}
 		if p.Kind == "openai" {
 			ready = append(ready, t)
 			continue
@@ -822,7 +833,14 @@ func (r *Router) rankPeers(modelID string, slotSpill bool) (ranked []Target, soo
 			wait = append(wait, t)
 		}
 	}
-	ranked = append(append(append(ready, admit...), wait...), full...)
+	all := append(append(append(ready, admit...), wait...), full...)
+	if wantCaption != "" {
+		sort.SliceStable(all, func(i, j int) bool { return all[i].match && !all[j].match })
+	}
+	ranked = make([]Target, len(all))
+	for i := range all {
+		ranked[i] = all[i].target
+	}
 	return ranked, soonest
 }
 
@@ -874,6 +892,46 @@ func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
 		}
 	}
 	return false
+}
+
+// localImageCaption is the local stanza's caption format, empty when it has no
+// caption step, and whether a peer that lacks it may still take the request.
+func (r *Router) localImageCaption(modelID string) (caption string, allowFallback bool) {
+	s := r.stanzaOf(modelID)
+	if s == nil || s.ImagePipeline == nil {
+		return "", true
+	}
+	return s.ImagePipeline.Caption, imagePipelineFallback(s)
+}
+
+// imagePipelineFallback is whether a peer whose copy advertises no matching
+// image pipeline may still take a request. It is tried after every matching
+// peer, only when none of them can serve it.
+//
+// shortcut: always allow the fallback, gate it on the per-stanza peer_spill
+// policy once that option lands.
+func imagePipelineFallback(*config.Stanza) bool { return true }
+
+// peerImageCaption is the caption format peer advertises for modelID and
+// whether its telemetry reports an image pipeline at all. Older peers omit the
+// map. The map covers configured stanzas, so a copy that has not loaded the
+// model still reports how it would serve it.
+func (r *Router) peerImageCaption(name, modelID string) (caption string, reported bool) {
+	t := r.peers.Snapshot()[name]
+	if t == nil {
+		return "", false
+	}
+	if p, ok := t.Models[modelID]; ok && p != nil {
+		return p.Caption, true
+	}
+	return "", false
+}
+
+// peerMatchesImagePipeline reports whether peer's copy of modelID advertises
+// the same caption format.
+func (r *Router) peerMatchesImagePipeline(name, modelID, caption string) bool {
+	got, reported := r.peerImageCaption(name, modelID)
+	return reported && got == caption
 }
 
 func occupancyKey(t Target) string {
@@ -1540,8 +1598,13 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 			ranked = append([]Target{{Peer: first, PeerID: modelID}}, ranked...)
 		}
 	}
+	wantCaption, _ := r.localImageCaption(modelID)
 	for _, t := range ranked {
-		r.logger.Meshf("peer walk %s -> %s", modelID, t.Peer)
+		note := ""
+		if wantCaption != "" && t.Peer != first && !r.peerMatchesImagePipeline(t.Peer, modelID, wantCaption) {
+			note = " (fallback: no " + wantCaption + " caption)"
+		}
+		r.logger.Meshf("peer walk %s -> %s%s", modelID, t.Peer, note)
 		err := r.proxyPeer(w, req, t.Peer, t.PeerID)
 		if err == nil {
 			return true, nil, 0
@@ -2148,6 +2211,14 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		live = append(live, running{id: id, m: m, inFlight: r.occupancy[id]})
 	}
 	r.mu.Unlock()
+	cfg := r.cfg()
+	models := map[string]*ImagePipelineInfo{}
+	for i := range cfg.Stanzas {
+		s := &cfg.Stanzas[i]
+		if s.ImagePipeline != nil {
+			models[s.ModelID] = &ImagePipelineInfo{Caption: s.ImagePipeline.Caption}
+		}
+	}
 	var loaded []LoadedModel
 	for _, item := range live {
 		if item.m.State() != StateRunning {
@@ -2187,7 +2258,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 	}
 	// Every published free figure is after headroom, so peers never pick
 	// this node for a load it must refuse.
-	head := r.cfg().HeadroomMB
+	head := cfg.HeadroomMB
 	for _, g := range gpus {
 		stale := g.FreeMB + staleByGPU[g.Index]
 		idle := g.FreeMB + idleByGPU[g.Index]
@@ -2203,6 +2274,7 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		Node:         r.node,
 		GPUs:         gpus,
 		LoadedModels: loaded,
+		Models:       models,
 		Timestamp:    now.Unix(),
 	}
 }

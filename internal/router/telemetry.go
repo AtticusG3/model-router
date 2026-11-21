@@ -19,7 +19,10 @@ type Telemetry struct {
 	Node         string        `json:"node"`
 	GPUs         []*GPUState   `json:"gpus"`
 	LoadedModels []LoadedModel `json:"loaded_models"`
-	Timestamp    int64         `json:"timestamp"`
+	// Models advertises each configured stanza's image pipeline by model id,
+	// loaded or not. Older peers omit it.
+	Models    map[string]*ImagePipelineInfo `json:"models,omitempty"`
+	Timestamp int64                         `json:"timestamp"`
 }
 
 // LoadedModel is one locally running backend as advertised to peers.
@@ -35,6 +38,13 @@ type LoadedModel struct {
 	GPUs     []int `json:"gpus,omitempty"`
 	Slots    int   `json:"slots"`
 	InFlight int   `json:"in_flight"`
+}
+
+// ImagePipelineInfo is the image pipeline a peer advertises for one model.
+type ImagePipelineInfo struct {
+	// Caption is the caption format the pipeline enhances prompts into, or
+	// empty when it runs no caption step.
+	Caption string `json:"caption,omitempty"`
 }
 
 // GPUPoller runs nvidia-smi on an interval and feeds the ledger.
