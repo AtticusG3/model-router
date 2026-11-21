@@ -198,11 +198,82 @@
   });
   $('video-model').addEventListener('change',videoOptions);
 
+  // Playground history lives in these arrays only, never in browser storage, so a reload clears it.
+  // Per tab: the output panel, the model field, then the other inputs a restore fills back in.
+  const HIST={chat:['chat-output','chat-model','chat-prompt','chat-tokens','chat-temp'],image:['image-output','image-model','image-prompt','image-negative','image-width','image-height','image-steps','image-seed'],embeddings:['embed-output','embed-model','embed-input'],rerank:['rerank-output','rerank-model','rerank-query','rerank-docs'],speech:['speech-output','speech-model','speech-voice','speech-format','speech-input'],transcription:['transcribe-output','transcribe-model','transcribe-format','transcribe-language'],video:['video-output','video-model','video-prompt','video-seconds','video-resolution','video-seed'],audiogen:['audiogen-output','audiogen-model','audiogen-prompt','audiogen-lyrics','audiogen-seconds','audiogen-seed'],load:['load-output','load-model','load-prompt','load-conc','load-count','load-tokens'],realtime:['rt-output','rt-model']};
+  const HIST_MAX=50,HIST_MEDIA=20,HIST_STATUS={ok:['Done','status-ok'],error:['Failed','status-bad'],cancelled:['Cancelled','subtle']};
+  // Only these ids are selects: a restore checks their value still exists as an option.
+  const HIST_SELECTS=new Set(['chat-model','image-model','embed-model','rerank-model','speech-model','speech-voice','speech-format','transcribe-model','transcribe-format','transcribe-language','video-model','video-resolution','audiogen-model','load-model','rt-model']);
+  const hist={},histBlank={},histBusy={};
+  let histSeq=0;
+  for(const tab in HIST){
+    hist[tab]=[];
+    const o=$(HIST[tab][0]);histBlank[tab]=[o.className,o.innerHTML,$('hist-'+tab).innerHTML];
+    $('hist-'+tab).onclick=ev=>{
+      const b=ev.target.closest('[data-open],[data-reuse]'),e=b&&hist[tab].find(x=>String(x.id)===(b.dataset.open||b.dataset.reuse));
+      if(!e)return;
+      for(const id in e.inputs)$(id).value=e.inputs[id];
+      if(tab==='video')videoOptions();
+      // A select whose stored value has left the list goes blank, which for a model means the
+      // path default. Say so; Speech reloads its voices for the restored model before checking.
+      const check=()=>{
+        const missing=[];
+        for(const id in e.inputs){
+          const el=$(id);
+          if(HIST_SELECTS.has(id)&&![...el.options].some(x=>x.value===e.inputs[id]))missing.push(histLabel(el,id)+' "'+e.inputs[id]+'"');
+        }
+        histNote(tab,missing.length?'Not available: '+missing.join(', '):'');
+      };
+      if(tab==='speech')loadVoices(false,e.inputs['speech-voice']).then(check);else check();
+      // Reuse fills the form only, a live realtime session keeps its own transcript,
+      // and a running request keeps painting its own output.
+      if(b.dataset.reuse||(tab==='realtime'&&rt)||histBusy[tab])return;
+      o.className=e.cls;o.innerHTML=e.html;
+      if(tab==='transcription')showTranscript(e.state);
+    };
+  }
+  function histLabel(el,id){const l=el.closest&&el.closest('label'),s=l&&l.querySelector('span');return s&&s.textContent||id}
+  function histNote(tab,text){
+    let n=$('hist-note-'+tab);
+    if(!n){n=document.createElement('p');n.id='hist-note-'+tab;n.className='subtle';n.setAttribute('role','status');n.setAttribute('aria-live','polite');const ul=$('hist-'+tab);if(ul.insertAdjacentElement)ul.insertAdjacentElement('afterend',n)}
+    n.textContent=text;n.hidden=!text;
+  }
+  // histStart snapshots the inputs as a request is sent; note is the summary line (the prompt unless given).
+  function histStart(tab,note){
+    const f=HIST[tab],inputs={};
+    f.slice(1).forEach(id=>{inputs[id]=$(id).value});
+    histBusy[tab]=true;
+    return {tab,time:Date.now(),model:inputs[f[1]]||'Path default',note:note??inputs[f[2]]??'',inputs};
+  }
+  // histEnd keeps the output panel as it now stands (or x.html when the panel plays a one-shot
+  // stream URL). x.urls are the blob URLs the entry owns; they are revoked when it is dropped.
+  function histEnd(h,status,x={}){
+    if(!h)return;
+    histBusy[h.tab]=false;
+    const o=$(HIST[h.tab][0]),keep=[];
+    Object.assign(h,{id:++histSeq,status,ms:Date.now()-h.time,cls:o.className,html:x.html??o.innerHTML,urls:x.urls||[],state:x.state});
+    let media=0;
+    for(const e of [h,...hist[h.tab]]){if(keep.length<HIST_MAX&&!(e.urls.length&&++media>HIST_MEDIA))keep.push(e);else histDrop(e)}
+    hist[h.tab]=keep;
+    histRender(h.tab);
+  }
+  // A dropped entry still on show would leave a dead player or link, so the panel goes back to its placeholder.
+  function histDrop(e){
+    const o=$(HIST[e.tab][0]);
+    if(e.urls.some(u=>o.innerHTML.includes('"'+esc(u)+'"'))){o.className=histBlank[e.tab][0];o.innerHTML=histBlank[e.tab][1]}
+    e.urls.forEach(u=>URL.revokeObjectURL(u));
+  }
+  function histRender(tab){
+    $('hist-'+tab).innerHTML=hist[tab].map(e=>{const when=new Date(e.time).toLocaleTimeString(),st=HIST_STATUS[e.status];return '<li class="history-item"><button class="history-open" data-open="'+e.id+'"><span class="history-meta">'+esc(when)+' · <span class="mono">'+esc(e.model)+'</span> · <span class="'+st[1]+'">'+st[0]+'</span> · '+fmtDur(e.ms)+'</span><span class="history-note">'+esc(e.note||'(no input)')+'</span></button><button class="ghost" data-reuse="'+e.id+'" aria-label="Reuse the inputs from '+esc(when)+'">Reuse</button></li>'}).join('')||histBlank[tab][2];
+  }
+  window.clearHistory=tab=>{hist[tab].forEach(histDrop);hist[tab]=[];histRender(tab)};
+
   window.sendChat=async function(){
     const out=$('chat-output');
     out.className='output chat-output';
     out.innerHTML='';
     const body={model:$('chat-model').value,messages:[{role:'user',content:$('chat-prompt').value}],max_tokens:Number($('chat-tokens').value)||256,temperature:Number($('chat-temp').value)||0.7,stream:true};
+    const h=histStart('chat');
     let reasoning='',content='',raf=0;
     const schedule=()=>{if(raf)return;raf=requestAnimationFrame(()=>{raf=0;paintChat(out,reasoning,content,true)})};
     try{
@@ -231,10 +302,12 @@
       }
       if(raf){cancelAnimationFrame(raf);raf=0}
       paintChat(out,reasoning,content,false);
+      histEnd(h,'ok');
     }catch(e){
       if(raf)cancelAnimationFrame(raf);
       out.className='output chat-output error';
       out.textContent=e.message;
+      histEnd(h,'error');
     }
   };
   // shortcut: fixed 3 minute client timeout and no progress text, make it a field if slow image models need longer.
@@ -246,6 +319,7 @@
     out.className='image-result';out.textContent='Generating…';
     const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,width:Number($('image-width').value),height:Number($('image-height').value),steps:Number($('image-steps').value),seed:Number($('image-seed').value)};
     if($('image-model').value)body.model=$('image-model').value;
+    const h=histStart('image');
     const ctl=imageCtl=new AbortController();
     let timedOut=false;
     const timer=setTimeout(()=>{timedOut=true;ctl.abort()},180000);
@@ -255,19 +329,24 @@
       const text=await r.text();
       if(!r.ok){const wait=r.headers.get('Retry-After');throw new Error('HTTP '+r.status+': '+(text.trim()||r.statusText)+(wait?' (retry in '+wait+' s)':''))}
       let d;try{d=JSON.parse(text)}catch(e){throw new Error('The response was not JSON.')}
-      const imgs=d.images||[];
-      out.innerHTML=imgs.length?imgs.map(x=>'<img alt="Generated image" src="data:image/png;base64,'+x+'">').join(''):'<span class="muted">No images returned.</span>'
+      // Blob URLs, not data URLs, so up to 20 history entries hold bytes rather than base64 strings.
+      const urls=(d.images||[]).map(x=>URL.createObjectURL(new Blob([Uint8Array.from(atob(x),c=>c.charCodeAt(0))],{type:'image/png'})));
+      out.innerHTML=urls.length?urls.map(u=>'<img alt="Generated image" src="'+esc(u)+'">').join(''):'<span class="muted">No images returned.</span>';
+      histEnd(h,'ok',{urls});
     }catch(e){
       out.className='image-result error';
-      out.textContent=ctl.signal.aborted?(timedOut?'Timed out after 3 minutes with no answer.':'Cancelled.'):e.message
+      out.textContent=ctl.signal.aborted?(timedOut?'Timed out after 3 minutes with no answer.':'Cancelled.'):e.message;
+      histEnd(h,ctl.signal.aborted&&!timedOut?'cancelled':'error');
     }finally{clearTimeout(timer);imageCtl=null;go.disabled=false;stop.disabled=true}
   };
 
   // shortcut: shows the first 8 values only and no copy button, add a full-vector download if operators ask.
   window.sendEmbedding=async function(){
     const out=$('embed-output'),model=$('embed-model').value;
-    const fail=m=>{out.className='output error';out.textContent=m};
+    let h=null;
+    const fail=m=>{out.className='output error';out.textContent=m;histEnd(h,'error')};
     if(!model)return fail('No embedding model is available. Add a catalog entry with api_type: embedding.');
+    h=histStart('embeddings');
     out.className='output muted';out.textContent='Embedding…';
     try{
       const r=await fetch('/v1/embeddings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,input:$('embed-input').value})});
@@ -279,17 +358,20 @@
       const head=v.slice(0,8).map(x=>Number(x).toPrecision(5)).join(', ');
       out.className='output';
       out.innerHTML='<div><strong>Dimension:</strong> <span class="mono">'+v.length+'</span></div><div><strong>Model:</strong> <span class="mono">'+esc(d.model||model)+'</span></div><div><strong>Preview:</strong> <span class="mono">['+esc(head+(v.length>8?', … ('+(v.length-8)+' more)':''))+']</span></div>';
+      histEnd(h,'ok');
     }catch(e){fail(e.message)}
   };
 
   // shortcut: no top_n control and the document text comes from the input lines, add both if backends return trimmed or reordered documents.
   window.sendRerank=async function(){
     const out=$('rerank-output'),model=$('rerank-model').value;
-    const fail=m=>{out.className='output error';out.textContent=m};
+    let h=null;
+    const fail=m=>{out.className='output error';out.textContent=m;histEnd(h,'error')};
     const docs=$('rerank-docs').value.split('\n').map(x=>x.trim()).filter(Boolean);
     if(!model)return fail('No rerank model is available. Add a catalog entry with api_type: rerank.');
     if(!$('rerank-query').value.trim())return fail('Enter a query.');
     if(!docs.length)return fail('Enter at least one document, one per line.');
+    h=histStart('rerank');
     out.className='output muted';out.textContent='Reranking…';
     try{
       const r=await fetch('/v1/rerank',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model,query:$('rerank-query').value,documents:docs})});
@@ -302,6 +384,7 @@
       const rows=[...rs].sort((a,b)=>score(b)-score(a)).map(x=>'<li><span class="mono">'+score(x).toFixed(4)+'</span> '+esc(docs[x.index]??'(document '+x.index+')')+'</li>').join('');
       out.className='output';
       out.innerHTML='<div><strong>Model:</strong> <span class="mono">'+esc(d.model||model)+'</span></div><ol>'+rows+'</ol>';
+      histEnd(h,'ok');
     }catch(e){fail(e.message)}
   };
 
@@ -309,8 +392,8 @@
   // asked (force after a generation has started it), so opening the tab never
   // starts or evicts a model just to fill the list.
   let voiceSeq=0;
-  window.loadVoices=async function(force){
-    const sel=$('speech-voice'),model=$('speech-model').value,prev=sel.value,seq=++voiceSeq;
+  window.loadVoices=async function(force,want){
+    const sel=$('speech-voice'),model=$('speech-model').value,prev=want===undefined?sel.value:want,seq=++voiceSeq;
     const m=(status.models||[]).find(x=>x.id===model),running=force===true||(!!m&&m.state==='running');
     let ids=[];
     if(model&&running){
@@ -320,8 +403,10 @@
       }catch(e){}
     }
     if(seq!==voiceSeq)return;
+    // A restore names the voice it wants even when the model is stopped, so the select keeps it and Generate sends it again; the backend accepts or rejects it.
+    if(model&&!running&&want)ids=[want];
     sel.innerHTML='<option value="">'+(model&&!running?'Backend default (voices list once the model runs)':'Backend default')+'</option>'+ids.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join('');
-    if(ids.includes(prev))sel.value=prev;
+    if(ids.includes(prev))sel.value=prev;else sel.value='';
   };
 
   // streamInto feeds a response body into a MediaSource as chunks arrive, and
@@ -345,23 +430,27 @@
   // Audio plays as it arrives through MediaSource when the browser can decode
   // the returned type that way (usually MP3 and AAC); anything else plays once
   // the whole file is in.
-  let speechURLs=[];
+  // The MediaSource URL plays once, so history keeps the finished blob instead.
+  let speechLive='';
   window.sendSpeech=async function(){
     const out=$('speech-output'),model=$('speech-model').value,input=$('speech-input').value.trim(),voice=$('speech-voice').value,format=$('speech-format').value;
-    const fail=m=>{out.className='output error';out.textContent=m};
+    let h=null;
+    const fail=m=>{out.className='output error';out.textContent=m;histEnd(h,'error')};
     if(!model)return fail('No speech model is available. Add a catalog entry with api_type: speech.');
     if(!input)return fail('Enter some text to speak.');
+    h=histStart('speech',input);
     out.className='output muted';out.textContent='Generating audio…';
     try{
       const body={model,input,response_format:format};if(voice)body.voice=voice;
       const r=await fetch('/v1/audio/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!r.ok){const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){d=null}const e=d&&d.error;throw new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))}
-      speechURLs.forEach(u=>URL.revokeObjectURL(u));speechURLs=[];
+      if(speechLive)URL.revokeObjectURL(speechLive);
+      speechLive='';
       const ct=(r.headers.get('Content-Type')||'').split(';')[0].trim();
       const streamed=!!(r.body&&window.MediaSource&&ct&&MediaSource.isTypeSupported(ct));
       let blob;
       if(streamed){
-        const ms=new MediaSource(),src=URL.createObjectURL(ms);speechURLs.push(src);
+        const ms=new MediaSource(),src=speechLive=URL.createObjectURL(ms);
         out.className='output';
         out.innerHTML='<audio controls autoplay aria-label="Generated speech" src="'+esc(src)+'" style="width:100%"></audio><p id="speech-dl" class="subtle">Playing as it arrives…</p>';
         blob=await streamInto(ms,r.body,ct);
@@ -369,26 +458,29 @@
         blob=await r.blob();
       }
       if(!blob.size)throw new Error('The response had no audio.');
-      const url=URL.createObjectURL(blob);speechURLs.push(url);
+      const url=URL.createObjectURL(blob);
       const link='<a href="'+esc(url)+'" download="speech.'+esc(format)+'">Download audio</a>';
+      const html=(format==='pcm'?'<p class="subtle">Raw PCM has no header, so the browser cannot play it. Download it instead.</p>':'<audio controls aria-label="Generated speech" src="'+esc(url)+'" style="width:100%"></audio>')+'<p>'+link+'</p>';
       if(streamed){
         $('speech-dl').innerHTML=link;
       }else{
         out.className='output';
-        out.innerHTML=(format==='pcm'?'<p class="subtle">Raw PCM has no header, so the browser cannot play it. Download it instead.</p>':'<audio controls aria-label="Generated speech" src="'+esc(url)+'" style="width:100%"></audio>')+'<p>'+link+'</p>';
+        out.innerHTML=html;
       }
+      histEnd(h,'ok',{urls:[url],html});
       loadVoices(true);
     }catch(e){fail(e.message)}
   };
 
   // Music and sound effects run as an async job: submit, poll the job every 2 s,
   // then fetch the finished audio once for playback and download.
-  let audioGenURL='';
   window.sendAudioGen=async function(){
     const out=$('audiogen-output'),btn=$('audiogen-submit'),model=$('audiogen-model').value,prompt=$('audiogen-prompt').value.trim(),lyrics=$('audiogen-lyrics').value.trim(),seconds=Number($('audiogen-seconds').value),seed=$('audiogen-seed').value;
-    const fail=m=>{out.className='output error';out.textContent=m;btn.disabled=false};
+    let h=null;
+    const fail=m=>{out.className='output error';out.textContent=m;btn.disabled=false;histEnd(h,'error')};
     const httpErr=async r=>{const text=await r.text();let d;try{d=JSON.parse(text)}catch(x){d=null}const e=d&&d.error;return new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))};
     if(!prompt)return fail('Enter a prompt describing the music or sound.');
+    h=histStart('audiogen');
     btn.disabled=true;out.className='output muted';out.textContent='Submitting job…';
     try{
       const body={prompt};if(model)body.model=model;if(lyrics)body.lyrics=lyrics;if(seconds>0)body.seconds=seconds;if(seed!==''&&Number(seed)>=0)body.seed=Number(seed);
@@ -406,23 +498,29 @@
       r=await fetch(path+'/content');if(!r.ok)throw await httpErr(r);
       const blob=await r.blob();
       if(!blob.size)throw new Error('The job finished with no audio.');
-      if(audioGenURL)URL.revokeObjectURL(audioGenURL);
-      audioGenURL=URL.createObjectURL(blob);
+      const url=URL.createObjectURL(blob);
       const ext=(blob.type.split(';')[0].split('/')[1]||'mp3').replace('mpeg','mp3');
       out.className='output';
-      out.innerHTML='<audio controls aria-label="Generated audio" src="'+esc(audioGenURL)+'" style="width:100%"></audio><p><a href="'+esc(audioGenURL)+'" download="'+esc(job.id)+'.'+esc(ext)+'">Download audio</a></p>';
+      out.innerHTML='<audio controls aria-label="Generated audio" src="'+esc(url)+'" style="width:100%"></audio><p><a href="'+esc(url)+'" download="'+esc(job.id)+'.'+esc(ext)+'">Download audio</a></p>';
       btn.disabled=false;
+      histEnd(h,'ok',{urls:[url]});
     }catch(e){fail(e.message)}
   };
 
   // Subtitle results (srt, vtt) keep their text and format here for the Copy and Download buttons.
   let transcript=null;
+  function showTranscript(t){
+    transcript=t||null;$('transcribe-actions').hidden=!t;
+    if(t){$('transcribe-copy').textContent='Copy '+t.format.toUpperCase();$('transcribe-download').textContent='Download .'+t.format}
+  }
   window.sendTranscription=async function(){
     const out=$('transcribe-output'),model=$('transcribe-model').value,file=$('transcribe-file').files[0],format=$('transcribe-format').value,language=$('transcribe-language').value;
-    const fail=m=>{out.className='output error';out.textContent=m};
-    transcript=null;$('transcribe-actions').hidden=true;
+    let h=null;
+    const fail=m=>{out.className='output error';out.textContent=m;histEnd(h,'error')};
+    showTranscript(null);
     if(!model)return fail('No transcription model is available. Add a catalog entry with api_type: transcription.');
     if(!file)return fail('Choose an audio file.');
+    h=histStart('transcription',file.name);
     out.className='output muted';out.textContent='Transcribing…';
     try{
       const fd=new FormData();fd.append('model',model);fd.append('response_format',format);if(language)fd.append('language',language);fd.append('file',file);
@@ -432,11 +530,8 @@
       if(!r.ok){const e=d&&d.error;throw new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))}
       out.className='output';
       out.textContent=format==='verbose_json'&&d?JSON.stringify(d,null,2):d&&typeof d.text==='string'?d.text:text;
-      if(format==='srt'||format==='vtt'){
-        transcript={text,format};
-        $('transcribe-copy').textContent='Copy '+format.toUpperCase();$('transcribe-download').textContent='Download .'+format;
-        $('transcribe-actions').hidden=false;
-      }
+      if(format==='srt'||format==='vtt')showTranscript({text,format});
+      histEnd(h,'ok',{state:transcript});
     }catch(e){fail(e.message)}
   };
   window.copyTranscript=async function(){
@@ -454,7 +549,8 @@
   // Video jobs outlive the tab and the page: the id stays in sessionStorage so a
   // reload resumes the same poll, and the router keeps the job running.
   const VIDEO_JOB_KEY='router.video.job';
-  let videoJob=null,videoTimer=0,videoURL=null,videoDelay=1000;
+  let videoJob=null,videoTimer=0,videoDelay=1000,videoHist=null;
+  function videoDone(status,urls){histEnd(videoHist,status,{urls});videoHist=null}
   // A Cancel invalidates a status check already in flight so it cannot repaint or reschedule.
   let videoCheckEpoch=0,videoFailures=0;
   function videoError(d){
@@ -476,24 +572,26 @@
     $('video-generate').disabled=false;$('video-cancel').disabled=true;
     $('video-status').textContent='Failed';
     const out=$('video-output');out.className='output error';out.textContent=message;
+    videoDone('error');
   }
   function videoCancelled(){
     clearTimeout(videoTimer);
     videoJob=null;sessionStorage.removeItem(VIDEO_JOB_KEY);
     $('video-generate').disabled=false;$('video-cancel').disabled=true;$('video-status').textContent='Cancelled';
     const out=$('video-output');out.className='output muted';out.textContent='Cancelled.';
+    videoDone('cancelled');
   }
   async function videoShow(id){
     const r=await fetch('/v1/videos/'+encodeURIComponent(id)+'/content');
     if(!r.ok){const e=new Error('HTTP '+r.status+': '+(await r.text()).trim());e.status=r.status;throw e}
     const blob=await r.blob();
-    if(videoURL)URL.revokeObjectURL(videoURL);
-    videoURL=URL.createObjectURL(blob);
+    const url=URL.createObjectURL(blob);
     const ext=(blob.type.split('/')[1]||'mp4').split(';')[0].replace('quicktime','mov').replace('x-matroska','mkv');
     const out=$('video-output');out.className='output';
-    out.innerHTML='<video controls src="'+esc(videoURL)+'" style="width:100%"></video><p><a href="'+esc(videoURL)+'" download="video.'+esc(ext)+'">Download video</a></p>';
+    out.innerHTML='<video controls src="'+esc(url)+'" style="width:100%"></video><p><a href="'+esc(url)+'" download="video.'+esc(ext)+'">Download video</a></p>';
     clearTimeout(videoTimer);videoJob=null;sessionStorage.removeItem(VIDEO_JOB_KEY);
     $('video-generate').disabled=false;$('video-cancel').disabled=true;$('video-status').textContent='Completed';
+    videoDone('ok',[url]);
   }
   async function videoCheck(){
     if(!videoJob)return;
@@ -537,6 +635,7 @@
     if(!$('video-opt-resolution').hidden)body.size=$('video-resolution').value;
     if(!$('video-opt-seed').hidden){const seed=$('video-seed').value.trim();if(/^\d+$/.test(seed))body.seed=seed.length>15?seed:Number(seed)}
     out.className='output muted';out.textContent='Submitting…';
+    videoHist=histStart('video');
     $('video-generate').disabled=true;$('video-cancel').disabled=true;$('video-status').textContent='Submitting…';
     try{
       let r;
@@ -556,6 +655,7 @@
     }catch(e){
       $('video-generate').disabled=false;$('video-status').textContent='';
       fail(e.message);
+      videoDone('error');
     }
   };
   window.cancelVideo=async function(){
@@ -583,6 +683,8 @@
     const id=sessionStorage.getItem(VIDEO_JOB_KEY);
     if(!id)return;
     videoJob=id;videoDelay=1000;
+    // The form is back to its defaults after a reload, so a resumed job keeps no inputs to restore.
+    videoHist=Object.assign(histStart('video'),{model:'—',note:'Resumed job '+id,inputs:{}});
     $('video-generate').disabled=true;$('video-cancel').disabled=false;
     const out=$('video-output');out.className='output muted';out.textContent='Resuming the job…';
     $('video-status').textContent='Resuming…';
@@ -607,7 +709,7 @@
     const conc=num('load-conc',64),total=num('load-count',1000),maxTokens=num('load-tokens',4096);
     if(!model){out.className='output error';out.textContent='No model is available.';return}
     if(!prompt){out.className='output error';out.textContent='Enter a prompt.';return}
-    const ctl=new AbortController();
+    const ctl=new AbortController(),h=histStart('load');
     load={total,failed:0,lat:[],t0:performance.now(),end:0};
     const run=load;
     $('load-start').disabled=true;$('load-cancel').disabled=false;out.className='output';status.textContent='Running…';
@@ -629,6 +731,7 @@
     await Promise.all(Array.from({length:conc},worker));
     run.end=performance.now();paintLoad(true);
     status.textContent=ctl.signal.aborted?'Cancelled.':'Finished.';
+    histEnd(h,ctl.signal.aborted?'cancelled':'ok');
     $('load-start').disabled=false;$('load-cancel').disabled=true;load=null
   };
 
@@ -645,6 +748,7 @@
     // A browser sends its cached router key (UI sign-in) on the handshake, same as for fetch.
     const ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/v1/realtime?model='+encodeURIComponent(model));
     let opened=false,reply=null;
+    const h=histStart('realtime','Text session');
     rt=ws;rtButtons(true,false);$('rt-status').textContent='Connecting…';
     ws.onopen=()=>{opened=true;rtButtons(true,true);$('rt-status').textContent='Open';rtLine('Session open.','muted')};
     ws.onmessage=m=>{
@@ -664,6 +768,7 @@
       else if(ev.code===1000)rtLine('Session closed.','muted');
       else rtLine('Disconnected (code '+ev.code+(ev.reason?': '+ev.reason:'')+').','error');
       rt=null;rtButtons(false,false);$('rt-status').textContent='Closed';
+      histEnd(h,opened&&ev.code===1000?'ok':'error');
     };
   };
   window.closeRealtime=function(){if(rt)rt.close(1000)};

@@ -69,6 +69,38 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 	}
 }
 
+// Every Playground tab has a history list and a Clear control, and history
+// never reaches browser storage, so a reload clears it. sessionStorage only
+// holds the running video job id.
+func TestEmbeddedUIPlaygroundHistory(t *testing.T) {
+	tabs := []string{"chat", "image", "embeddings", "rerank", "speech", "transcription", "video", "audiogen", "load", "realtime"}
+	if n := strings.Count(webUIHTML, `role="tabpanel"`); n != len(tabs) {
+		t.Errorf("found %d Playground tab panels, the history check covers %d", n, len(tabs))
+	}
+	for _, tab := range tabs {
+		for _, want := range []string{
+			`<ul id="hist-` + tab + `" class="history-list"`,
+			`onclick="clearHistory('` + tab + `')">Clear history</button>`,
+			tab + ":['",
+		} {
+			if !strings.Contains(webUIHTML, want) {
+				t.Errorf("tab %s: embedded UI missing %q", tab, want)
+			}
+		}
+	}
+	for _, gone := range []string{"localStorage", "indexedDB"} {
+		if strings.Contains(uiJS, gone) {
+			t.Errorf("app.js uses %s", gone)
+		}
+	}
+	video := strings.Count(uiJS, "sessionStorage.getItem(VIDEO_JOB_KEY)") +
+		strings.Count(uiJS, "sessionStorage.setItem(VIDEO_JOB_KEY,") +
+		strings.Count(uiJS, "sessionStorage.removeItem(VIDEO_JOB_KEY)")
+	if n := strings.Count(uiJS, "sessionStorage."); n != video {
+		t.Errorf("app.js makes %d sessionStorage calls, only %d are for the video job id", n, video)
+	}
+}
+
 // The Speech tab lists the model's voices from /v1/audio/voices (only for a
 // running model, so the tab never starts one), offers every response_format,
 // and plays through MediaSource when the browser can, else from a blob.
