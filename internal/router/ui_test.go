@@ -197,7 +197,7 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 		"function syncRows", "tr.classList.add('leaving')", "row-in", "IntersectionObserver", "IMG_PATH",
 		// The dialog has a parsed view, a raw fallback and collapsible headers.
 		`id="capture-parsed"`, `id="capture-raw"`, `id="capture-toggle"`, `<details class="capture-headers" open>`,
-		"function capParsed", "function chatReply", "function imgSrcs",
+		"function capParsed", "function chatReply", "function capImgs",
 		// Image rows fetch the server-rendered thumbnail, with the capture as fallback.
 		"'/_router/activity/'+id+'/thumb'", "function thumbSrc", "function captureSrc",
 		// The row state commits only once the image decodes; a failed GET retries the
@@ -223,13 +223,12 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 }
 
 // The capture dialog names the clipped fields and opens a clipped body in the
-// parsed view: an image placeholder shows the stored thumbnail and a stream's
+// parsed view: an image placeholder shows the stored preview and a stream's
 // dropped middle is marked. Only a raw cut is reported as such.
 func TestEmbeddedUICaptureClippedFields(t *testing.T) {
 	for _, want := range []string{
 		"'Clipped to fit 256 KB: '+cap.clipped_fields.join(', ')", "Bodies cut at 256 KB as raw bytes. ",
-		"setCapView(p.ok?'parsed':'raw')", "if(!v||CLIPPED_IMG.test(v))return ''",
-		"clippedImg?'<img class=\"cap-img\" alt=\"Thumbnail of the generated image\" src=\"/_router/activity/'+esc(e.id)+'/thumb\">",
+		"setCapView(p.ok?'parsed':'raw')", "const CLIPPED_IMG=/^\\[image (\\d+): /",
 		"else if(l.startsWith(': [clipped '))out[last]+=",
 	} {
 		if !strings.Contains(webUIHTML, want) {
@@ -238,6 +237,30 @@ func TestEmbeddedUICaptureClippedFields(t *testing.T) {
 	}
 	if strings.Contains(webUIHTML, "Bodies truncated to 256 KB.") {
 		t.Error("the dialog still reports every long body as truncated")
+	}
+}
+
+// The parsed view shows request images (img2img inits and extras, chat
+// image_url parts) and response images. A clipped placeholder loads the stored
+// preview from the image endpoint; inline base64 is typed from its bytes, not
+// guessed from its prefix. Each image opens full size in a new tab.
+func TestEmbeddedUICaptureParsedImages(t *testing.T) {
+	for _, want := range []string{
+		"if(m)out.push('/_router/activity/'+id+'/image/'+side+'/'+m[1])",
+		"h.startsWith('\\x89PNG')?'png':h.startsWith('\\xff\\xd8\\xff')?'jpeg'",
+		"capImgs(req,e.id,'req').map(s=>capImg(s,'Input image'))",
+		"capImgs(m&&m.content,e.id,'req').map(s=>capImg(s,'Message image'))",
+		"const resultImgs=(d,id)=>capImgs(d&&(d.data||d.images),id,'resp')",
+		"imgs.map(s=>capImg(s,'Generated image'))",
+		`target="_blank" rel="noopener" title="Open full size in a new tab"`,
+		"a.href=URL.createObjectURL(", "Image preview no longer stored",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if strings.Contains(webUIHTML, "v.startsWith('/9j/')") {
+		t.Error("the parsed view still guesses the image type from the base64 prefix")
 	}
 }
 

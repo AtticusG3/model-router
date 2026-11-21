@@ -70,6 +70,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 		{"/logs/stream/{model_id...}", handleModelLogStream(r, logger)},
 		{"/_router/activity/{id}/thumb", handleActivityBlob(r)},
 		{"/_router/activity/{id}/audio", handleActivityBlob(r)},
+		{"/_router/activity/{id}/image/{side}/{n}", handleActivityBlob(r)},
 		{"/_router/activity/stream", handleActivityStream(r)},
 		{"/_router/activity/{id}", handleActivityCapture(r)},
 		{"/_router/activity", handleActivity(r)},
@@ -269,8 +270,8 @@ func handleActivityCapture(r *Router) http.HandlerFunc {
 	}
 }
 
-// handleActivityBlob serves the row's image thumbnail or speech audio; both
-// paths read the one blob a capture keeps.
+// handleActivityBlob serves the row's image thumbnail or speech audio, the one
+// blob a capture keeps, or with {side} and {n} one stored image preview.
 func handleActivityBlob(r *Router) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodGet {
@@ -282,7 +283,20 @@ func handleActivityBlob(r *Router) http.HandlerFunc {
 			http.Error(w, "invalid activity id", http.StatusBadRequest)
 			return
 		}
-		data, ct, ok := r.Activity().Blob(id)
+		var data []byte
+		var ct string
+		var ok bool
+		if side := req.PathValue("side"); side != "" {
+			s := slices.Index(previewSides, side)
+			n, err := strconv.Atoi(req.PathValue("n"))
+			if s < 0 || err != nil {
+				http.Error(w, "invalid image", http.StatusBadRequest)
+				return
+			}
+			data, ct, ok = r.Activity().Preview(id, s, n)
+		} else {
+			data, ct, ok = r.Activity().Blob(id)
+		}
 		if !ok {
 			http.Error(w, "not captured", http.StatusNotFound)
 			return

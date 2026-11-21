@@ -1031,22 +1031,32 @@
     return fetch(url).then(r=>r.ok?url:captureSrc(id)).catch(()=>captureSrc(id));
   }
   function captureSrc(id){
-    return json('/_router/activity/'+id).then(c=>imgSrcs(parseJSON(c.resp_body))[0]||'').catch(()=>{thumbs.delete(id);return ''});
+    return json('/_router/activity/'+id).then(c=>resultImgs(parseJSON(c.resp_body),id)[0]||'').catch(()=>{thumbs.delete(id);return ''});
   }
 
   const parseJSON=s=>{try{return JSON.parse(s)}catch(e){return null}};
-  const CLIPPED_IMG=/^\[image \d+: /;
-  // imgSrcs reads image data from an OpenAI-style (data[]) or sd.cpp-style (images[]) response.
-  function imgSrcs(d){
-    const list=d&&(Array.isArray(d.data)?d.data:Array.isArray(d.images)?d.images:[])||[];
-    return list.map(x=>{
-      const v=typeof x==='string'?x:(x&&(x.b64_json||x.url))||'';
-      // A clipped capture holds "[image 0: png 1.3 MB]" in place of the bytes.
-      if(!v||CLIPPED_IMG.test(v))return '';
-      if(/^(https?:|data:image\/)/i.test(v))return v;
-      return 'data:image/'+(v.startsWith('/9j/')?'jpeg':v.startsWith('UklG')?'webp':'png')+';base64,'+v;
-    }).filter(Boolean);
+  const CLIPPED_IMG=/^\[image (\d+): /;
+  // imgType sniffs PNG, JPEG or WEBP from the first decoded bytes of bare base64; '' when it is none.
+  function imgType(v){
+    let h='';
+    try{h=atob(v.slice(0,16))}catch(e){}
+    return h.startsWith('\x89PNG')?'png':h.startsWith('\xff\xd8\xff')?'jpeg':h.startsWith('RIFF')&&h.slice(8,12)==='WEBP'?'webp':'';
   }
+  // capImgs collects the images in a parsed body in document order. A clipped capture holds
+  // "[image 0: png 1.3 MB]" in place of the bytes, which the server keeps as a preview; a data URL,
+  // a url field or inline base64 that survived clipping is shown as it is.
+  function capImgs(v,id,side,key,out=[]){
+    if(typeof v==='string'){
+      const m=CLIPPED_IMG.exec(v);
+      if(m)out.push('/_router/activity/'+id+'/image/'+side+'/'+m[1]);
+      else if(/^data:image\//i.test(v)||key==='url'&&/^https?:/i.test(v))out.push(v);
+      else if(imgType(v))out.push('data:image/'+imgType(v)+';base64,'+v);
+    }else if(v&&typeof v==='object')Object.entries(v).forEach(([k,x])=>capImgs(x,id,side,Array.isArray(v)?key:k,out));
+    return out;
+  }
+  // resultImgs reads an OpenAI-style (data[]) or sd.cpp-style (images[]) response; other fields may echo the inputs.
+  const resultImgs=(d,id)=>capImgs(d&&(d.data||d.images),id,'resp');
+  const capImg=(s,alt)=>'<a class="cap-open" href="'+esc(s)+'" target="_blank" rel="noopener" title="Open full size in a new tab"><img class="cap-img" alt="'+alt+'" src="'+esc(s)+'"></a>';
   // chatReply reads a chat completion, whole or streamed as SSE. It returns null when the body is neither.
   function chatReply(body){
     const out={text:'',think:'',finish:''};
@@ -1082,18 +1092,17 @@
       ok=true;
       html+=capMedia(e,e.media,req);
     }else if(IMG_PATH.test(e.path||'')){
-      const resp=parseJSON(cap.resp_body),imgs=imgSrcs(resp),r=req||{};
+      const resp=parseJSON(cap.resp_body),imgs=resultImgs(resp,e.id),r=req||{};
       ok=!!(req||imgs.length);
       const size=r.size||(r.width&&r.height?r.width+'×'+r.height:'—');
-      html+=capBlock('Image request','<dl class="cap-summary">'+capStat('Prompt',r.prompt||'—')+capStat('Size',size)+capStat('Count',r.n||imgs.length||'—')+'</dl>');
-      const clippedImg=!imgs.length&&/"\[image \d+: /.test(cap.resp_body||'');
-      html+=capBlock('Result',imgs.length?imgs.map(s=>'<img class="cap-img" alt="Generated image" src="'+esc(s)+'">').join(''):clippedImg?'<img class="cap-img" alt="Thumbnail of the generated image" src="/_router/activity/'+esc(e.id)+'/thumb"><p class="subtle">The image was clipped from the capture; this is the stored thumbnail.</p>':'<p class="subtle">No image in the response body. It may be clipped or not JSON; the raw view has the bytes.</p>');
+      html+=capBlock('Image request','<dl class="cap-summary">'+capStat('Prompt',r.prompt||'—')+capStat('Size',size)+capStat('Count',r.n||imgs.length||'—')+'</dl>'+capImgs(req,e.id,'req').map(s=>capImg(s,'Input image')).join(''));
+      html+=capBlock('Result',imgs.length?imgs.map(s=>capImg(s,'Generated image')).join(''):'<p class="subtle">No image in the response body. It may be cut or not JSON; the raw view has the bytes.</p>');
     }else if(req&&Array.isArray(req.messages)){
       const reply=chatReply(cap.resp_body);
       ok=true;
       const stop=req.stop==null?'—':Array.isArray(req.stop)?req.stop.join(', '):String(req.stop);
       html+=capBlock('Parameters','<dl class="cap-summary">'+capStat('Temperature',req.temperature??'—')+capStat('Max tokens',req.max_tokens??req.max_completion_tokens??'—')+capStat('Stream',req.stream??'—')+capStat('Stop',stop)+'</dl>');
-      html+=capBlock('Messages',req.messages.map(m=>'<div class="cap-msg"><div class="cap-role">'+esc((m&&m.role)||'?')+'</div>'+capText(msgText(m&&m.content))+'</div>').join('')||'<p class="subtle">No messages.</p>');
+      html+=capBlock('Messages',req.messages.map(m=>'<div class="cap-msg"><div class="cap-role">'+esc((m&&m.role)||'?')+'</div>'+capText(msgText(m&&m.content))+capImgs(m&&m.content,e.id,'req').map(s=>capImg(s,'Message image')).join('')+'</div>').join('')||'<p class="subtle">No messages.</p>');
       html+=capBlock('Response',reply?(reply.think?'<details class="cap-think"><summary>Reasoning</summary>'+capText(reply.think)+'</details>':'')+(reply.text?capText(reply.text):'<p class="subtle">No text in the response.</p>')+'<p class="subtle">Finish reason: '+esc(reply.finish||'—')+'</p>':'<p class="subtle">The response is not a chat completion; the raw view has the body.</p>');
     }
     return {html,ok};
@@ -1128,6 +1137,16 @@
     $('capture-toggle').textContent=v==='parsed'?'Show raw':'Show parsed';
   }
   $('capture-toggle').onclick=()=>setCapView(capView==='parsed'?'raw':'parsed');
+  // Browsers will not open a data URL in a new tab, so an inline image opens as a blob URL.
+  $('capture-parsed').addEventListener('click',ev=>{
+    const a=ev.target.closest('a.cap-open[href^="data:"]');
+    if(a)a.href=URL.createObjectURL(new Blob([Uint8Array.from(atob(a.href.split(',')[1]),c=>c.charCodeAt(0))],{type:a.href.slice(5,a.href.indexOf(';'))}));
+  });
+  // A preview the ring has since shed for room 404s: say so instead of showing a broken image.
+  $('capture-parsed').addEventListener('error',ev=>{
+    const a=ev.target.closest&&ev.target.closest('a.cap-open');
+    if(a)a.replaceWith(Object.assign(document.createElement('p'),{className:'subtle',textContent:'Image preview no longer stored; the raw view has the capture.'}));
+  },true);
   async function openCapture(id, row){
     const dlg=$('activity-dialog'),e=acts.get(String(id))||{};
     $('capture-title').textContent='Request '+id;
