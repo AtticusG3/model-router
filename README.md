@@ -188,6 +188,14 @@ stanzas). The swap procedure is in `deploy/swap-over.md`.
 local GPU room while peers are re-tried. After that it gets `503` with
 `Retry-After`. A model that pinned models leave no room for fails at once.
 
+`peer_spill` (per stanza, default `auto`) decides when a local model may hand
+a request to a peer. `auto` spills as soon as local room is blocked or every
+slot is busy. `on_failure` waits for local admission and the load instead,
+walking peers only after a hard start failure or an admit timeout. `never`
+also waits, but a hard start failure is answered here with `503` instead of
+walked. A peer-qualified id and a request proxied in from a peer are
+unaffected.
+
 `max_request_body_mb` (top level, default 256, at most 1048576 = 1 TiB; a stanza may override it) caps
 one request body. Over the cap the client gets `413` before any model is
 loaded. A multipart upload is streamed or spooled to a temp file, not held in

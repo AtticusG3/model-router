@@ -273,6 +273,7 @@ stanzas:
     match: {path_prefix: /sdapi/v1}
     health_check: /health
     idle_ttl_seconds: 300
+    peer_spill: on_failure
     unlisted: false
     port: 5919
 
