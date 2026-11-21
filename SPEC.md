@@ -386,7 +386,11 @@ gets 400, not a 502.
    - Pool → spillover, targets in order. A target is eligible while its
      in-flight count is under the spillover cap and it is running or can
      start (local), or the peer is eligible (below).
-   - `peer/model` → that peer, if its `models` list contains the id.
+   - `peer/model` → that peer, if its configured `models` list or the
+     `catalog` in its cached telemetry contains the id. A `peer/model` pool
+     target is checked at config load and reload against the configured
+     `models` list only, so the model must be listed there or the config
+     fails with `pool ... unknown target`.
    - Bare id that only a peer lists → mesh pick (below).
 4. **Local.** If the request arrived from another router
    (`X-Model-Router-Peer`), it stays here. No spill back. A stanza with
@@ -394,7 +398,11 @@ gets 400, not a 502.
    or `/upstream/{model_id}`) with `404 model not shared`, whether it is named
    by id, alias or filter-set id. A pool named in such a request skips its
    `share: false` members; a pool with only unshared members answers
-   `404 model not shared`.
+   `404 model not shared`. A router on 2252e2b or earlier does not send
+   `X-Model-Router-Peer` on its `POST /_router/load`, so that load counts as
+   a local client's and loads the model (possibly evicting another); only
+   its proxied request after that gets `404`. Upgrade every caller, or drop
+   the model from their `peers[].models`, before setting `share: false`.
    - If this node cannot serve it now, try a spill first: later targets of
      any pool that names this model, then a peer that lists the same
      `model_id`.
@@ -430,9 +438,9 @@ gets 400, not a 502.
    no load call; proxy straight to `base_url`.
 
    A router peer serves its configured `models` plus the `catalog` its cached
-   telemetry advertises, so a router peer needs no `models` list. `models`
-   still covers `kind: openai` peers and router peers on older builds that
-   send no catalog.
+   telemetry advertises, so requests reach a router peer without a `models`
+   list. `models` still covers `kind: openai` peers, router peers on older
+   builds that send no catalog, and every `peer/model` pool target.
 6. No local capacity and no reachable peer that lists the model → `503` with
    the reason. No silent hang.
 
@@ -928,7 +936,8 @@ The snapshot a node publishes:
 - `catalog`: every local stanza `model_id` and filter-set alias this node
   shares, so a peer knows what to ask it for without listing it in config.
   A stanza with `share: false` is left out of `catalog`, `models` and the
-  running instances below. Peer model advertisement reuses this existing
+  running instances below, and its requests out of `in_progress` and
+  `recent`. Peer model advertisement reuses this existing
   string list rather than adding a `models` array of objects, because
   `models` already carries the image-pipeline map above and older peers parse
   it as that map. So an advertised peer model carries only its id: its catalog
@@ -947,7 +956,9 @@ The snapshot a node publishes:
   peer can see a request it saw running finish.
 
 Node name plus `id` keys a request across the mesh. Both lists are left out
-when empty, and older telemetry without them still parses.
+when empty, and older telemetry without them still parses. Rows whose model
+is a `share: false` stanza (by id, alias or filter-set id) are left out of
+both; the local `GET /_router/activity` still lists them.
 
 Candidate selection treats a card as empty enough to try when idle-evicted
 free is within 2 GB of the card total. nvidia-smi never reports a fully idle

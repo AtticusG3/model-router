@@ -167,8 +167,51 @@ pools:
 	if n := yHits.Load(); n != 0 {
 		t.Fatalf("y backend got %d peer requests, want 0", n)
 	}
+
+	// A caller on a release before X-Model-Router-Peer existed looks like a
+	// local client, so its load of y goes through. Pinned on purpose: the
+	// README "share" section tells operators to upgrade callers first.
+	load := httptest.NewRequest("POST", "/_router/load", bytes.NewBufferString(`{"model_id":"y"}`))
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, load)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("headerless load y: %d %s, want 200 (local load)", rec.Code, rec.Body.String())
+	}
+
 	if rec := peerChat(h, "only-y", ""); rec.Code != http.StatusOK || yHits.Load() != 1 {
 		t.Fatalf("local client only-y: %d %s, y hits %d, want 200 from y", rec.Code, rec.Body.String(), yHits.Load())
+	}
+	if rec := peerChat(h, "y-alias", ""); rec.Code != http.StatusOK || yHits.Load() != 2 {
+		t.Fatalf("local client y-alias: %d %s, y hits %d, want 200 from y", rec.Code, rec.Body.String(), yHits.Load())
+	}
+
+	// Peers polling telemetry never see a request to y, by id, alias or
+	// filter id; the local Activity data still lists them.
+	for _, m := range []string{"y", "y-alias", "y:high", "x"} {
+		a.activity.begin(InProgressEntry{Model: m, Prompt: "fictional prompt for " + m})
+	}
+	tel := a.TelemetrySnapshot()
+	var running, recent []string
+	for _, e := range tel.InProgress {
+		running = append(running, e.Model)
+	}
+	for _, e := range tel.Recent {
+		recent = append(recent, e.Model)
+	}
+	if !slices.Equal(running, []string{"x"}) || !slices.Contains(recent, "x") || slices.ContainsFunc(recent, func(m string) bool { return m != "x" }) {
+		t.Fatalf("telemetry in progress = %v, recent = %v, want x only", running, recent)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_router/activity", nil))
+	var local struct {
+		Entries    []ActivityEntry   `json:"entries"`
+		InProgress []InProgressEntry `json:"in_progress"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &local); err != nil {
+		t.Fatalf("/_router/activity: %v", err)
+	}
+	if len(local.InProgress) != 4 || !slices.ContainsFunc(local.Entries, func(e ActivityEntry) bool { return e.Model != "x" }) {
+		t.Fatalf("local activity in progress = %+v, entries = %+v, want y rows kept", local.InProgress, local.Entries)
 	}
 }
 
