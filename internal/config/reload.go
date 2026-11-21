@@ -113,9 +113,11 @@ func (r *Reloader) watch(ctx context.Context, every time.Duration, hup <-chan os
 			last, pending = r.stamp(), fileStamp{}
 			_ = r.Reload()
 		case <-tick.C:
-			// A missing file mid-rename is not a change; wait for the next tick.
+			// A missing file mid-rename, or an empty one truncated mid-write
+			// (which parses as a valid config with no stanzas), is not a change;
+			// wait for the next tick.
 			s, ok := r.statOK()
-			if !ok {
+			if !ok || s.size == 0 {
 				pending = fileStamp{}
 				continue
 			}

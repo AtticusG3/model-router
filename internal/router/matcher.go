@@ -24,6 +24,7 @@ var ErrNoModel = errors.New("no model id could be identified")
 // (config.DefaultStanza). An explicit match.path_prefix still wins.
 var pathAPITypes = []struct{ prefix, apiType string }{
 	{"/v1/audio/speech", config.APITypeSpeech},
+	{"/v1/audio/voices", config.APITypeSpeech},
 	{"/v1/audio/transcriptions", config.APITypeTranscription},
 	{"/v1/audio/translations", config.APITypeTranscription},
 	{"/v1/realtime", config.APITypeRealtime},

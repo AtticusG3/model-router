@@ -36,6 +36,7 @@ type Router struct {
 	managed   map[string]*Managed  // local stanza id -> supervisor
 	occupancy map[string]int       // target key -> in-flight selected requests
 	draining  map[string]bool      // claimed for unload; new requests wait
+	speaking  map[string]int       // instance key -> speech requests in its backend (slot cap)
 	peerUntil map[string]time.Time // "peer/model" -> end of the Retry-After that peer sent
 	jobs      map[string]*job      // async job id -> owner; see jobs.go
 	jobsDone  []*job               // finished jobs in the order they ended; may hold stale entries
@@ -77,6 +78,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		managed:         map[string]*Managed{},
 		occupancy:       map[string]int{},
 		draining:        map[string]bool{},
+		speaking:        map[string]int{},
 		peerUntil:       map[string]time.Time{},
 		jobs:            map[string]*job{},
 		cooldowns:       map[string]*startCooldown{},
@@ -1165,6 +1167,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		r.serveJob(w, req, id)
 		return
 	}
+	if isVoiceList(req) && r.serveVoiceUnion(w, req) {
+		return
+	}
 	if isWebsocketUpgrade(req) && pathAPIType(req.URL.Path) == config.APITypeRealtime && req.URL.Query().Get("model") == "" {
 		if u := r.answerUpgrade(w, req); u != nil {
 			defer u.finish()
@@ -1213,6 +1218,13 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, modelID string) {
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
+	// One admit budget for the whole local path: a sibling retry after the
+	// first slot wait times out must not start a second full wait.
+	if s := r.cfg().Stanza(modelID); s != nil && s.APIType == config.APITypeSpeech && isSynthesis(req) {
+		if _, ok := req.Context().Value(admitDeadlineKey{}).(time.Time); !ok {
+			req = req.WithContext(context.WithValue(req.Context(), admitDeadlineKey{}, time.Now().Add(r.cfg().AdmitTimeout())))
+		}
+	}
 	// If this GPU cannot admit now, try an idle peer before waiting locally.
 	if !incomingPeer {
 		if s := r.cfg().Stanza(modelID); s != nil && !r.localCanServe(s) && r.spillWhileBlocked(w, req, s) {
@@ -1631,6 +1643,13 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 	m.markUsed()
 	defer m.markUsed()
 	if s := r.stanzaOf(key); s != nil {
+		if s.APIType == config.APITypeSpeech && isSynthesis(req) {
+			release, err := r.takeSpeechSlot(req.Context(), key, s.SlotCount())
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
 		if s.ImagePipeline != nil {
 			r.proxyImage(w, req, Target{Local: key}, m.proxy(), key, r.node, s)
 			return nil
@@ -1713,7 +1732,7 @@ func rewriteBodyModel(req *http.Request, newModel, field string, f config.Filter
 		if !isForm {
 			return nil
 		}
-		e, err := newFormEdit(f.StripParams, f.SetParams)
+		e, err := newFormEdit(f.RenameParams, f.StripParams, f.SetParams)
 		if err != nil {
 			return err
 		}
@@ -1723,7 +1742,7 @@ func rewriteBodyModel(req *http.Request, newModel, field string, f config.Filter
 	if err := rewriteJSONModel(req, newModel, field); err != nil {
 		return err
 	}
-	return applyFilters(req, f.StripParams, f.SetParams)
+	return applyFilters(req, f.RenameParams, f.StripParams, f.SetParams)
 }
 
 // rewriteJSONModel sets field to newModel on a JSON object body; any other

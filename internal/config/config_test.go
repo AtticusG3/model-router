@@ -609,6 +609,9 @@ func TestParseRejectsBadFilters(t *testing.T) {
 		{"empty key", "stanzas:\n  - {model_id: a, command: x, filters: {stripParams: [\"?\"]}}\n", "empty parameter name"},
 		{"id collides", "stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {b: {t: 1}}}}\n  - {model_id: b, command: x}\n", `id "b" collides`},
 		{"id has hash", "stanzas:\n  - {model_id: a, command: x, filters: {setParamsByID: {\"a#2\": {t: 1}}}}\n", "contains '#'"},
+		{"rename from model", "stanzas:\n  - {model_id: a, command: x, filters: {renameParams: {model: m}}}\n", `cannot strip or set "model"`},
+		{"rename to model", "stanzas:\n  - {model_id: a, command: x, filters: {renameParams: {name: model}}}\n", `cannot strip or set "model"`},
+		{"path_rewrite no slash", "stanzas:\n  - {model_id: a, command: x, path_rewrite: [{from: /v1/audio/speech, to: tts}]}\n", "must both start with /"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

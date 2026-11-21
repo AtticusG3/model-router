@@ -230,7 +230,7 @@ API paths:
 
 | api_type | paths |
 |----------|-------|
-| `speech` | `/v1/audio/speech` |
+| `speech` | `/v1/audio/speech` (and `/v1/audio/speech/batch`), `/v1/audio/voices` |
 | `transcription` | `/v1/audio/transcriptions`, `/v1/audio/translations` |
 | `realtime` | `/v1/realtime` |
 | `video` | `/v1/videos` |
@@ -265,13 +265,25 @@ media response (`audio/*`, `video/*`, `application/octet-stream`) is flushed per
 chunk and never captured as text; its Activity row keeps the content type,
 byte count and a body hash prefix (see Operator UI for the speech player).
 
-`filters` (on a stanza or a peer): `stripParams` drops top-level fields,
-`setParams` sets them (a key ending in `?` only fills a field the client
-omitted), and a stanza's `setParamsByID` mints alias ids with their own set.
-They apply to JSON object bodies and to the text fields of
-`application/x-www-form-urlencoded` and `multipart/form-data` bodies; file
-parts are never touched. In a form, a non-string value is sent as its JSON text
-(`0`, `true`). `model` and the `body_field` cannot be filtered.
+`filters` (on a stanza or a peer): `renameParams` moves a field to the name
+the backend takes (`{ref_audio: speaker_ref_b64}`), `stripParams` drops
+top-level fields, `setParams` sets them (a key ending in `?` only fills a field
+the client omitted), and a stanza's `setParamsByID` mints alias ids with their
+own set. Renames run first, so strip and set use the backend's names. They
+apply to JSON object bodies and to the fields of
+`application/x-www-form-urlencoded` and `multipart/form-data` bodies. A rename
+may move a file part (`{file: audio}`); strip and set never touch one. In a
+form, a non-string value is sent as its JSON text (`0`, `true`). `model` and
+the `body_field` cannot be filtered or renamed.
+
+`path_rewrite` (stanza only) sends a request to the backend's own route:
+`[{from: /v1/audio/speech, to: /tts}]` maps a path starting with `from` to `to`
+plus the rest of the path. The first matching `from` wins, so
+`/v1/audio/speech/batch` needs its own entry before the shorter one if it
+should not become `/tts/batch`. Both sides must start with `/`. Matching,
+Activity rows and metrics keep the client's path; only the proxied request
+changes. Filters and `path_rewrite` are the shared mechanism for audio
+backends that need a different path or field names.
 
 Before a request goes to a peer, its model field (the peer's `body_field`) is
 set to the peer's id in JSON, urlencoded and multipart bodies, and so is a
@@ -369,6 +381,72 @@ does not abort a spin-up that is already useful. The wait is capped at
 `max(spin_up_seconds, 90s) + 8 minutes`, or until this process shuts down.
 A peer load joins an instance that is already live instead of starting
 another copy.
+
+## Speech
+
+An `api_type: speech` stanza serves text to speech. The backend choice and its
+measured limits are in `docs/research/tts-backends.md`.
+
+- **Routes.** `POST /v1/audio/speech` and `POST /v1/audio/speech/batch` go to
+  the stanza named by `model`, or to the speech default (the `path_default`
+  stanza, or the only one). So do `GET /v1/audio/voices`,
+  `GET /v1/audio/voices/{id}`, `POST /v1/audio/voices` and
+  `DELETE /v1/audio/voices/{id}`; a GET or DELETE names its model in
+  `?model=`. The router does not rewrite `model` for a local stanza, so the
+  backend must accept the stanza id as its model name.
+- **Voice list.** A model-less `GET /v1/audio/voices` on a node with more than
+  one speech stanza asks the speech default (loading it if needed) and every
+  other speech stanza that is already running, and merges the lists:
+  `{"object":"list","data":[{"id":"narrator","model":"tts-clone"}, ...]}`. A
+  voice the backend gives as a bare string becomes `{"id": ...}`; an object
+  keeps its fields and gains `model`. A stanza that fails or has no voice list
+  is left out (logged); when every one fails the answer is `502`. Listing
+  voices never starts a second speech model. With one candidate the backend's
+  own answer passes through unchanged.
+- **Formats.** `response_format` (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`)
+  passes through, and so does the backend's `Content-Type`.
+- **Streaming.** The proxy flushes every chunk. With `stream: true`, or any
+  chunked answer, the first audio reaches the client while the backend is
+  still synthesising. The Activity writer counts and hashes the bytes but
+  never holds them back.
+- **Slots.** For a speech stanza `slots` caps the syntheses in each instance's
+  backend at once. A request over the cap waits at the router for a free slot,
+  up to `admit_timeout_seconds` (one budget with any wait for GPU room), then
+  gets `503` with `Retry-After`. Other api_types still queue on the backend.
+- **Other routes and field names.** `path_rewrite` and `filters.renameParams`
+  (see Config) fit a backend that serves speech on its own path or takes
+  other field names.
+
+Example stanza for the 24 GB card, from `docs/research/tts-backends.md` §6.1
+with the command shortened (see the research note for the real flags):
+
+```yaml
+  - model_id: tts-clone
+    name: "Voice-clone speech model (24 GB card)"
+    command: >
+      /opt/ai/venv-tts/bin/tts-serve /opt/ai/models/tts/voice-clone-base
+      --served-model-name tts-clone
+      --host 127.0.0.1 --port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0"]
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 300
+    api_type: speech
+    capabilities: [audio_out]
+    match: {path_default: true}   # model-less speech and voice requests
+    health_check: /health
+    idle_ttl_seconds: 900
+    slots: 4                      # the backend's own batch size
+    port: 5933
+```
+
+A backend that serves the API on its own route and field names adds, for
+example:
+
+```yaml
+    path_rewrite: [{from: /v1/audio/speech, to: /tts}]
+    filters: {renameParams: {ref_audio: speaker_ref_b64, language: lang}}
+```
 
 ## Async jobs
 

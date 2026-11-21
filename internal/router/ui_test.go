@@ -67,6 +67,31 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 	}
 }
 
+// The Speech tab lists the model's voices from /v1/audio/voices (only for a
+// running model, so the tab never starts one), offers every response_format,
+// and plays through MediaSource when the browser can, else from a blob.
+func TestEmbeddedUISpeechVoicesAndFormats(t *testing.T) {
+	if strings.Contains(webUIHTML, `<input id="speech-voice"`) {
+		t.Error("the voice is still a free-text input, not the voice list")
+	}
+	for _, want := range []string{
+		`<select id="speech-voice" aria-label="Voice">`, `onchange="loadVoices()"`,
+		"window.loadVoices", "'/v1/audio/voices?model='+encodeURIComponent(model)",
+		"m.state==='running'", "d.data||d.voices", "if(t.dataset.tab==='speech')loadVoices()",
+		`<select id="speech-format" aria-label="Audio format">`, "response_format:format",
+		"MediaSource.isTypeSupported(ct)", "function streamInto", "sb.appendBuffer(value)", "await r.blob()",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	for _, f := range []string{"mp3", "opus", "aac", "flac", "wav", "pcm"} {
+		if !strings.Contains(webUIHTML, `<option value="`+f+`"`) {
+			t.Errorf("format picker has no %s", f)
+		}
+	}
+}
+
 // The Transcription tab sends the chosen response format and language, and
 // offers Copy and Download for subtitle results only.
 func TestEmbeddedUITranscriptionOptions(t *testing.T) {

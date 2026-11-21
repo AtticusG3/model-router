@@ -253,7 +253,7 @@ client's original request body; a pipeline step can attach notes (such as a
 rewritten prompt) shown with it.
 
 A request with no `model` falls back by path: `match.path_prefix` first, then
-the `api_type` that path serves — `/v1/audio/speech` → `speech`,
+the `api_type` that path serves — `/v1/audio/speech` and `/v1/audio/voices` → `speech`,
 `/v1/audio/transcriptions` and `/v1/audio/translations` → `transcription`,
 `/v1/realtime` → `realtime`, `/v1/videos` → `video`,
 `/v1/audio/generations` → `audio_gen`, `/v1/images/*` and `/sdapi/v1/*` →
@@ -261,6 +261,39 @@ the `api_type` that path serves — `/v1/audio/speech` → `speech`,
 `path_default: true` stanza (or its only stanza) is used; several candidates and
 no default is a `400` that names them. Only one stanza per `api_type` may be
 `path_default`; `-check` rejects a second.
+
+### Speech
+
+An `api_type: speech` stanza serves `/v1/audio/speech` (and
+`/v1/audio/speech/batch`) and the voice routes under `/v1/audio/voices`, by
+`model` or the speech default. `response_format` (`mp3`, `opus`, `aac`, `flac`,
+`wav`, `pcm`) and the backend's `Content-Type` pass through, and a streamed
+answer reaches the client chunk by chunk. A model-less `GET /v1/audio/voices`
+merges the voices of the speech default and every other speech stanza already
+running, each tagged with its `model`; it never starts a second model. For a
+speech stanza `slots` caps the syntheses in the backend at once: a request over
+it waits up to `admit_timeout_seconds`, then gets `503` with `Retry-After`. The
+Playground Speech tab lists a running model's voices, offers every format, and
+plays MP3 or AAC as it arrives where the browser allows. Backend choice:
+`docs/research/tts-backends.md`. Example stanza (§6.1 there, command shortened):
+
+```yaml
+  - model_id: tts-clone
+    command: >
+      /opt/ai/venv-tts/bin/tts-serve /opt/ai/models/tts/voice-clone-base
+      --served-model-name tts-clone --host 127.0.0.1 --port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0"]
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 300
+    api_type: speech
+    capabilities: [audio_out]
+    match: {path_default: true}
+    health_check: /health
+    idle_ttl_seconds: 900
+    slots: 4
+    port: 5933
+```
 
 ### Transcription
 

@@ -182,6 +182,7 @@
       x.tabIndex=on?0:-1;
       $(x.getAttribute('aria-controls')).hidden=!on;
     });
+    if(t.dataset.tab==='speech')loadVoices();
   });
   pgTabs.addEventListener('keydown',ev=>{
     if(ev.key!=='ArrowLeft'&&ev.key!=='ArrowRight')return;
@@ -297,25 +298,79 @@
     }catch(e){fail(e.message)}
   };
 
-  // shortcut: speech uses the backend's default audio format and the voice is free text, add a format picker and a voice list if backends need them.
-  let speechURL;
+  // Voices come from the selected model's backend. Only a running model is
+  // asked (force after a generation has started it), so opening the tab never
+  // starts or evicts a model just to fill the list.
+  let voiceSeq=0;
+  window.loadVoices=async function(force){
+    const sel=$('speech-voice'),model=$('speech-model').value,prev=sel.value,seq=++voiceSeq;
+    const m=(status.models||[]).find(x=>x.id===model),running=force===true||(!!m&&m.state==='running');
+    let ids=[];
+    if(model&&running){
+      try{
+        const r=await fetch('/v1/audio/voices?model='+encodeURIComponent(model));
+        if(r.ok){const d=await r.json(),list=Array.isArray(d)?d:(d.data||d.voices||[]);ids=[...new Set(list.map(v=>typeof v==='string'?v:v&&(v.id||v.voice_id||v.name)).filter(Boolean))]}
+      }catch(e){}
+    }
+    if(seq!==voiceSeq)return;
+    sel.innerHTML='<option value="">'+(model&&!running?'Backend default (voices list once the model runs)':'Backend default')+'</option>'+ids.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join('');
+    if(ids.includes(prev))sel.value=prev;
+  };
+
+  // streamInto feeds a response body into a MediaSource as chunks arrive, and
+  // returns the whole body as a Blob for the download link.
+  async function streamInto(ms,body,ct){
+    await new Promise(res=>ms.addEventListener('sourceopen',res,{once:true}));
+    const sb=ms.addSourceBuffer(ct),reader=body.getReader(),parts=[];
+    const idle=()=>sb.updating?new Promise(res=>sb.addEventListener('updateend',res,{once:true})):null;
+    for(;;){
+      const {done,value}=await reader.read();
+      if(done)break;
+      parts.push(value);
+      await idle();
+      sb.appendBuffer(value);
+    }
+    await idle();
+    ms.endOfStream();
+    return new Blob(parts,{type:ct});
+  }
+
+  // Audio plays as it arrives through MediaSource when the browser can decode
+  // the returned type that way (usually MP3 and AAC); anything else plays once
+  // the whole file is in.
+  let speechURLs=[];
   window.sendSpeech=async function(){
-    const out=$('speech-output'),model=$('speech-model').value,input=$('speech-input').value.trim(),voice=$('speech-voice').value.trim();
+    const out=$('speech-output'),model=$('speech-model').value,input=$('speech-input').value.trim(),voice=$('speech-voice').value,format=$('speech-format').value;
     const fail=m=>{out.className='output error';out.textContent=m};
     if(!model)return fail('No speech model is available. Add a catalog entry with api_type: speech.');
     if(!input)return fail('Enter some text to speak.');
     out.className='output muted';out.textContent='Generating audio…';
     try{
-      const body={model,input};if(voice)body.voice=voice;
+      const body={model,input,response_format:format};if(voice)body.voice=voice;
       const r=await fetch('/v1/audio/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!r.ok){const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){d=null}const e=d&&d.error;throw new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))}
-      const blob=await r.blob();
+      speechURLs.forEach(u=>URL.revokeObjectURL(u));speechURLs=[];
+      const ct=(r.headers.get('Content-Type')||'').split(';')[0].trim();
+      const streamed=!!(r.body&&window.MediaSource&&ct&&MediaSource.isTypeSupported(ct));
+      let blob;
+      if(streamed){
+        const ms=new MediaSource(),src=URL.createObjectURL(ms);speechURLs.push(src);
+        out.className='output';
+        out.innerHTML='<audio controls autoplay aria-label="Generated speech" src="'+esc(src)+'" style="width:100%"></audio><p id="speech-dl" class="subtle">Playing as it arrives…</p>';
+        blob=await streamInto(ms,r.body,ct);
+      }else{
+        blob=await r.blob();
+      }
       if(!blob.size)throw new Error('The response had no audio.');
-      if(speechURL)URL.revokeObjectURL(speechURL);
-      speechURL=URL.createObjectURL(blob);
-      const ext=(blob.type.split('/')[1]||'mpeg').split(';')[0].replace('mpeg','mp3').replace('x-wav','wav');
-      out.className='output';
-      out.innerHTML='<audio controls src="'+esc(speechURL)+'" style="width:100%"></audio><p><a href="'+esc(speechURL)+'" download="speech.'+esc(ext)+'">Download audio</a></p>';
+      const url=URL.createObjectURL(blob);speechURLs.push(url);
+      const link='<a href="'+esc(url)+'" download="speech.'+esc(format)+'">Download audio</a>';
+      if(streamed){
+        $('speech-dl').innerHTML=link;
+      }else{
+        out.className='output';
+        out.innerHTML=(format==='pcm'?'<p class="subtle">Raw PCM has no header, so the browser cannot play it. Download it instead.</p>':'<audio controls aria-label="Generated speech" src="'+esc(url)+'" style="width:100%"></audio>')+'<p>'+link+'</p>';
+      }
+      loadVoices(true);
     }catch(e){fail(e.message)}
   };
 

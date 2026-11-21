@@ -11,6 +11,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"slices"
 	"strings"
@@ -18,12 +19,13 @@ import (
 	"model-router/internal/config"
 )
 
-// applyFilters strips then sets top-level keys on a JSON object body, or form
-// fields on a urlencoded or multipart body (file parts are never touched).
-// Later maps in sets win. A key ending in "?" is set only if the client's body
-// (after stripping) omitted it. Any other body is left untouched.
-func applyFilters(req *http.Request, strip []string, sets ...map[string]any) error {
-	n := len(strip)
+// applyFilters renames, strips then sets top-level keys on a JSON object body,
+// or form fields on a urlencoded or multipart body (a rename may move a file
+// part; strip and set never touch one). Later maps in sets win. A key ending
+// in "?" is set only if the client's body (after stripping) omitted it. Any
+// other body is left untouched.
+func applyFilters(req *http.Request, rename map[string]string, strip []string, sets ...map[string]any) error {
+	n := len(rename) + len(strip)
 	for _, set := range sets {
 		n += len(set)
 	}
@@ -34,7 +36,7 @@ func applyFilters(req *http.Request, strip []string, sets ...map[string]any) err
 		return nil
 	}
 	if !strings.Contains(req.Header.Get("Content-Type"), "application/json") {
-		e, err := newFormEdit(strip, sets...)
+		e, err := newFormEdit(rename, strip, sets...)
 		if err != nil {
 			return err
 		}
@@ -50,6 +52,24 @@ func applyFilters(req *http.Request, strip []string, sets ...map[string]any) err
 	if json.Unmarshal(raw, &obj) != nil || obj == nil {
 		return nil
 	}
+	// Build the renames from the original body before deleting anything, so a
+	// chain (a→b, b→c) or a swap gives one result whatever order the map is
+	// walked in. An identity rename leaves the field where it is.
+	moved := map[string]json.RawMessage{}
+	var drop []string
+	for from, to := range rename {
+		if from == to {
+			continue
+		}
+		if v, ok := obj[from]; ok {
+			moved[to] = v
+			drop = append(drop, from)
+		}
+	}
+	for _, k := range drop {
+		delete(obj, k)
+	}
+	maps.Copy(obj, moved)
 	for _, k := range strip {
 		delete(obj, k)
 	}
@@ -79,11 +99,13 @@ func applyFilters(req *http.Request, strip []string, sets ...map[string]any) err
 	return nil
 }
 
-// formEdit is a set of form field changes: strip drops fields, set gives the
-// value each named field ends up with.
+// formEdit is a set of form field changes: rename moves a field (or file part)
+// to the backend's name, strip drops fields, set gives the value each named
+// field ends up with.
 type formEdit struct {
-	strip map[string]bool
-	set   map[string]*formSet
+	rename map[string]string
+	strip  map[string]bool
+	set    map[string]*formSet
 }
 
 // formSet is one field to set: force replaces the client's value, fallback (a
@@ -105,8 +127,8 @@ func (s *formSet) value(present bool) (v string, ok bool) {
 
 // newFormEdit turns filters into a formEdit with the same precedence as the
 // JSON path: strip first, later sets win, "?" keys yield to the client.
-func newFormEdit(strip []string, sets ...map[string]any) (formEdit, error) {
-	e := formEdit{strip: map[string]bool{}, set: map[string]*formSet{}}
+func newFormEdit(rename map[string]string, strip []string, sets ...map[string]any) (formEdit, error) {
+	e := formEdit{rename: rename, strip: map[string]bool{}, set: map[string]*formSet{}}
 	for _, k := range strip {
 		e.strip[k] = true
 	}
@@ -158,6 +180,26 @@ func editForm(req *http.Request, e formEdit) error {
 		if err != nil {
 			req.Body = io.NopCloser(bytes.NewReader(raw)) // not a form we can edit: forward as sent
 			return nil
+		}
+		// Same order as the JSON branch: build from the original values, then
+		// delete the sources, so a rename chain or swap is stable and an
+		// identity rename keeps the field.
+		moved := url.Values{}
+		var drop []string
+		for from, to := range e.rename {
+			if from == to {
+				continue
+			}
+			if vals.Has(from) {
+				moved[to] = vals[from]
+				drop = append(drop, from)
+			}
+		}
+		for _, k := range drop {
+			vals.Del(k)
+		}
+		for k, v := range moved {
+			vals[k] = v
 		}
 		for k := range e.strip {
 			vals.Del(k)
@@ -237,6 +279,13 @@ func copyParts(mr *multipart.Reader, mw *multipart.Writer, e formEdit) error {
 			return err
 		}
 		name, value, replace := p.FormName(), "", false
+		hdr := p.Header
+		if to, ok := e.rename[name]; ok {
+			if hdr, err = renamePart(hdr, to); err != nil {
+				return err
+			}
+			name = to
+		}
 		if p.FileName() == "" {
 			if e.strip[name] {
 				continue
@@ -249,7 +298,7 @@ func copyParts(mr *multipart.Reader, mw *multipart.Writer, e formEdit) error {
 				seen[name] = true
 			}
 		}
-		w, err := mw.CreatePart(p.Header)
+		w, err := mw.CreatePart(hdr)
 		if err != nil {
 			return err
 		}
@@ -273,12 +322,25 @@ func copyParts(mr *multipart.Reader, mw *multipart.Writer, e formEdit) error {
 	return mw.Close()
 }
 
+// renamePart returns a copy of a part header whose Content-Disposition names
+// the field to; the filename and other parameters are kept.
+func renamePart(h textproto.MIMEHeader, to string) (textproto.MIMEHeader, error) {
+	disp, params, err := mime.ParseMediaType(h.Get("Content-Disposition"))
+	if err != nil {
+		return nil, err
+	}
+	params["name"] = to
+	out := maps.Clone(h)
+	out.Set("Content-Disposition", mime.FormatMediaType(disp, params))
+	return out, nil
+}
+
 // filterLocal applies the stanza's filters for the id the client used (a
 // setParamsByID alias, or the stanza id / empty).
 func filterLocal(req *http.Request, s *config.Stanza) error {
 	requested, _ := req.Context().Value(requestedIDKey{}).(string)
 	f := &s.Filters
-	return applyFilters(req, f.StripParams, f.SetParams, f.SetParamsByID[requested])
+	return applyFilters(req, f.RenameParams, f.StripParams, f.SetParams, f.SetParamsByID[requested])
 }
 
 // requestedIDKey carries the model id the client named, so a setParamsByID
