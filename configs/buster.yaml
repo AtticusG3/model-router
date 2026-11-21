@@ -41,7 +41,10 @@
 
 listen: 0.0.0.0:18080
 start_port: 5901
-reserved_ports: [8081, 6333, 18095, 18096, 18097, 8082, 18099, 18100]
+reserved_ports: [8081, 6333, 18095, 18096, 18097, 8082, 18099, 18100,
+                 5930, 5931, 5932, 5933, 5934, 5935, 5936, 5937, 5938,
+                 5939, 5940, 5941, 5942, 5943, 5944, 5945, 5946, 5947,
+                 5948, 5949]
 
 telemetry:
   poll_seconds: 2
@@ -49,13 +52,6 @@ telemetry:
   peer_stale_seconds: 15
 
 preload: [qwen3-embedding-4b, qwen38-flash-next]
-
-# Catalog metadata from Hugging Face, ModelScope as the fallback; off until
-# switched on. Stanzas name their repo with hf_repo:. See SPEC.md "Catalog metadata".
-# catalog:
-#   hub: both
-#   hub_token_env: HF_TOKEN
-#   cache_file: /var/lib/model-router/hub-metadata.json
 
 stanzas:
   - model_id: qwen38-flash-next
@@ -89,7 +85,6 @@ stanzas:
 
   - model_id: qwen3-0.6b-instruct
     name: "Qwen3 0.6B Instruct (intent)"
-    hf_repo: Qwen/Qwen3-0.6B-GGUF
     aliases: [intent-model, intent-router]
     command: >
       /opt/ai/bin/llama-server
@@ -115,7 +110,6 @@ stanzas:
 
   - model_id: qwen3-embedding-4b
     name: "Qwen3 Embedding 4B"
-    hf_repo: Qwen/Qwen3-Embedding-4B-GGUF
     aliases: [embed-pool]
     command: >
       /opt/ai/bin/llama-server
@@ -282,7 +276,6 @@ stanzas:
     match: {path_prefix: /sdapi/v1}
     health_check: /health
     idle_ttl_seconds: 300
-    peer_spill: on_failure
     unlisted: false
     port: 5919
 
@@ -350,15 +343,74 @@ stanzas:
     unlisted: false
     port: 5925
 
+  - model_id: fibo-2.0-edit-turbo
+    name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
+    aliases: [fibo-2.0, fibo-edit-turbo]
+    command: >
+      /opt/ai/bin/sd-router-shim {port} --
+      /home/kevyn/infra/stable-diffusion.cpp-fibo/build-sm86/bin/sd-server
+      --diffusion-model /home/kevyn/models/fibo-2.0/fibo2_edit_turbo_int8_convrot.safetensors
+      --llm /home/kevyn/models/flux3-klein/Qwen3VL-4B-Instruct-Q4_K_M.gguf
+      --llm_vision /home/kevyn/models/fibo-2.0/mmproj-Qwen3VL-4B-Instruct-F16.gguf
+      --vae /home/kevyn/models/flux3-klein/flux2-vae.safetensors
+      --offload-to-cpu
+      --sampling-method euler
+      --steps 4
+      --cfg-scale 1.0
+      --seed -1
+      --threads 12
+      -W 1024 -H 1024
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
+    # Measured 20 Nov 2026 on GPU0 (3090) at 1024x1024, 4 steps, with --offload-to-cpu:
+    # peak 16246 MiB including ~6154 MiB residents (embed + vision + intent). Model itself ~10092 MiB.
+    vram_mb: 12000
+    device: 0
+    spin_up_seconds: 120
+    api_type: image
+    match: {path_prefix: /sdapi/v1}
+    health_check: /health
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5926
+
+
+  # --- multimodal backends (epic #64) -------------------------------------
+  # #74 transcription: whisper.cpp whisper-server, docs/research/stt-backends.md.
+  # The binary is built for sm_70 + sm_86. The two path flags move the OpenAI
+  # routes onto the paths the router proxies; without them the backend answers
+  # 404 for /v1/audio/transcriptions. --request-path also moves /health to
+  # /v1/audio/health, which is what health_check points at (503 until the
+  # weights are in). The backend ignores the multipart "model" field, so the
+  # router's match resolves the stanza and the value is otherwise unused.
+  - model_id: whisper-large-v3-turbo
+    name: "Whisper large-v3 Turbo (ggml Q5_0, STT)"
+    aliases: [whisper-1, stt, transcription]
+    command: >
+      /opt/ai/bin/whisper-server
+      --model /opt/ai/models/stt/ggml-large-v3-turbo-q5_0.bin
+      --vad-model /opt/ai/models/stt/ggml-silero-v6.2.0.bin
+      --host 127.0.0.1 --port {port}
+      --request-path /v1/audio --inference-path /transcriptions
+      --language auto --convert --vad --flash-attn --threads 8
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    # Measured 21 Nov 2026 on GPU0: 4943 MiB residents before load, 5988 loaded
+    # idle, 6048 peak mid-inference (30 min file) => 1105 MiB process footprint.
+    vram_mb: 1200
+    device: 0
+    spin_up_seconds: 60
+    api_type: transcription
+    match: {body_field: model}
+    health_check: /v1/audio/health
+    idle_ttl_seconds: 300
+    slots: 1
+    unlisted: false
+    port: 5930
+
 peers:
-  - name: digger
-    kind: router
-    base_url: http://192.168.1.36:8082
-    models: [qwen3-0.6b-instruct, krea-2-turbo, z-anime-turbo, ideogram4]
   - name: gareths-homelab
     kind: router
     base_url: http://100.89.49.44:8081
-    models: [qwen2.5-1.5b-instruct, qwen3.6-35b-a3b-genesis-hermes, agents-a1-mini, krea-2-turbo, z-anime-turbo, ideogram4]
+    models: [qwen2.5-1.5b-instruct, qwen3.6-35b-a3b-genesis-hermes, agents-a1-mini, krea-2-turbo, z-anime-turbo]
   - name: nomad
     kind: router
     base_url: http://192.168.1.202:8081
