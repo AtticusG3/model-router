@@ -2270,13 +2270,17 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		g.FreeIfIdleEvictedMB = max(idle-head, 0)
 		g.FreeMB = max(g.FreeMB-head, 0)
 	}
-	return &Telemetry{
+	t := &Telemetry{
 		Node:         r.node,
 		GPUs:         gpus,
 		LoadedModels: loaded,
 		Models:       models,
 		Timestamp:    now.Unix(),
 	}
+	if r.activity != nil {
+		t.InProgress, t.Recent = r.activity.InProgress(), r.activity.Recent()
+	}
+	return t
 }
 
 // BackendMetric is one running backend's /metrics scrape for the operator UI.

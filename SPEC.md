@@ -834,6 +834,17 @@ The snapshot a node publishes:
 - Each running instance: `model_id`, instance key when it is not instance 0,
   `fresh` or `stale`, VRAM budget, GPU, slot count and in-flight count. A
   `device: cpu` instance has no GPU entry (`gpu: none`).
+- `in_progress`: up to 50 logged requests still running (the rows the
+  Activity log will write), newest first: `id` (the Activity id the row will
+  get), `model`, `target`, `method`, `path`, `started`, `from_peer` (the
+  incoming `X-Model-Router-Peer`), `ttft_ms` and streamed `tokens` once the
+  first token is out, and the first 120 characters of the prompt. No bodies.
+- `recent`: the last 20 finished Activity rows as summaries (`id`, `model`,
+  `path`, `status`, `duration_ms`, `tokens`, `target`, `from_peer`), so a
+  peer can see a request it saw running finish.
+
+Node name plus `id` keys a request across the mesh. Both lists are left out
+when empty, and older telemetry without them still parses.
 
 Candidate selection treats a card as empty enough to try when idle-evicted
 free is within 2 GB of the card total. nvidia-smi never reports a fully idle
@@ -865,7 +876,7 @@ line lists each peer's skip reason (`cooling`, `telemetry stale`,
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
 | `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
-| `GET /_router/activity`, `GET /_router/activity/{id}`, `GET /_router/activity/{id}/thumb`, `GET /_router/activity/{id}/audio` | In-memory generation log, request/response captures, and the image thumbnail or speech audio kept for the row (404 when nothing was kept). |
+| `GET /_router/activity`, `GET /_router/activity/{id}`, `GET /_router/activity/{id}/thumb`, `GET /_router/activity/{id}/audio` | In-memory generation log (`entries`, plus the requests still running as `in_progress`, as in telemetry), request/response captures, and the image thumbnail or speech audio kept for the row (404 when nothing was kept). |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |
 | `GET /health` | `OK`. |

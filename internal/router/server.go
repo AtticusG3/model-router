@@ -187,7 +187,11 @@ func handleActivity(r *Router) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		writeJSON(w, map[string]any{"entries": r.Activity().List()})
+		// Running before finished: a request ending in between then shows in
+		// both lists under one id, never in neither.
+		a := r.Activity()
+		running := a.InProgress()
+		writeJSON(w, map[string]any{"entries": a.List(), "in_progress": running})
 	}
 }
 
