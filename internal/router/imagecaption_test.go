@@ -1,6 +1,7 @@
 package router
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -104,7 +105,7 @@ type captionRig struct {
 
 // newCaptionRig builds the rig. enhancer is the stanza's enhancer map, "" for
 // the default model; load starts enhancer-a first.
-func newCaptionRig(t *testing.T, fe *fakeEnhancer, enhancer string, load bool) *captionRig {
+func newCaptionRig(t *testing.T, fe *fakeEnhancer, enhancer string, load bool, peers ...string) *captionRig {
 	t.Helper()
 	c := &captionRig{}
 	reply := func(w http.ResponseWriter, req *http.Request) {
@@ -148,7 +149,8 @@ stanzas:
     vram_mb: 0
     spin_up_seconds: 5
     port: %d
-`, enhancer, img.Listener.Addr().(*net.TCPAddr).Port, chat.Listener.Addr().(*net.TCPAddr).Port)))
+%s
+`, enhancer, img.Listener.Addr().(*net.TCPAddr).Port, chat.Listener.Addr().(*net.TCPAddr).Port, strings.Join(peers, "\n"))))
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -400,6 +402,62 @@ func TestCaptionPeerRequestIsEnhancedHere(t *testing.T) {
 	}
 }
 
+func TestCaptionEnhancerThatStopsAfterTheCheckIsNotStarted(t *testing.T) {
+	fe := &fakeEnhancer{content: testCaption}
+	// A router peer that lists the enhancer without having it loaded, and a
+	// paid upstream offering the same id: a spill must reach neither.
+	alpha := newWalkPeer(t, http.StatusOK, "")
+	paid := newWalkPeer(t, http.StatusOK, "")
+	c := newCaptionRig(t, fe, "", true, `peers:
+  - name: alpha
+    kind: router
+    base_url: http://127.0.0.1:9
+    models: [enhancer-a]
+  - name: paid
+    kind: openai
+    base_url: http://127.0.0.1:9
+    models: [enhancer-a]`)
+	c.r.cfg().Peer("alpha").BaseURL = alpha.srv.URL
+	c.r.cfg().Peer("paid").BaseURL = paid.srv.URL
+	c.r.peers.Set("alpha", &Telemetry{Node: "alpha"})
+	if got := c.r.runningEnhancer("enhancer-a"); got != "enhancer-a" {
+		t.Fatalf("enhancer check = %q, want enhancer-a", got)
+	}
+	// The model stops, as an eviction or unload leaves it, before the chat
+	// request reaches the serving path.
+	if err := c.r.Unload("enhancer-a"); err != nil {
+		t.Fatalf("unload: %v", err)
+	}
+	ctx, done := enhancerContext(context.Background(), time.Second)
+	defer done()
+	if ctx.Value(noLoadKey{}) != true {
+		t.Fatal("enhancer context is not marked no-load")
+	}
+	chat := func(ctx context.Context) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(ctx, http.MethodPost, "/v1/chat/completions",
+			strings.NewReader(`{"model":"enhancer-a","messages":[{"role":"user","content":"x"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		c.r.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := chat(ctx); rec.Code == http.StatusOK || modelState(c.r, "enhancer-a") == string(StateRunning) {
+		t.Fatalf("stopped enhancer served: code %d, state %q", rec.Code, modelState(c.r, "enhancer-a"))
+	}
+	// The local failure spilled: the walk ran and left both peers out.
+	if logs := strings.Join(c.r.logger.RecentMesh(0), "\n"); !strings.Contains(logs, "peer walk enhancer-a: no peer chosen") {
+		t.Fatalf("mesh log = %q, want the spill to skip both peers", logs)
+	}
+	if alpha.loads.Load() != 0 || alpha.chats.Load() != 0 || paid.loads.Load() != 0 || paid.chats.Load() != 0 {
+		t.Fatalf("no-load request reached peers: alpha loads %d chats %d, paid loads %d chats %d",
+			alpha.loads.Load(), alpha.chats.Load(), paid.loads.Load(), paid.chats.Load())
+	}
+	// The same request without the flag loads it, so the flag is what held it.
+	if rec := chat(context.Background()); rec.Code != http.StatusOK {
+		t.Fatalf("plain chat request = %d, want 200", rec.Code)
+	}
+}
+
 func TestCaptionBBoxesYFirstInSpecKeyOrder(t *testing.T) {
 	reply := `{"high_level_description":"a car parked under string lights","compositional_deconstruction":{"background":"a night car park","elements":[` +
 		`{"desc":"asphalt ground","bbox":[0,760,1000,1000],"type":"obj","extra":1,"text":"dropped"},` +
@@ -449,7 +507,7 @@ func TestCaptionInvalidReplies(t *testing.T) {
 	}
 }
 
-func TestRunningEnhancerUsesOnlyRunningOrFreshPeerModels(t *testing.T) {
+func TestRunningEnhancerUsesOnlyRunningOrLoadedModels(t *testing.T) {
 	cfg, err := config.Parse([]byte(`
 start_port: 5900
 stanzas:
@@ -461,6 +519,10 @@ peers:
     kind: router
     base_url: http://127.0.0.1:1
     models: [peer-embed, peer-chat]
+  - name: paid
+    kind: openai
+    base_url: http://127.0.0.1:2
+    models: [paid-chat]
 `))
 	if err != nil {
 		t.Fatalf("config: %v", err)
@@ -472,12 +534,27 @@ peers:
 	if got := r.runningEnhancer("peer-chat"); got != "" {
 		t.Fatalf("model of a peer with no fresh telemetry picked: %q", got)
 	}
+	// The peer lists the model, but its telemetry says it is not loaded.
 	r.peers.Set("alpha", &Telemetry{Node: "alpha"})
+	if got := r.runningEnhancer("peer-chat"); got != "" {
+		t.Fatalf("listed but unloaded peer model picked: %q", got)
+	}
+	if got := r.runningEnhancer(""); got != "" {
+		t.Fatalf("default enhancer = %q, want none", got)
+	}
+	// Another node has only an embedding model loaded, and the paid upstream
+	// has no loaded-model telemetry to trust.
+	r.peers.Set("alpha", &Telemetry{Node: "alpha", LoadedModels: []LoadedModel{{ID: "peer-embed"}}})
+	r.peers.Set("paid", &Telemetry{Node: "paid", LoadedModels: []LoadedModel{{ID: "paid-chat"}}})
+	if got := r.runningEnhancer(""); got != "" {
+		t.Fatalf("default enhancer = %q, want none", got)
+	}
+	r.peers.Set("alpha", &Telemetry{Node: "alpha", LoadedModels: []LoadedModel{{ID: "peer-chat"}}})
 	if got := r.runningEnhancer("peer-chat"); got != "peer-chat" {
-		t.Fatalf("fresh peer model = %q, want peer-chat", got)
+		t.Fatalf("loaded peer model = %q, want peer-chat", got)
 	}
 	if got := r.runningEnhancer(""); got != "peer-chat" {
-		t.Fatalf("default enhancer = %q, want the first running non-embedding chat model", got)
+		t.Fatalf("default enhancer = %q, want the first loaded non-embedding chat model", got)
 	}
 }
 

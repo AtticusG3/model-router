@@ -287,6 +287,11 @@ func (r *Router) load(ctx context.Context, key string, wait, evict bool) (int, e
 		if m.State() == StateRunning {
 			return m.gpuIndex(), nil
 		}
+		// A caller that must not cold-load its model (the caption step) gets an
+		// error here rather than a start that could evict a neighbour.
+		if _, noLoad := ctx.Value(noLoadKey{}).(bool); noLoad {
+			return -1, fmt.Errorf("%s is not running", key)
+		}
 		// Inside a start cooldown nothing is spawned and nothing is evicted.
 		if err := r.startRefused(s.ModelID); err != nil {
 			return -1, err
@@ -1505,6 +1510,11 @@ func localStartCannotServe(err error) bool {
 // so time spent waiting on peers is not given again to the local admission wait.
 type admitDeadlineKey struct{}
 
+// noLoadKey marks an in-process router request that may only use a model that
+// is already running. The serving path loads a stopped local model on demand
+// otherwise.
+type noLoadKey struct{}
+
 // spillRetryInterval is how often a request that local VRAM cannot take asks
 // the peers again. A var so tests can shorten it.
 var spillRetryInterval = 3 * time.Second
@@ -1661,6 +1671,7 @@ func (a *attemptWriter) Flush() {
 // then any peer that advertises the same model_id. Incoming peer-proxied
 // requests do not bounce (X-Model-Router-Peer).
 func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLocal string) bool {
+	_, noLoad := req.Context().Value(noLoadKey{}).(bool)
 	for _, raw := range r.spillTargets(failedLocal) {
 		ref := resolveRef(raw, r.cfg())
 		switch {
@@ -1672,6 +1683,9 @@ func (r *Router) serveSpill(w http.ResponseWriter, req *http.Request, failedLoca
 				return true
 			}
 		case ref.Peer != "":
+			if noLoad && (r.peerIsOpenAI(ref.Peer) || !r.peerLoads(ref.Peer, ref.PeerID)) {
+				continue
+			}
 			if !r.peerEligible(ref.Peer, ref.PeerID) {
 				continue
 			}
@@ -1732,6 +1746,18 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 		} else {
 			ranked = append([]Target{{Peer: first, PeerID: modelID}}, ranked...)
 		}
+	}
+	// A no-load request may only reach a peer that already serves the model:
+	// a paid upstream would receive the prompt, and a router peer that only
+	// lists the model would be asked to cold-load it.
+	if _, noLoad := req.Context().Value(noLoadKey{}).(bool); noLoad {
+		kept := ranked[:0]
+		for _, t := range ranked {
+			if !r.peerIsOpenAI(t.Peer) && r.peerLoads(t.Peer, modelID) {
+				kept = append(kept, t)
+			}
+		}
+		ranked = kept
 	}
 	wantCaption, _ := r.localImageCaption(modelID)
 	for _, t := range ranked {
