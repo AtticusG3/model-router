@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -16,7 +17,8 @@ import (
 // for requests from local clients and for requests proxied in from peers.
 type imageStep struct {
 	// Rewrite runs before the request reaches the backend and may replace
-	// req.Body. nil is a no-op.
+	// req.Body. An imageReject error answers the client 400; any other error is
+	// a body read fault. nil is a no-op.
 	Rewrite func(req *http.Request, notes *imageNotes) error
 	// After inspects the backend reply. It may add headers to h and change req
 	// headers or the prepared body for a retry; true asks for another attempt.
@@ -179,7 +181,16 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 			continue
 		}
 		if err := st.Rewrite(req, notes); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			var rej imageReject
+			if !errors.As(err, &rej) {
+				r.writeBodyError(w, req, err)
+				return
+			}
+			// The sd-server shim's header name, so existing clients and logs still match.
+			w.Header().Set("X-SD-Shim", "reject")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": string(rej)})
 			return
 		}
 	}

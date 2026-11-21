@@ -60,8 +60,7 @@ type Router struct {
 	httpc    *http.Client
 	activity *ActivityLog
 	metrics  *Metrics
-	// imageSteps builds the steps a stanza's image_pipeline runs; empty until a
-	// build adds them.
+	// imageSteps builds the steps a stanza's image_pipeline runs; tests swap it.
 	imageSteps func(*config.Stanza) []imageStep
 
 	// voiceMu serialises voice library writes so two uploads of one id cannot

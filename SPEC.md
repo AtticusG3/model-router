@@ -209,12 +209,20 @@ uses. `sd-server` and `ideogram4` are the presets; an unknown preset, or
 `image_pipeline` on a stanza that is not `api_type: image`, fails load with a
 message naming the valid values.
 
-The blocked-card retry ships in this build, and so does the LoRA warm-up:
-the router warms sd-server's LoRA cache when the backend becomes ready and
-before a request whose body names a LoRA, and retries one `invalid lora path`
-reply after warming again. The other preset steps parse and validate but
-change no request yet, so caption enhancement and the img2img body checks
-still need the shim until they land.
+Every preset runs the img2img body checks on `POST /sdapi/v1/img2img` with a
+JSON object body: a missing or empty `init_images`, or an `init_images[0]`
+that is not base64 PNG, JPEG or WEBP (a data-URL prefix is allowed), gets 400
+`{"error": "..."}` with `X-SD-Shim: reject` and never reaches the backend. A
+data-URL first init is sent as plain base64, and an absent or empty
+`extra_images` gets a copy of it. Other bodies and paths pass through.
+
+Every `image_pipeline` stanza also runs the LoRA warm-up: the router warms
+sd-server's LoRA cache when the backend becomes ready and before a request
+whose body names a LoRA, and retries one `invalid lora path` reply after
+warming again. A stanza with `retry_blocked` resends a blocked `txt2img` reply
+with a new random seed up to that many times, and `X-SD-Shim-Blocked-Retries`
+says how many retries ran. Caption enhancement still needs the shim until that
+step lands.
 
 A bare sd-server stanza needs no shim for LoRA requests: run it with
 `--listen-ip 127.0.0.1 --listen-port {port}` and `health_check: /v1/models`
