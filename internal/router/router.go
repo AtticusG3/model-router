@@ -32,6 +32,12 @@ type Router struct {
 	peers  *PeerCache
 	node   string
 
+	// disc is the discovered peer set, merged beside the immutable config
+	// peers. discMiss counts consecutive scans since a peer last answered.
+	discMu   sync.Mutex
+	disc     map[string]*config.Peer
+	discMiss map[string]int
+
 	applyMu   sync.Mutex // one Apply at a time
 	mu        sync.Mutex
 	managed   map[string]*Managed  // local stanza id -> supervisor
@@ -78,6 +84,8 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		logger:          logger,
 		ledger:          ledger,
 		peers:           NewPeerCache(stale),
+		disc:            map[string]*config.Peer{},
+		discMiss:        map[string]int{},
 		node:            node,
 		managed:         map[string]*Managed{},
 		occupancy:       map[string]int{},
@@ -119,6 +127,118 @@ func (r *Router) Ledger() *Ledger { return r.ledger }
 
 // Peers returns the peer cache (used by the peer syncer and status).
 func (r *Router) Peers() *PeerCache { return r.peers }
+
+// PeerList is every peer in play: configured peers first, in config order,
+// then discovered peers sorted by node name. A configured peer shadows a
+// discovered peer with the same name.
+func (r *Router) PeerList() []*config.Peer {
+	cfg := r.cfg()
+	out := make([]*config.Peer, 0, len(cfg.Peers))
+	configured := make(map[string]bool, len(cfg.Peers))
+	for i := range cfg.Peers {
+		out = append(out, &cfg.Peers[i])
+		configured[cfg.Peers[i].Name] = true
+	}
+	r.discMu.Lock()
+	names := make([]string, 0, len(r.disc))
+	for name := range r.disc {
+		if !configured[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out = append(out, r.disc[name])
+	}
+	r.discMu.Unlock()
+	return out
+}
+
+// peerByName returns a configured or discovered peer, or nil.
+func (r *Router) peerByName(name string) *config.Peer {
+	if p := r.cfg().Peer(name); p != nil {
+		return p
+	}
+	r.discMu.Lock()
+	defer r.discMu.Unlock()
+	return r.disc[name]
+}
+
+// DiscoveredPeers returns the discovered peer names, sorted.
+func (r *Router) DiscoveredPeers() []string {
+	r.discMu.Lock()
+	defer r.discMu.Unlock()
+	out := make([]string, 0, len(r.disc))
+	for name := range r.disc {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// discoveredResult is one scanned node: the peer to advertise and the
+// telemetry the probe returned.
+type discoveredResult struct {
+	peer      *config.Peer
+	telemetry *Telemetry
+}
+
+// applyDiscovery merges one scan's findings into the runtime set. Peers found
+// before are refreshed; a discovered peer absent for discoveryDropAfter scans
+// is dropped. configured lists nodes a configured peer already owns; those are
+// never discovered and shadow any earlier detected copy.
+func (r *Router) applyDiscovery(found map[string]discoveredResult, configured map[string]bool) (added, dropped int) {
+	r.discMu.Lock()
+	defer r.discMu.Unlock()
+	for name := range configured {
+		if _, ok := r.disc[name]; ok {
+			delete(r.disc, name)
+			delete(r.discMiss, name)
+			r.peers.Delete(name)
+		}
+	}
+	for name, res := range found {
+		if _, ok := r.disc[name]; !ok {
+			added++
+			r.logger.Meshf("discovered peer %s at %s", name, res.peer.BaseURL)
+		}
+		r.disc[name] = res.peer
+		r.discMiss[name] = 0
+		if res.telemetry != nil {
+			r.peers.Set(name, res.telemetry)
+		}
+	}
+	for name := range r.disc {
+		if _, ok := found[name]; ok {
+			continue
+		}
+		r.discMiss[name]++
+		if r.discMiss[name] < discoveryDropAfter {
+			continue
+		}
+		delete(r.disc, name)
+		delete(r.discMiss, name)
+		r.peers.Delete(name)
+		dropped++
+		r.logger.Meshf("dropped discovered peer %s (stale)", name)
+	}
+	return added, dropped
+}
+
+// clearDiscovery drops every discovered peer, e.g. when a reload turns
+// discovery off. Configured peers are untouched.
+func (r *Router) clearDiscovery() (dropped int) {
+	r.discMu.Lock()
+	defer r.discMu.Unlock()
+	for name := range r.disc {
+		delete(r.disc, name)
+		delete(r.discMiss, name)
+		r.peers.Delete(name)
+		dropped++
+		r.logger.Meshf("dropped discovered peer %s (discovery off)", name)
+	}
+	return dropped
+}
 
 // Load ensures the given local stanza (or "model#n" instance) is running.
 // Fail-fast: preload and tests use this. Request paths use load(..., true)
@@ -753,7 +873,7 @@ func (r *Router) resolveTarget(ref ModelRef) (Target, error) {
 	case ref.Pool != "":
 		return r.resolvePool(ref.Pool)
 	case ref.Peer != "":
-		p := r.cfg().Peer(ref.Peer)
+		p := r.peerByName(ref.Peer)
 		if p == nil {
 			return Target{}, fmt.Errorf("unknown peer %q", ref.Peer)
 		}
@@ -793,9 +913,7 @@ func (r *Router) rankPeers(modelID string, slotSpill bool) (ranked []Target, soo
 	}
 	var ready, admit, wait, full []rankedPeer
 	wantCaption, allowFallback := r.localImageCaption(modelID)
-	cfg := r.cfg()
-	for i := range cfg.Peers {
-		p := &cfg.Peers[i]
+	for _, p := range r.PeerList() {
 		if !r.peerHasModel(p, modelID) {
 			continue
 		}
@@ -886,13 +1004,23 @@ func parseRetryAfter(v string) time.Duration {
 	return 0
 }
 
-func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
-	for _, m := range p.Models {
-		if m == modelID {
-			return true
+// peerModels is the models a peer serves. A discovered peer's scan-time Models
+// go stale between scans; the syncer refreshes its cache every few seconds,
+// so read the catalog there. Configured peers keep the model list the operator
+// wrote.
+func (r *Router) peerModels(p *config.Peer) []string {
+	if r.cfg().Peer(p.Name) == nil {
+		if t, _, _ := r.peers.Entry(p.Name); t != nil {
+			if models := modelsFrom(t); len(models) > 0 {
+				return models
+			}
 		}
 	}
-	return false
+	return p.Models
+}
+
+func (r *Router) peerHasModel(p *config.Peer, modelID string) bool {
+	return slices.Contains(r.peerModels(p), modelID)
 }
 
 // localImageCaption is the local stanza's caption format, empty when it has no
@@ -1035,7 +1163,7 @@ func (r *Router) localCanServe(s *config.Stanza) bool {
 // already spent). A peer that does not have it loaded uses cached VRAM as a
 // hint. Unknown VRAM still tries a fresh peer and lets that node admit.
 func (r *Router) peerEligible(name, modelID string) bool {
-	p := r.cfg().Peer(name)
+	p := r.peerByName(name)
 	if p == nil {
 		return false
 	}
@@ -1633,12 +1761,12 @@ func (r *Router) walkPeers(w http.ResponseWriter, req *http.Request, first, mode
 	return false, last, retry
 }
 
-// noPeerReason says why each configured peer was left out of a walk.
+// noPeerReason says why each peer was left out of a walk.
 func (r *Router) noPeerReason(modelID string) string {
 	var out []string
-	for _, p := range r.cfg().Peers {
+	for _, p := range r.PeerList() {
 		switch rem := r.peerCooling(p.Name, modelID); {
-		case !r.peerHasModel(&p, modelID):
+		case !r.peerHasModel(p, modelID):
 			out = append(out, p.Name+": does not advertise it")
 		case p.Kind != "openai" && rem > 0:
 			out = append(out, fmt.Sprintf("%s: cooling for %ds", p.Name, int(rem.Seconds())))
@@ -1808,7 +1936,7 @@ func (r *Router) servePeer(w http.ResponseWriter, req *http.Request, peerName, p
 }
 
 func (r *Router) proxyPeer(w http.ResponseWriter, req *http.Request, peerName, peerModel string) error {
-	p := r.cfg().Peer(peerName)
+	p := r.peerByName(peerName)
 	if p == nil {
 		return fmt.Errorf("unknown peer %q", peerName)
 	}
@@ -2083,7 +2211,7 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 // peerIsOpenAI is false for an unknown peer: a reload may have removed it
 // since the caller picked it.
 func (r *Router) peerIsOpenAI(name string) bool {
-	p := r.cfg().Peer(name)
+	p := r.peerByName(name)
 	return p != nil && p.Kind == "openai"
 }
 
@@ -2232,10 +2360,9 @@ func (r *Router) catalogStatuses() []ModelStatus {
 		}
 	}
 	onPeers := map[string][]PeerModelStatus{}
-	for i := range cfg.Peers {
-		p := &cfg.Peers[i]
+	for _, p := range r.PeerList() {
 		t, lastSeen, fresh := r.peers.Entry(p.Name)
-		for _, m := range p.Models {
+		for _, m := range r.peerModels(p) {
 			onPeers[m] = append(onPeers[m], peerModelStatus(p, m, t, lastSeen, fresh))
 			// Only a routable peer adds a row of its own.
 			if seen[m] || (p.Kind != "openai" && !fresh) {
@@ -2335,12 +2462,24 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		GPUs:         gpus,
 		LoadedModels: loaded,
 		Models:       models,
+		Catalog:      r.localModelIDs(),
 		Timestamp:    now.Unix(),
 	}
 	if r.activity != nil {
 		t.InProgress, t.Recent = r.activity.InProgress(), r.activity.Recent()
 	}
 	return t
+}
+
+// localModelIDs lists every local stanza id and filter-set alias.
+func (r *Router) localModelIDs() []string {
+	cfg := r.cfg()
+	out := make([]string, 0, len(cfg.Stanzas))
+	for i := range cfg.Stanzas {
+		out = append(out, cfg.Stanzas[i].ModelID)
+		out = append(out, cfg.Stanzas[i].FilterIDs()...)
+	}
+	return out
 }
 
 // BackendMetric is one running backend's /metrics scrape for the operator UI.

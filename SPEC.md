@@ -37,7 +37,9 @@ wherever its API contract shapes the code directly.
 
 - No distributed consensus (Raft, etc.). Each node is the only authority for
   its own GPUs. See Admission control.
-- No dynamic peer discovery. Peers are a static list in the node config.
+- Peers are configured statically, plus an optional LAN scan that discovers
+  router peers at startup and on a backoff timer. Discovery never changes a
+  configured entry; it only adds peers the config does not name.
 - No auth or TLS between nodes. LAN-only trust. Revisit before any exposure
   beyond the current network.
 - No node autoscaling.
@@ -173,6 +175,14 @@ peers:
     kind: openai           # proxy only; no /_router, no telemetry
     base_url: https://openrouter.ai/api/v1
     models: [some-upstream-id]
+
+discovery:
+  enabled: true            # false makes no scan connections
+  ports: [18080, 8081, 8082]
+  subnets: []              # empty: each private IPv4 /24 on this host
+  exclude: []              # CIDRs or bare IPs to skip
+  interval_seconds: 30     # first gap; doubles to max while nothing changes
+  max_interval_seconds: 600
 ```
 
 `match.body_field` and `match.path_prefix` are mutually exclusive. A stanza
@@ -844,6 +854,33 @@ fixed, not config. Every copy of the model shares the window.
 Extra-instance ports are allocated above every stanza port and every
 `reserved_ports` entry, in config order. `-check` prints them.
 
+## LAN discovery
+
+`discovery` adds router peers the config does not name. On startup, then on a
+backoff timer, the router probes `GET /_router/telemetry` on every address in
+each scanned subnet across `ports`. The first scan runs at once; the gap starts
+at `interval_seconds` (30), doubles after each scan with no change, and caps at
+`max_interval_seconds` (600, or `interval_seconds` when that is larger). A peer
+added or dropped resets the gap to `interval_seconds`.
+
+- With `subnets` empty the scan covers each private IPv4 `/24` on an up,
+  non-loopback interface. RFC1918 ranges only. `exclude` drops CIDRs or bare
+  IPs. Prefixes wider than `/16` are skipped.
+- Probes run 32 at a time with a 500 ms timeout per address.
+- The telemetry `node` field identifies a peer; this node skips itself.
+  Several addresses for one node collapse to one peer: a configured entry
+  wins, otherwise a non-proxied response wins, then the earliest port in
+  `ports`. A proxy usually adds no response header, so the port order is the
+  evidence when the proxied flag ties: `ports` lists the direct router port
+  first.
+- A discovered peer is `kind: router`, named by node, and advertises the
+  catalog its telemetry reports (the model ids it reports loaded when a peer
+  sends no catalog). Configured entries win on every field.
+  A discovered peer missing from 3 consecutive scans is dropped; configured
+  peers are never dropped.
+- `enabled: false` (or an absent scan) makes no connections. Use it on
+  isolated nodes and in tests.
+
 ## Telemetry
 
 Local poll default 2 seconds. Peer sync is a pull of `GET /_router/telemetry`
@@ -862,6 +899,9 @@ The snapshot a node publishes:
   loaded, so an idle-evicted copy still reports how it would serve a request.
   The field is absent when no stanza has a pipeline, so older peers parse the
   snapshot.
+- `catalog`: every local stanza `model_id` and filter-set alias this node can
+  serve, so a discovered peer knows what to ask it for without a second
+  request.
 - Each running instance: `model_id`, instance key when it is not instance 0,
   `fresh` or `stale`, VRAM budget, GPU, slot count and in-flight count. A
   `device: cpu` instance has no GPU entry (`gpu: none`).
@@ -947,4 +987,4 @@ It resets on restart. Authorization and cookie headers are not stored.
 
 - Preempting a generation that is already in flight.
 - Auth or TLS on the mesh.
-- Dynamic discovery, consensus, and node autoscaling.
+- Consensus and node autoscaling.

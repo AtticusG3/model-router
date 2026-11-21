@@ -21,8 +21,11 @@ type Telemetry struct {
 	LoadedModels []LoadedModel `json:"loaded_models"`
 	// Models advertises each configured stanza's image pipeline by model id,
 	// loaded or not. Older peers omit it.
-	Models    map[string]*ImagePipelineInfo `json:"models,omitempty"`
-	Timestamp int64                         `json:"timestamp"`
+	Models map[string]*ImagePipelineInfo `json:"models,omitempty"`
+	// Catalog is the stanza catalog this node can serve, so a discovered peer
+	// knows what to ask it for without a second request.
+	Catalog   []string `json:"catalog,omitempty"`
+	Timestamp int64    `json:"timestamp"`
 	// InProgress is the node's running logged requests and Recent its newest
 	// finished rows; node plus id keys a request across the mesh.
 	InProgress []InProgressEntry `json:"in_progress,omitempty"`
@@ -217,6 +220,13 @@ func (c *PeerCache) SetErr(name string, err error) {
 	}
 }
 
+// Delete forgets a peer's cached telemetry.
+func (c *PeerCache) Delete(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.peers, name)
+}
+
 // Snapshot returns a copy of all cached telemetry (for /_router/status).
 func (c *PeerCache) Snapshot() map[string]*Telemetry {
 	c.mu.Lock()
@@ -232,7 +242,7 @@ func (c *PeerCache) Snapshot() map[string]*Telemetry {
 
 // PeerSyncer periodically pulls telemetry from router-kind peers.
 type PeerSyncer struct {
-	cfg    func() *config.Config // the live config, so a reload changes the peer list
+	peers  func() []*config.Peer // configured plus discovered, so new peers are synced
 	cache  *PeerCache
 	every  time.Duration
 	client *http.Client
@@ -241,9 +251,9 @@ type PeerSyncer struct {
 	last   map[string]string
 }
 
-func NewPeerSyncer(cfg func() *config.Config, cache *PeerCache, every time.Duration, logger *Logger) *PeerSyncer {
+func NewPeerSyncer(peers func() []*config.Peer, cache *PeerCache, every time.Duration, logger *Logger) *PeerSyncer {
 	return &PeerSyncer{
-		cfg:    cfg,
+		peers:  peers,
 		cache:  cache,
 		every:  every,
 		client: &http.Client{Timeout: 5 * time.Second},
@@ -267,7 +277,7 @@ func (s *PeerSyncer) Run(ctx context.Context) {
 }
 
 func (s *PeerSyncer) syncOnce() {
-	for _, p := range s.cfg().Peers {
+	for _, p := range s.peers() {
 		if p.Kind != "router" {
 			continue // openai peers have no control API
 		}

@@ -500,6 +500,30 @@ type Telemetry struct {
 	PeerStaleSeconds int `yaml:"peer_stale_seconds"`
 }
 
+// Discovery scans the local network for router peers at startup and on a
+// backoff timer. Enabled is nil when the key is absent (default on).
+type Discovery struct {
+	Enabled *bool `yaml:"enabled"`
+	// Ports are the router ports probed on every scanned address.
+	Ports []int `yaml:"ports"`
+	// Subnets are the CIDRs to scan. Empty scans each private IPv4 /24 of
+	// this host's non-loopback interfaces.
+	Subnets []string `yaml:"subnets"`
+	// Exclude drops addresses (CIDR or bare IP) from the scan.
+	Exclude []string `yaml:"exclude"`
+	// IntervalSeconds is the first gap between scans; it doubles to
+	// MaxIntervalSeconds while nothing changes. Default 30 / 600.
+	IntervalSeconds    int `yaml:"interval_seconds"`
+	MaxIntervalSeconds int `yaml:"max_interval_seconds"`
+
+	// Networks and Excluded are Subnets and Exclude parsed by Parse.
+	Networks []netip.Prefix `yaml:"-"`
+	Excluded []netip.Prefix `yaml:"-"`
+}
+
+// On reports whether discovery is enabled. An absent enabled key means on.
+func (d *Discovery) On() bool { return d.Enabled == nil || *d.Enabled }
+
 // Security gates clients on public addresses. Loopback, private LAN and
 // Tailscale clients never need a key.
 type Security struct {
@@ -564,6 +588,7 @@ type Config struct {
 	// Preload is a list of stanza ids to load at startup.
 	Preload   []string  `yaml:"preload"`
 	Telemetry Telemetry `yaml:"telemetry"`
+	Discovery Discovery `yaml:"discovery"`
 
 	// Derived lookups (populated by Load).
 	stanzaByID map[string]*Stanza
@@ -577,12 +602,14 @@ type Config struct {
 
 // Defaults applied by Load when fields are unset.
 const (
-	DefaultHealthCheck = "/health"
-	DefaultSpinUp      = 60
-	DefaultPoll        = 2
-	DefaultPeerSync    = 5
-	DefaultPeerStale   = 15
-	DefaultStartPort   = 5800
+	DefaultHealthCheck          = "/health"
+	DefaultSpinUp               = 60
+	DefaultPoll                 = 2
+	DefaultPeerSync             = 5
+	DefaultPeerStale            = 15
+	DefaultDiscoveryInterval    = 30
+	DefaultDiscoveryMaxInterval = 600
+	DefaultStartPort            = 5800
 	// DefaultMaxRequestBodyMB caps a request body when max_request_body_mb is unset.
 	DefaultMaxRequestBodyMB = 256
 	// DefaultVoiceMaxMB and DefaultVoiceMaxSeconds cap a voice clip when
@@ -596,6 +623,62 @@ const (
 	// cannot hold a model through a long run of blocked generations.
 	MaxRetryBlocked = 5
 )
+
+// DefaultDiscoveryPorts are the router ports the scan probes when the
+// discovery ports key is absent.
+var DefaultDiscoveryPorts = []int{18080, 8081, 8082}
+
+// parseDiscovery applies the discovery defaults and parses subnets/exclude.
+func (c *Config) parseDiscovery() error {
+	d := &c.Discovery
+	if len(d.Ports) == 0 {
+		d.Ports = append([]int(nil), DefaultDiscoveryPorts...)
+	}
+	for _, port := range d.Ports {
+		if port <= 0 || port > 65535 {
+			return fmt.Errorf("discovery.ports: %d is not a valid port", port)
+		}
+	}
+	if d.IntervalSeconds == 0 {
+		d.IntervalSeconds = DefaultDiscoveryInterval
+	}
+	if d.MaxIntervalSeconds == 0 {
+		// An explicit interval above the default ceiling raises the ceiling:
+		// the user never set a max, so there is nothing to conflict with.
+		d.MaxIntervalSeconds = max(DefaultDiscoveryMaxInterval, d.IntervalSeconds)
+	}
+	if d.IntervalSeconds < 0 || d.MaxIntervalSeconds < 0 {
+		return fmt.Errorf("discovery intervals must not be negative")
+	}
+	if d.MaxIntervalSeconds < d.IntervalSeconds {
+		return fmt.Errorf("discovery.max_interval_seconds must be >= interval_seconds")
+	}
+	var err error
+	if d.Networks, err = parsePrefixes(d.Subnets); err != nil {
+		return fmt.Errorf("discovery.subnets: %w", err)
+	}
+	if d.Excluded, err = parsePrefixes(d.Exclude); err != nil {
+		return fmt.Errorf("discovery.exclude: %w", err)
+	}
+	return nil
+}
+
+// parsePrefixes accepts CIDRs and bare IPs (a bare IP is a /32 or /128).
+func parsePrefixes(raw []string) ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(raw))
+	for _, v := range raw {
+		if pfx, err := netip.ParsePrefix(v); err == nil {
+			out = append(out, pfx.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(v)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a CIDR or IP", v)
+		}
+		out = append(out, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return out, nil
+}
 
 var portMacroRe = regexp.MustCompile(`\{port\}|\$\{PORT\}`)
 
@@ -693,6 +776,9 @@ func Parse(raw []byte) (*Config, error) {
 	}
 	if cfg.Telemetry.PeerStaleSeconds == 0 {
 		cfg.Telemetry.PeerStaleSeconds = DefaultPeerStale
+	}
+	if err := cfg.parseDiscovery(); err != nil {
+		return nil, err
 	}
 
 	for _, k := range strings.Split(os.Getenv(APIKeysEnv), ",") {

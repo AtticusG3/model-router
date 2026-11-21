@@ -24,7 +24,9 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
   authority over its own GPUs (no split-brain).
 - Peers pull `GET /_router/telemetry` every few seconds: loaded models
   (fresh/stale), each copy's image pipeline caption, live free VRAM, and free
-  VRAM if stale or idle models were evicted.
+  VRAM if stale or idle models were evicted. Optional LAN discovery scans
+  private /24s at startup and on a backoff timer for router peers the config
+  does not name.
 - Spills requests to peers when the local node can't serve them (model not
   local, or GPU full): `POST /_router/load` on the candidate, then a streamed
   transparent reverse proxy. If no peer is empty right now, the origin still
@@ -216,10 +218,21 @@ after deploying a new binary.
 Per-node YAML with `stanzas` (SPEC schema + `device`, `aliases`, `env`,
 `port`), optional `pools` (compat spillover ids such as `coding-pool`; not
 listed), `peers` (`kind: router` for fleet nodes, `kind: openai` for
-proxy-only upstreams like openrouter), `preload`, and `telemetry` tuning.
-Staged fleet configs are in `configs/` (plus
+proxy-only upstreams like openrouter), `preload`, `telemetry` tuning and
+`discovery`. Staged fleet configs are in `configs/` (plus
 `qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
 stanzas). The swap procedure is in `deploy/swap-over.md`.
+
+`discovery` (default on) scans the local network for router peers at startup
+and on a backoff timer. `ports` default to `[18080, 8081, 8082]`; `subnets` is
+empty by default and scans each private IPv4 /24 on an up, non-loopback
+interface. `exclude` drops CIDRs or bare IPs. The gap starts at
+`interval_seconds` (30), doubles to `max_interval_seconds` (600, or
+`interval_seconds` when that is larger) while nothing changes, and resets when a
+peer appears or drops. Discovered peers are named by
+their telemetry `node`, advertise the catalog that telemetry reports, and are
+dropped after 3 scans without an answer. Configured peers always win and are
+never dropped. `enabled: false` makes no scan connections.
 
 `admit_timeout_seconds` (top level, default 60) is the longest a request waits for
 local GPU room while peers are re-tried. After that it gets `503` with

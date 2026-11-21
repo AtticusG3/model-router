@@ -85,7 +85,10 @@ func main() {
 
 	// Peer telemetry syncer.
 	syncEvery := time.Duration(cfg.Telemetry.PeerSyncSeconds) * time.Second
-	go router.NewPeerSyncer(r.Config, r.Peers(), syncEvery, logger).Run(ctx)
+	go router.NewPeerSyncer(r.PeerList, r.Peers(), syncEvery, logger).Run(ctx)
+
+	// LAN peer discovery: immediate scan, then a 30s..10min backoff timer.
+	go router.NewDiscoverer(r.Config, r, logger).Run(ctx)
 
 	// Idle-TTL reaper: actively evict backends whose idle_ttl_seconds has
 	// expired (lazy eviction alone only frees VRAM under admission pressure).

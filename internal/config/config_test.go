@@ -894,3 +894,48 @@ func TestImagePipelineValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestDiscoveryDefaultsAndDisable(t *testing.T) {
+	cfg, err := Parse([]byte("stanzas: []\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	d := cfg.Discovery
+	if !d.On() {
+		t.Fatal("discovery must default on")
+	}
+	if len(d.Ports) != 3 || d.Ports[0] != 18080 || d.Ports[1] != 8081 || d.Ports[2] != 8082 {
+		t.Fatalf("ports = %v", d.Ports)
+	}
+	if d.IntervalSeconds != 30 || d.MaxIntervalSeconds != 600 {
+		t.Fatalf("intervals = %d/%d", d.IntervalSeconds, d.MaxIntervalSeconds)
+	}
+
+	cfg, err = Parse([]byte("stanzas: []\ndiscovery:\n  enabled: false\n  subnets: [192.168.1.0/24]\n  exclude: [192.168.1.10]\n"))
+	if err != nil {
+		t.Fatalf("parse disabled: %v", err)
+	}
+	if cfg.Discovery.On() || len(cfg.Discovery.Networks) != 1 || len(cfg.Discovery.Excluded) != 1 {
+		t.Fatalf("disabled discovery = %+v", cfg.Discovery)
+	}
+
+	if _, err := Parse([]byte("stanzas: []\ndiscovery: {interval_seconds: 900}\n")); err != nil {
+		t.Fatalf("interval above the default max must parse: %v", err)
+	}
+	cfg, err = Parse([]byte("stanzas: []\ndiscovery: {interval_seconds: 900}\n"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.Discovery.MaxIntervalSeconds != 900 {
+		t.Fatalf("max = %d, want the interval 900", cfg.Discovery.MaxIntervalSeconds)
+	}
+	if _, err := Parse([]byte("stanzas: []\ndiscovery: {interval_seconds: 900, max_interval_seconds: 600}\n")); err == nil {
+		t.Fatal("explicit max below interval must fail")
+	}
+	if _, err := Parse([]byte("stanzas: []\ndiscovery: {subnets: [not-a-cidr]}\n")); err == nil {
+		t.Fatal("bad subnet must fail")
+	}
+	if _, err := Parse([]byte("stanzas: []\ndiscovery: {ports: [70000]}\n")); err == nil {
+		t.Fatal("bad port must fail")
+	}
+}

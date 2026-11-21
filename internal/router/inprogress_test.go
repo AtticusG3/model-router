@@ -154,9 +154,9 @@ func TestInProgressAcrossMesh(t *testing.T) {
 	}
 
 	// One sync each way: bravo reads alpha's telemetry, alpha reads bravo's.
-	cfgB := &config.Config{Peers: []config.Peer{{Name: "alpha", Kind: "router", BaseURL: srvA.URL}}}
-	NewPeerSyncer(func() *config.Config { return cfgB }, rB.peers, time.Minute, nil).syncOnce()
-	NewPeerSyncer(rA.cfg, rA.peers, time.Minute, nil).syncOnce()
+	peersB := []*config.Peer{{Name: "alpha", Kind: "router", BaseURL: srvA.URL}}
+	NewPeerSyncer(func() []*config.Peer { return peersB }, rB.peers, time.Minute, nil).syncOnce()
+	NewPeerSyncer(rA.PeerList, rA.peers, time.Minute, nil).syncOnce()
 	if got := rB.peers.Snapshot()["alpha"]; got == nil || got.Node != "alpha" || len(got.InProgress) != 1 ||
 		got.InProgress[0].ID != onA.ID || got.InProgress[0].Target != "bravo" {
 		t.Fatalf("bravo's cache of alpha = %+v", got)
