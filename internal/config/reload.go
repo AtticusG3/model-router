@@ -151,6 +151,7 @@ type fileStamp struct {
 	sum  [sha256.Size]byte
 }
 
+// statOK stamps the file only when one version is seen throughout.
 func (r *Reloader) statOK() (fileStamp, bool) {
 	fi, err := os.Stat(r.path)
 	if err != nil {
@@ -161,6 +162,10 @@ func (r *Reloader) statOK() (fileStamp, bool) {
 	// clock, so two quick writes can share a timestamp).
 	data, err := os.ReadFile(r.path)
 	if err != nil {
+		return fileStamp{}, false
+	}
+	after, err := os.Stat(r.path)
+	if err != nil || !os.SameFile(fi, after) || !after.ModTime().Equal(fi.ModTime()) || after.Size() != fi.Size() {
 		return fileStamp{}, false
 	}
 	return fileStamp{fi.ModTime(), fi.Size(), sha256.Sum256(data)}, true

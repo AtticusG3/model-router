@@ -129,7 +129,12 @@ A public client passes the key as `Authorization: Bearer <key>` or
 `x-api-key: <key>`. A browser opening `/ui/` from a public address gets the
 browser's own sign-in prompt: enter any user name and the key as the password.
 The browser then sends it on the UI's own calls. Keys are never logged, and
-activity captures redact `Authorization` and `x-api-key`.
+activity captures redact `Authorization` and `x-api-key`. Once the router has
+accepted a request, it drops the browser's `Origin`, `Referer` and
+`Sec-Fetch-*` headers before forwarding to a backend or peer when the request
+carries no `Origin` or comes from the router's own `/ui/` page; any other
+`Origin` stays in place for the backend to judge. The capture still shows the
+headers as the client sent them.
 
 Peer routers call each other without a key, so keep `peers[].base_url` on a
 private or Tailscale address.

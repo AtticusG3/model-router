@@ -63,6 +63,13 @@ func TestActivityRecordsProxiedRequest(t *testing.T) {
 			_, _ = w.Write([]byte(`{"status":"loaded"}`))
 			return
 		}
+		if req.Header.Get("Origin") != "" || req.Header.Get("Referer") != "" ||
+			req.Header.Get("Sec-Fetch-Site") != "" {
+			t.Errorf("peer request kept browser headers: %v", req.Header)
+		}
+		if req.Header.Get("X-Keep-Me") != "yes" {
+			t.Errorf("peer request lost X-Keep-Me: %v", req.Header)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"chatcmpl-1","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":4,"completion_tokens":7},"timings":{"predicted_per_second":42.0,"prompt_ms":33.6}}`))
 	}))
@@ -86,6 +93,10 @@ func TestActivityRecordsProxiedRequest(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Referer", "http://example.com/ui/")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("X-Keep-Me", "yes")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -139,6 +150,12 @@ func TestActivityRecordsProxiedRequest(t *testing.T) {
 	}
 	if got := cap.ReqHeaders["Authorization"]; len(got) != 1 || got[0] != "[redacted]" {
 		t.Fatalf("authorization = %v", cap.ReqHeaders["Authorization"])
+	}
+	if got := cap.ReqHeaders["Origin"]; len(got) != 1 || got[0] != "http://example.com" {
+		t.Fatalf("captured Origin = %v", got)
+	}
+	if got := cap.ReqHeaders["Referer"]; len(got) != 1 || got[0] != "http://example.com/ui/" {
+		t.Fatalf("captured Referer = %v", got)
 	}
 
 	// A chat response carries no image, so the thumbnail endpoint is a 404.
