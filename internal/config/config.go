@@ -5,6 +5,7 @@
 package config
 
 import (
+	"cmp"
 	"fmt"
 	"net/netip"
 	"os"
@@ -227,6 +228,10 @@ type Stanza struct {
 	// shown in the catalog. They win over catalog.metadata_url. UI metadata only.
 	Params string `yaml:"params"`
 	Owner  string `yaml:"owner"`
+	// HFRepo and ModelScopeRepo are the model's "owner/name" repo on Hugging
+	// Face and ModelScope, read by catalog.hub. UI metadata only.
+	HFRepo         string `yaml:"hf_repo"`
+	ModelScopeRepo string `yaml:"modelscope_repo"`
 	// Command is the backend command. {port} / ${PORT} are replaced with the
 	// stanza's port; {model} / {model_path} with the stanza's ModelPath.
 	// {gpu} is left in place and filled with the GPU index chosen at spawn
@@ -557,7 +562,28 @@ type Catalog struct {
 	MetadataURL string `yaml:"metadata_url"`
 	// RefreshSeconds is how often the file is fetched again. Default 3600.
 	RefreshSeconds int `yaml:"refresh_seconds"`
+	// Hub is off (default), huggingface, modelscope or both (Hugging Face
+	// first, ModelScope as the fallback).
+	Hub            string `yaml:"hub"`
+	HFBase         string `yaml:"hf_base"`
+	ModelScopeBase string `yaml:"modelscope_base"`
+	// ModelScopeFallback also tries a stanza's Hugging Face repo id on ModelScope.
+	ModelScopeFallback bool `yaml:"modelscope_fallback"`
+	// HubTokenEnv names the env var holding a Hugging Face token. The token is
+	// read at request time and sent to Hugging Face only.
+	HubTokenEnv       string `yaml:"hub_token_env"`
+	HubRefreshSeconds int    `yaml:"hub_refresh_seconds"`
+	// CacheFile keeps the last good hub data across restarts; empty = memory only.
+	CacheFile string `yaml:"cache_file"`
 }
+
+// Hub modes for Catalog.Hub.
+const (
+	HubOff         = "off"
+	HubHuggingFace = "huggingface"
+	HubModelScope  = "modelscope"
+	HubBoth        = "both"
+)
 
 // APIKeysEnv names the environment variable that adds API keys.
 const APIKeysEnv = "MODEL_ROUTER_API_KEYS"
@@ -800,6 +826,9 @@ func Parse(raw []byte) (*Config, error) {
 	}
 	if cfg.Catalog.RefreshSeconds <= 0 {
 		cfg.Catalog.RefreshSeconds = 3600
+	}
+	if err := cfg.Catalog.defaults(); err != nil {
+		return nil, err
 	}
 	if err := cfg.parseDiscovery(); err != nil {
 		return nil, err
@@ -1148,6 +1177,22 @@ func (c *Config) allocateInstancePorts(reserved map[int]bool) {
 			used[next] = true
 		}
 	}
+}
+
+func (c *Catalog) defaults() error {
+	switch c.Hub {
+	case "":
+		c.Hub = HubOff
+	case HubOff, HubHuggingFace, HubModelScope, HubBoth:
+	default:
+		return fmt.Errorf("catalog.hub %q: want off, huggingface, modelscope or both", c.Hub)
+	}
+	c.HFBase = strings.TrimRight(cmp.Or(c.HFBase, "https://huggingface.co"), "/")
+	c.ModelScopeBase = strings.TrimRight(cmp.Or(c.ModelScopeBase, "https://modelscope.cn"), "/")
+	if c.HubRefreshSeconds <= 0 {
+		c.HubRefreshSeconds = 86400
+	}
+	return nil
 }
 
 func (c *Config) validateCatalog() error {

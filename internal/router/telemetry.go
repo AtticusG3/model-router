@@ -24,8 +24,11 @@ type Telemetry struct {
 	Models map[string]*ImagePipelineInfo `json:"models,omitempty"`
 	// Catalog is the stanza catalog this node can serve, so a discovered peer
 	// knows what to ask it for without a second request.
-	Catalog   []string `json:"catalog,omitempty"`
-	Timestamp int64    `json:"timestamp"`
+	Catalog []string `json:"catalog,omitempty"`
+	// HFRepos is each local stanza's Hugging Face repo id, so a peer's catalog
+	// can look it up. Older peers omit it.
+	HFRepos   map[string]string `json:"hf_repos,omitempty"`
+	Timestamp int64             `json:"timestamp"`
 	// InProgress is the node's running logged requests and Recent its newest
 	// finished rows; node plus id keys a request across the mesh.
 	InProgress []InProgressEntry `json:"in_progress,omitempty"`

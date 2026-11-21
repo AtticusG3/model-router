@@ -45,11 +45,14 @@ type metaModel struct {
 	Licence       string `json:"licence"`
 	ContextLength int    `json:"context_length"`
 	Modality      string `json:"modality"`
+	HFRepo        string `json:"hf_repo"`
 }
 
 // ModelInfo is a catalog row's detail. IconURL is the family's icon from the
-// metadata file; the UI draws it only as an <img>. Quant, Size and Steps (and a
-// non-image model's ContextLength) are read from a local stanza's command line.
+// metadata file, or the hub owner's avatar when the family has no icon; the UI
+// draws it only as an <img>. Quant, Size and Steps (and a non-image model's
+// ContextLength) are read from a local stanza's command line. Hub and HubURL
+// name and link the row's Hugging Face or ModelScope repo.
 type ModelInfo struct {
 	IconURL       string `json:"icon_url,omitempty"`
 	Owner         string `json:"owner,omitempty"`
@@ -60,6 +63,8 @@ type ModelInfo struct {
 	Quant         string `json:"quant,omitempty"`
 	Size          string `json:"size,omitempty"`
 	Steps         int    `json:"steps,omitempty"`
+	Hub           string `json:"hub,omitempty"`
+	HubURL        string `json:"hub_url,omitempty"`
 }
 
 func (md *metadataFile) model(id string) metaModel {
@@ -94,22 +99,27 @@ func commandFlag(cmd string, names ...string) string {
 }
 
 // catalogInfo merges a catalog row's family and detail: stanza fields win over
-// the metadata file (md, nil when off), which wins over the built-in family
-// table. s is nil for a remote row.
-func catalogInfo(md *metadataFile, id string, s *config.Stanza) (*Family, *ModelInfo) {
+// the metadata file (md, nil when off), which wins over hub data, which wins
+// over the built-in family table. s is nil for a remote row.
+func (r *Router) catalogInfo(md *metadataFile, id string, s *config.Stanza) (*Family, *ModelInfo) {
 	if s == nil {
 		s = &config.Stanza{}
 	}
 	mm := md.model(id)
 	f := modelFamily(cmp.Or(s.Family, mm.Family), id, s.Name)
+	h, hub, hubURL := r.hubData(r.cfg().Catalog, md, id, s)
 	info := ModelInfo{
-		Owner: cmp.Or(s.Owner, mm.Owner), Params: cmp.Or(s.Params, mm.Params),
-		Licence: mm.Licence, ContextLength: mm.ContextLength, Modality: mm.Modality,
+		Owner: cmp.Or(s.Owner, mm.Owner, h.Owner), Params: cmp.Or(s.Params, mm.Params, h.Params),
+		Licence: cmp.Or(mm.Licence, h.Licence), ContextLength: cmp.Or(mm.ContextLength, h.ContextLength),
+		Modality: cmp.Or(mm.Modality, h.Modality), Hub: hub, HubURL: hubURL,
 	}
 	if f != nil && md != nil {
 		if mf, ok := md.Families[strings.ToLower(f.ID)]; ok {
 			f.Name, f.Owner, info.IconURL = cmp.Or(mf.Name, f.Name), cmp.Or(mf.Owner, f.Owner), mf.IconURL
 		}
+	}
+	if info.IconURL == "" && !builtinFamily(f) {
+		info.IconURL = h.IconURL
 	}
 	if f != nil {
 		info.Owner = cmp.Or(info.Owner, f.Owner)
@@ -136,32 +146,44 @@ func catalogInfo(md *metadataFile, id string, s *config.Stanza) (*Family, *Model
 // fetchMetadata GETs and parses the metadata file. On any error the caller
 // keeps its last good copy.
 func fetchMetadata(ctx context.Context, url string) (*metadataFile, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	var md metadataFile
+	if err := getJSON(ctx, url, "", 30*time.Second, &md); err != nil {
+		return nil, err
+	}
+	return &md, nil
+}
+
+// getJSON GETs url into v: 200 only, at most metadataMaxBytes, valid JSON.
+// token, when set, is sent as a Bearer token.
+func getJSON(ctx context.Context, url, token string, timeout time.Duration, v any) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, metadataMaxBytes+1))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if len(body) > metadataMaxBytes {
-		return nil, fmt.Errorf("body is over %d bytes", metadataMaxBytes)
+		return fmt.Errorf("body is over %d bytes", metadataMaxBytes)
 	}
-	var md metadataFile
-	if err := json.Unmarshal(body, &md); err != nil {
-		return nil, fmt.Errorf("invalid JSON: %w", err)
+	if err := json.Unmarshal(body, v); err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
 	}
-	return &md, nil
+	return nil
 }
 
 // RunMetadata fetches catalog.metadata_url now and every refresh_seconds until

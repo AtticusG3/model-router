@@ -92,6 +92,8 @@ func main() {
 
 	// Catalog metadata file (catalog.metadata_url), fetched in the background.
 	go r.RunMetadata(ctx)
+	// Catalog hub data (catalog.hub: Hugging Face / ModelScope), looked up in the background.
+	go r.RunHub(ctx)
 
 	// Idle-TTL reaper: actively evict backends whose idle_ttl_seconds has
 	// expired (lazy eviction alone only frees VRAM under admission pressure).

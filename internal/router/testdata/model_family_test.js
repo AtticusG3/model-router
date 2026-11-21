@@ -1,7 +1,8 @@
 // Drives the embedded UI's Model catalog against stubs: a known family draws
 // its bundled icon, an unknown row keeps the generic model glyph, and a row
 // with both a family and peers draws the icon and the peer chips. A metadata
-// icon_url is drawn as an <img> only when safeUrl passes it, and info shows as chips.
+// icon_url is drawn as an <img> only when safeUrl passes it (with or without a
+// family), info shows as chips, and a hub link only when safeUrl passes it.
 // Usage: node model_family_test.js <path-to-app.js>
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -59,6 +60,8 @@ global.fetch = async (url) => {
     { id: 'meta-model', family: { id: 'qwen', name: 'Qwen' }, info: { icon_url: 'https://icons.example.test/qwen.svg', owner: 'Example Tune Co', params: '27B', context_length: 32768, quant: 'Q4_K_M' } },
     { id: 'evil-model', family: { id: 'evil', name: 'Evil' }, info: { icon_url: 'javascript:alert(1)' } },
     { id: 'image-model', info: { size: '1024x768', steps: 8 } },
+    { id: 'hub-model', info: { icon_url: 'https://avatars.example.test/org.png', licence: 'apache-2.0', modality: 'text-generation', hub: 'Hugging Face', hub_url: 'https://huggingface.co/Example-Org/Hub-Model' } },
+    { id: 'hub-evil', info: { hub: 'Hugging Face', hub_url: 'javascript:alert(2)' } },
   );
   await window.refresh();
   const html = els.models.innerHTML;
@@ -66,10 +69,13 @@ global.fetch = async (url) => {
   assert.match(html, /M6 4\.5 12 2l6 2\.5v6L12 13l-6-2\.5v-6Z/, 'an unknown family keeps the generic model glyph');
   assert.match(html, /nodeb/, 'the peer chip is drawn beside the family icon');
   assert.match(html, /aria-label="Qwen \(Alibaba\)"/, 'the family icon is labelled');
-  assert.strictEqual((html.match(/class="model-glyph family"/g) || []).length, 2, 'only a bundled icon or a safe icon_url gets the family glyph');
+  assert.strictEqual((html.match(/class="model-glyph family"/g) || []).length, 3, 'only a bundled icon or a safe icon_url gets the family glyph');
+  assert.match(html, /<img src="https:\/\/avatars\.example\.test\/org\.png"/, 'a hub avatar is drawn for a row with no family');
+  assert.match(html, /<a class="chip" href="https:\/\/huggingface\.co\/Example-Org\/Hub-Model" target="_blank" rel="noopener noreferrer">from Hugging Face<\/a>/, 'the hub link is drawn');
+  assert.ok(!html.includes('alert(2)'), 'an unsafe hub_url is not rendered');
   assert.match(html, /<img src="https:\/\/icons\.example\.test\/qwen\.svg" alt=""/, 'a metadata icon_url is drawn as an img');
   assert.ok(!html.includes('javascript:'), 'a javascript: icon_url is not rendered');
-  for (const chip of ['Example Tune Co', '27B params', '32k ctx', 'Q4_K_M', '1024x768', '8 steps']) {
+  for (const chip of ['Example Tune Co', '27B params', '32k ctx', 'Q4_K_M', '1024x768', '8 steps', 'apache-2.0', 'text-generation']) {
     assert.ok(html.includes('<span class="chip">' + chip + '</span>'), 'info chip ' + chip);
   }
   assert.ok(!html.includes('function Object'), 'a family id naming an object property falls back to the generic glyph');
