@@ -3,6 +3,7 @@ package router
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -276,20 +277,75 @@ func TestEmbeddedUIActivityStreamWithPollFallback(t *testing.T) {
 	}
 }
 
+// The Activity view filters by path group above the table, Chat and SD API
+// only by default, and the stat cards and sparklines follow the filter.
+func TestEmbeddedUIActivityPathFilter(t *testing.T) {
+	for _, want := range []string{
+		`id="act-filter" role="group"`, `id="act-all" aria-pressed="false">All</button>`, `id="act-hidden"`,
+		`data-group="chat" aria-pressed="true"`, `data-group="sdapi" aria-pressed="true"`,
+		"ACT_DEFAULT='chat,sdapi'", "get('paths')", "history.replaceState(null,'','#paths='",
+		"actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch)", "hid+' hidden'",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	for _, g := range []string{"images", "embed", "completions", "audio", "video", "realtime", "other"} {
+		if !strings.Contains(webUIHTML, `data-group="`+g+`" aria-pressed="false"`) {
+			t.Errorf("group %s is missing or on by default", g)
+		}
+	}
+}
+
 // The Activity peer filter starts on All, offers Local and one option per peer
-// from /_router/status, and filters rows by target or from_peer.
+// from /_router/status, and filters rows by target or from_peer. It combines
+// with the path-group filter: actRender applies both.
 func TestEmbeddedUIActivityPeerFilter(t *testing.T) {
 	for _, want := range []string{
 		`<select class="chip" id="act-peer" aria-label="Filter activity by peer"><option value="">All</option><option value="local">Local</option></select>`,
 		"const peers=Object.keys(status.peers||{}).sort()",
 		`peers.map(p=>'<option value="p:'+esc(p)+'">'+esc(p)+'</option>')`,
-		"rows=rows.filter(actMatch)", "$('act-peer').onchange=()=>actPaint(actRows)",
+		"$('act-peer').onchange=()=>actPaint(actRows)",
 		"return !e.from_peer&&(!e.target||e.target===status.node)",
 		"return e.target===f.slice(2)||e.from_peer===f.slice(2)",
 		"'← '+e.from_peer", "'→ '+e.target",
 	} {
 		if !strings.Contains(webUIHTML, want) {
 			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if !strings.Contains(webUIHTML, ".filter(actMatch)") {
+		t.Error("actRender does not apply the peer filter")
+	}
+}
+
+// Every generationPathSuffixes entry has a group in the UI's ACT_PATH_GROUP
+// table, every group has a chip, and no earlier suffix shadows a later one
+// of another group (pathGroup takes the first match).
+func TestUIPathGroupsCoverGenerationSuffixes(t *testing.T) {
+	m := regexp.MustCompile(`const ACT_PATH_GROUP=\{([^}]*)\}`).FindStringSubmatch(uiAppJS)
+	if m == nil {
+		t.Fatal("ACT_PATH_GROUP not found in app.js")
+	}
+	var keys []string
+	group := map[string]string{}
+	for _, kv := range regexp.MustCompile(`'([^']+)':'([^']+)'`).FindAllStringSubmatch(m[1], -1) {
+		keys = append(keys, kv[1])
+		group[kv[1]] = kv[2]
+		if !strings.Contains(webUIHTML, `data-group="`+kv[2]+`"`) {
+			t.Errorf("group %q for %s has no filter chip", kv[2], kv[1])
+		}
+	}
+	for _, s := range generationPathSuffixes {
+		if group[s] == "" {
+			t.Errorf("generation suffix %s has no group in ACT_PATH_GROUP", s)
+		}
+	}
+	for i, a := range keys {
+		for _, b := range keys[i+1:] {
+			if strings.HasSuffix(b, a) && group[a] != group[b] {
+				t.Errorf("%s (%s) comes before %s (%s) and shadows it", a, group[a], b, group[b])
+			}
 		}
 	}
 }

@@ -1083,7 +1083,8 @@ func parseTokenStats(body []byte, contentType string) TokenStats {
 
 // generationPathSuffixes is the allow-list of POST endpoints that run a model.
 // Anything else (metrics, assets, /mcp, /props, /slots, tokenize) stays out of
-// the activity ring by default.
+// the activity ring by default. A new entry also needs a group in
+// ACT_PATH_GROUP (ui/app.js) for the Activity filter; ui_test.go checks it.
 var generationPathSuffixes = []string{
 	"/chat/completions", "/completions", "/completion", "/infill",
 	"/embeddings", "/embedding", "/responses", "/messages",

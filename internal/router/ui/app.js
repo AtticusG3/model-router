@@ -828,10 +828,40 @@
     if(snap){s.line.getBoundingClientRect();[s.line,s.dot].forEach(n=>{n.style.transition=''})}
     s.n=values.length;
   }
-  // actPaint redraws the stat cards, sparklines and rows from newest-first finished rows.
+  // Path suffix -> Activity filter group. The keys are generationPathSuffixes in activity.go plus
+  // realtime (ui_test.go keeps them in step); the first suffix that matches wins.
+  const ACT_PATH_GROUP={'/chat/completions':'chat','/txt2img':'sdapi','/img2img':'sdapi','/images/generations':'images','/images/edits':'images','/images/variations':'images','/embeddings':'embed','/embedding':'embed','/rerank':'embed','/reranking':'embed','/completions':'completions','/completion':'completions','/infill':'completions','/responses':'completions','/messages':'completions','/audio/speech':'audio','/audio/speech/batch':'audio','/audio/transcriptions':'audio','/audio/translations':'audio','/audio/generations':'audio','/videos':'video','/realtime':'realtime'};
+  function pathGroup(p){p=String(p||'');const k=Object.keys(ACT_PATH_GROUP).find(s=>p.endsWith(s));return k?ACT_PATH_GROUP[k]:p.includes('/audio/voices')?'audio':'other'}
+  // The filter lives in the URL hash (#paths=chat,sdapi) so a link keeps it; no hash means the default.
+  const ACT_DEFAULT='chat,sdapi',actHashPaths=new URLSearchParams(location.hash.slice(1)).get('paths');
+  const actGroupBtns=[...$('act-filter').querySelectorAll('[data-group]')];
+  const actShow=new Set((actHashPaths??ACT_DEFAULT).split(',').filter(Boolean));
+  function actFilterPaint(){
+    actGroupBtns.forEach(b=>{const on=actShow.has(b.dataset.group);b.classList.toggle('active',on);b.setAttribute('aria-pressed',on)});
+    const all=actGroupBtns.every(b=>actShow.has(b.dataset.group));
+    $('act-all').classList.toggle('active',all);$('act-all').setAttribute('aria-pressed',all);
+  }
+  $('act-filter').addEventListener('click',ev=>{
+    const b=ev.target.closest('button');
+    if(!b)return;
+    const g=b.dataset.group;
+    if(!g)actGroupBtns.forEach(x=>actShow.add(x.dataset.group));
+    else if(!actShow.delete(g))actShow.add(g);
+    history.replaceState(null,'','#paths='+[...actShow].join(','));
+    actFilterPaint();actRender();
+  });
+  // actPaint takes newest-first finished rows; actRender draws the ones the filter shows.
   function actPaint(rows){
     actRows=rows;
-    rows=rows.filter(actMatch);
+    acts=new Map(rows.map(e=>[String(e.id),e]));
+    thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
+    actRender();
+  }
+  // actRender redraws the stat cards, sparklines and rows for the ticked path groups
+  // and the selected peer filter.
+  function actRender(){
+    const rows=actRows.filter(e=>actShow.has(pathGroup(e.path))).filter(actMatch),hid=actRows.length-rows.length;
+    $('act-hidden').textContent=hid?hid+' hidden':'';
     $('act-count').textContent=rows.length;
     const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
     const durs=rows.map(e=>Number(e.duration_ms)||0).filter(v=>v>0);
@@ -845,8 +875,6 @@
     spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
     spark($('chart-ttft'), chrono.map(e=>Number(e.ttft_ms)||0).filter(v=>v>0), '#f1bb62');
     $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
-    acts=new Map(rows.map(e=>[String(e.id),e]));
-    thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
     // Rows only animate in once the first paint is done and the tab is showing.
     syncRows(rows,!actFirst&&$('activity').classList.contains('active'));
     actFirst=false;
@@ -973,7 +1001,7 @@
       paintRow(tr,e);
       if(tr===ref)ref=liveRow(ref.nextElementSibling);else tb.insertBefore(tr,ref);
     });
-    if(!entries.length)setNote(actRows.length?'No requests match this peer filter.':ACT_NOTE);
+    if(!entries.length)setNote(actRows.length?'No requests match the selected path groups and peer filter. Select another group, All, or another peer.':ACT_NOTE);
   }
 
   // Thumbnails: image rows get a placeholder at once; the image is fetched from the
@@ -1322,5 +1350,8 @@
     if(!logPause)logPaint();
   });
 
+  actFilterPaint();
+  // A link carrying an Activity filter opens on the Activity view.
+  if(actHashPaths!==null)document.querySelector('.nav [data-view=activity]').click();
   resumeVideo();refresh();setInterval(refresh,3000);
 })();
