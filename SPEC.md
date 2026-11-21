@@ -225,14 +225,32 @@ sd-server's LoRA cache when the backend becomes ready and before a request
 whose body names a LoRA, and retries one `invalid lora path` reply after
 warming again. A stanza with `retry_blocked` resends a blocked `txt2img` reply
 with a new random seed up to that many times, and `X-SD-Shim-Blocked-Retries`
-says how many retries ran. Caption enhancement still needs the shim until that
-step lands.
+says how many retries ran.
 
-A bare sd-server stanza needs no shim for LoRA requests: run it with
-`--listen-ip 127.0.0.1 --listen-port {port}` and `health_check: /v1/models`
-(sd-server has no `/health`). Keep the shim if the stanza needs caption
-enhancement or a blocked-card retry. The Python shim in `deploy/` stays
-supported for nodes that still wrap sd-server with it.
+`caption: ideogram4` rewrites the prompt of a `POST /sdapi/v1/txt2img` into an
+ideogram4 JSON caption, as the shim's `--prompt-enhance` does. A body with
+`"enhance_prompt": false`, an empty prompt, or a prompt that is already a JSON
+object passes through untouched. The router asks `enhancer.model` (default: the
+first running chat model that is not an embedding or rerank model) for a
+caption on the body's `width` by `height` canvas, through its own serving path,
+so the call queues and spills like any chat request. It only uses a model that
+is running locally or offered by a fresh peer, and never starts one: a load
+could evict the image model. The reply must be a valid caption; bboxes are sent
+y-first (`[y_min, x_min, y_max, x_max]`), element keys follow the spec order,
+and `style_description` is kept only when the prompt asks for a style. The
+whole step has one budget, `enhancer.timeout_seconds` (default 20); the chat
+request is cancelled when it runs out. On any failure the prompt goes out
+verbatim in the template caption (`high_level_description` and one element
+`desc` set to it, bbox `[200,200,800,800]`). The reply carries
+`X-SD-Shim-Prompt-Original` and `X-SD-Shim-Prompt-Enhanced` (percent-encoded)
+and `X-SD-Shim-Prompt-Source: enhancer | template`, and the Activity capture
+notes the caption sent.
+
+A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
+--listen-port {port}` and `health_check: /v1/models` (sd-server has no
+`/health`). The Python shim in `deploy/` stays supported for nodes that still
+wrap sd-server with it; a prompt the router already turned into a caption is a
+JSON object, so the shim leaves it alone.
 
 The request body kept in Activity is the client's original, even when a
 pipeline step rewrites it; a step can attach notes (for example the rewritten

@@ -307,9 +307,12 @@ in from peers. A preset name selects the steps, or a map names them:
 
 Every preset runs the shim's img2img body checks (see `SPEC.md`): a request
 with no usable `init_images[0]` gets 400 with `X-SD-Shim: reject` instead of
-quietly running as txt2img. The blocked-card retry and the LoRA warm-up ship
-in this build too. Keep the shim on a stanza that needs caption enhancement
-until that step lands.
+quietly running as txt2img. The blocked-card retry, the LoRA warm-up and the
+ideogram4 caption step ship in this build too. The caption step asks a chat
+model that is already running (locally or on a fresh peer, never cold-loaded)
+for the caption, within `enhancer.timeout_seconds` (default 20), and falls
+back to a template caption holding the prompt verbatim; the reply's
+`X-SD-Shim-Prompt-Source` says which was sent (see `SPEC.md`).
 
 A bare sd-server stanza needs no shim: run it with `sd-server --listen-ip
 127.0.0.1 --listen-port {port}` with `health_check: /v1/models` (sd-server has

@@ -17,9 +17,10 @@ import (
 // for requests from local clients and for requests proxied in from peers.
 type imageStep struct {
 	// Rewrite runs before the request reaches the backend and may replace
-	// req.Body. An imageReject error answers the client 400; any other error is
-	// a body read fault. nil is a no-op.
-	Rewrite func(req *http.Request, notes *imageNotes) error
+	// req.Body, and may set reply headers on h, which reach the client whatever
+	// the backend answers. An imageReject error answers the client 400; any
+	// other error is a body read fault. nil is a no-op.
+	Rewrite func(req *http.Request, h http.Header, notes *imageNotes) error
 	// After inspects the backend reply. It may add headers to h and change req
 	// headers or the prepared body for a retry; true asks for another attempt.
 	// The step decides when to stop. Headers a step sets on an attempt are
@@ -180,7 +181,7 @@ func (r *Router) proxyImage(w http.ResponseWriter, req *http.Request, t Target, 
 		if st.Rewrite == nil {
 			continue
 		}
-		if err := st.Rewrite(req, notes); err != nil {
+		if err := st.Rewrite(req, w.Header(), notes); err != nil {
 			var rej imageReject
 			if !errors.As(err, &rej) {
 				r.writeBodyError(w, req, err)
