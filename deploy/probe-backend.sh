@@ -68,8 +68,11 @@ case $TYPE in
       -d '{"prompt":"ping","steps":1,"width":64,"height":64,"cfg_scale":1}'
     ;;
   speech)
+    # A checkpoint with no preset voices (Qwen3-TTS Base) rejects a stock OpenAI
+    # voice name with "does not support task_type='CustomVoice'", so a deployed
+    # clone backend is probed with a voice it accepts: PROBE_VOICE=<library id>.
     request POST /v1/audio/speech -H "$json" \
-      -d "{\"model\":\"$MODEL\",\"input\":\"ping\",\"voice\":\"alloy\"}"
+      -d "{\"model\":\"$MODEL\",\"input\":\"ping\",\"voice\":\"${PROBE_VOICE:-alloy}\"}"
     ;;
   transcription)
     python3 - "$TMP/probe.wav" <<'PY' || fail "$TYPE needs python3 to write the probe clip"

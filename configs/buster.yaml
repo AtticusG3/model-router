@@ -41,6 +41,12 @@
 
 listen: 0.0.0.0:18080
 start_port: 5901
+# Voice library (#78/#79): a cloned voice is one WAV plus a JSON sidecar
+# under this directory, so it survives a router restart. A model-less
+# POST /v1/audio/voices stores here; a speech request whose "voice" is a
+# library id gets ref_audio + ref_text injected from the clip.
+voice_dir: /opt/ai/voices
+
 reserved_ports: [8081, 6333, 18095, 18096, 18097, 8082, 18099, 18100,
                  5930, 5931, 5932, 5933, 5934, 5935, 5936, 5937, 5938,
                  5939, 5940, 5941, 5942, 5943, 5944, 5945, 5946, 5947,
@@ -157,8 +163,9 @@ stanzas:
   - model_id: krea-2-turbo
     name: "Krea 2.0 Turbo (text-to-image, Q8_0)"
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/krea2/Krea-2-Turbo-Q8_0.gguf
       --llm /home/kevyn/models/krea2/Qwen3VL-4B-Instruct-Q4_K_M.gguf
       --vae /home/kevyn/models/krea2/wan_2.1_vae.safetensors
@@ -171,8 +178,9 @@ stanzas:
     device: "0|1|2"
     spin_up_seconds: 60
     api_type: image
+    image_pipeline: sd-server
     match: {path_prefix: /sdapi/v1, path_default: true}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5915
@@ -181,8 +189,9 @@ stanzas:
     name: "Krea 2 character creator (QuadView + Identity Edit LoRAs)"
     aliases: [krea-character]
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/krea2/Krea-2-Turbo-Q8_0.gguf
       --llm /home/kevyn/models/krea2/Qwen3VL-4B-Instruct-Q4_K_M.gguf
       --vae /home/kevyn/models/krea2/wan_2.1_vae.safetensors
@@ -197,8 +206,9 @@ stanzas:
     device: "0|1|2"
     spin_up_seconds: 60
     api_type: image
+    image_pipeline: sd-server
     match: {path_prefix: /sdapi/v1}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5916
@@ -234,8 +244,9 @@ stanzas:
     name: "Z-Anime Turbo (8-step distill)"
     aliases: [z-anime]
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/z-anime-turbo/z-anime-distill-8step-bf16.safetensors
       --vae /home/kevyn/models/z-anime-turbo/ae.safetensors
       --llm /home/kevyn/models/z-anime-turbo/qwen_3_4b-engineer-v4-bf16.safetensors
@@ -248,8 +259,9 @@ stanzas:
     device: "0|1|2"
     spin_up_seconds: 60
     api_type: image
+    image_pipeline: sd-server
     match: {path_prefix: /sdapi/v1}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5918
@@ -257,8 +269,9 @@ stanzas:
   - model_id: ideogram4
     name: "Ideogram 4"
     command: >
-      /opt/ai/bin/sd-router-shim {port} --prompt-enhance --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/ideogram4/ideogram4-Q8_0.gguf
       --uncond-diffusion-model /home/kevyn/models/ideogram4/ideogram4_uncond-Q8_0.gguf
       --llm /home/kevyn/models/ideogram4/Qwen3-VL-8B-Instruct-Q4_K_M.gguf
@@ -268,13 +281,17 @@ stanzas:
       --vae-tiling
       --seed -1
       -W 1024 -H 1024
-    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0", "SHIM_ENHANCER_URL=http://127.0.0.1:18080/v1", "SHIM_ENHANCER_TIMEOUT=20"]
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}", "GGML_CUDA_PDL=0"]
     vram_mb: 22000
     device: "0|1|2"
     spin_up_seconds: 60
     api_type: image
+    image_pipeline:
+      caption: ideogram4
+      enhancer: {model: qwen38-flash-next, timeout_seconds: 45}
+      retry_blocked: 0   # matches the shim-era check: --retry-blocked was off on buster; a retry doubles a 5-minute gen
     match: {path_prefix: /sdapi/v1}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5919
@@ -283,8 +300,9 @@ stanzas:
     name: "Qwen Image 2.1 (official Q8_0, t2i + edit)"
     aliases: [qwen-image-2.1-uncensored, qwen21-uncensored]
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/qwen-image-2.1/qwen_image_2.1-Q8_0.gguf
       --vae /home/kevyn/models/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors
       --llm /home/kevyn/models/qwen-image-2.1/Qwen3VL-8B-Instruct-Q4_K_M.gguf
@@ -306,8 +324,9 @@ stanzas:
     device: "0|1|2"
     spin_up_seconds: 60
     api_type: image
+    image_pipeline: sd-server
     match: {path_prefix: /sdapi/v1}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5922
@@ -316,8 +335,9 @@ stanzas:
     name: "FLUX.3 Image Klein (distilled 16-step, Q8_0, t2i + edit)"
     aliases: [flux3, flux-3-klein]
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/flux3-klein/flux3-image-klein-Q8_0.gguf
       --vae /home/kevyn/models/flux3-klein/flux2-vae.safetensors
       --llm /home/kevyn/models/flux3-klein/Qwen3VL-4B-Instruct-Q4_K_M.gguf
@@ -337,8 +357,9 @@ stanzas:
     device: "0|1|2"
     spin_up_seconds: 120
     api_type: image
+    image_pipeline: sd-server
     match: {path_prefix: /sdapi/v1}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5925
@@ -347,8 +368,9 @@ stanzas:
     name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
     aliases: [fibo-2.0, fibo-edit-turbo]
     command: >
-      /opt/ai/bin/sd-router-shim {port} --
       /home/kevyn/infra/stable-diffusion.cpp-fibo/build-sm86/bin/sd-server
+      --listen-ip 127.0.0.1
+      --listen-port {port}
       --diffusion-model /home/kevyn/models/fibo-2.0/fibo2_edit_turbo_int8_convrot.safetensors
       --llm /home/kevyn/models/flux3-klein/Qwen3VL-4B-Instruct-Q4_K_M.gguf
       --llm_vision /home/kevyn/models/fibo-2.0/mmproj-Qwen3VL-4B-Instruct-F16.gguf
@@ -367,8 +389,9 @@ stanzas:
     device: 0
     spin_up_seconds: 120
     api_type: image
+    image_pipeline: sd-server
     match: {path_prefix: /sdapi/v1}
-    health_check: /health
+    health_check: /v1/models
     idle_ttl_seconds: 300
     unlisted: false
     port: 5926
@@ -405,6 +428,41 @@ stanzas:
     slots: 1
     unlisted: false
     port: 5930
+
+  # #79 speech + voice cloning: vLLM-Omni serving Qwen3-TTS 1.7B Base on GPU0.
+  # vLLM-Omni needs compute capability 7.5+, so this stanza cannot move to a
+  # V100 (sm_70) -- unlike the image stanzas it is 3090-only.
+  # --served-model-name must equal model_id: the router rewrites no model id for
+  # a local stanza, and vLLM answers 404 for a name it does not serve.
+  # The per-stage budgets (0.30 talker + 0.10 codec decoder of the card) live in
+  # the deploy file, not on the command line, because the router's command
+  # splitter drops double quotes.
+  - model_id: qwen3-tts-1.7b
+    name: "Qwen3-TTS 1.7B Base (voice clone, vLLM-Omni, speech)"
+    command: >
+      /opt/ai/venv-vllm-omni/bin/vllm serve /opt/ai/models/tts/Qwen3-TTS-12Hz-1.7B-Base
+      --omni
+      --deploy-config /opt/ai/config/vllm-omni/qwen3_tts_24gb.yaml
+      --served-model-name qwen3-tts-1.7b
+      --host 127.0.0.1 --port {port}
+      --trust-remote-code --enforce-eager
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0",
+          "HF_HOME=/opt/ai/hf/tts", "HF_HUB_OFFLINE=1"]
+    vram_mb: 9000
+    device: 0
+    spin_up_seconds: 300
+    api_type: speech
+    capabilities: [audio_out]
+    match: {path_prefix: /v1/audio/voices, path_default: true}
+    health_check: /health
+    idle_ttl_seconds: 900
+    # Cold start is ~90 s (two vLLM stages). Without a hold, admission picked
+    # this stanza as the cheapest eviction 2 s after it reported ready, so the
+    # first client still paid a reload. 180 s covers time-to-first-client.
+    hold_seconds: 180
+    slots: 4
+    unlisted: false
+    port: 5933
 
 peers:
   - name: gareths-homelab

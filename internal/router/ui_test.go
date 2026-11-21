@@ -110,8 +110,9 @@ func TestEmbeddedUIPlaygroundHistory(t *testing.T) {
 }
 
 // The Speech tab lists the model's voices from /v1/audio/voices (only for a
-// running model, so the tab never starts one), offers every response_format,
-// and plays through MediaSource when the browser can, else from a blob.
+// running model, so the tab never starts one) and unions that stanza's presets
+// with the router's global voice library, offers every response_format, and
+// plays through MediaSource when the browser can, else from a blob.
 func TestEmbeddedUISpeechVoicesAndFormats(t *testing.T) {
 	if strings.Contains(webUIHTML, `<input id="speech-voice"`) {
 		t.Error("the voice is still a free-text input, not the voice list")
@@ -119,6 +120,7 @@ func TestEmbeddedUISpeechVoicesAndFormats(t *testing.T) {
 	for _, want := range []string{
 		`<select id="speech-voice" aria-label="Voice">`, `onchange="loadVoices()"`,
 		"window.loadVoices", "'/v1/audio/voices?model='+encodeURIComponent(model)",
+		"collect('/v1/audio/voices')", "ids=[...new Set(ids)]",
 		"m.state==='running'", "d.data||d.voices", "if(t.dataset.tab==='speech')loadVoices()",
 		`<select id="speech-format" aria-label="Audio format">`, "response_format:format",
 		"MediaSource.isTypeSupported(ct)", "function streamInto", "sb.appendBuffer(value)", "await r.blob()",

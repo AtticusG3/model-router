@@ -390,21 +390,31 @@
     }catch(e){fail(e.message)}
   };
 
-  // Voices come from the selected model's backend. Only a running model is
-  // asked (force after a generation has started it), so opening the tab never
-  // starts or evicts a model just to fill the list.
+  // Voices come from the selected model's backend plus the router's voice
+  // library. The library is global (a cloned clip works on any speech backend
+  // that takes ref_audio) and a ?model= list is that stanza's presets alone,
+  // so both are asked and the ids unioned. Only a running model is asked
+  // (force after a generation has started it), so opening the tab never starts
+  // or evicts a model just to fill the list.
   let voiceSeq=0;
   window.loadVoices=async function(force,want){
     const sel=$('speech-voice'),model=$('speech-model').value,prev=want===undefined?sel.value:want,seq=++voiceSeq;
     const m=(status.models||[]).find(x=>x.id===model),running=force===true||(!!m&&m.state==='running');
     let ids=[];
-    if(model&&running){
+    const collect=async url=>{
       try{
-        const r=await fetch('/v1/audio/voices?model='+encodeURIComponent(model));
-        if(r.ok){const d=await r.json(),list=Array.isArray(d)?d:(d.data||d.voices||[]);ids=[...new Set(list.map(v=>typeof v==='string'?v:v&&(v.id||v.voice_id||v.name)).filter(Boolean))]}
-      }catch(e){}
+        const r=await fetch(url);
+        if(!r.ok)return [];
+        const d=await r.json(),list=Array.isArray(d)?d:(d.data||d.voices||[]);
+        return list.map(v=>typeof v==='string'?v:v&&(v.id||v.voice_id||v.name)).filter(Boolean);
+      }catch(e){return []}
+    };
+    if(model&&running){
+      ids=await collect('/v1/audio/voices?model='+encodeURIComponent(model));
+      ids=ids.concat(await collect('/v1/audio/voices'));
     }
     if(seq!==voiceSeq)return;
+    ids=[...new Set(ids)];
     // A restore names the voice it wants even when the model is stopped, so the select keeps it and Generate sends it again; the backend accepts or rejects it.
     if(model&&!running&&want)ids=[want];
     sel.innerHTML='<option value="">'+(model&&!running?'Backend default (voices list once the model runs)':'Backend default')+'</option>'+ids.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join('');
