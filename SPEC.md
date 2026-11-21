@@ -130,13 +130,14 @@ stanzas:
     proxy: ""              # default http://127.0.0.1:{port}; forbidden when max_instances > 1
 
   - model_id: sdxl-turbo
-    command: "/opt/ai/bin/sd-server -m /opt/ai/models/sdxl.gguf --port {port}"
+    command: "/opt/ai/bin/sd-server -m /opt/ai/models/sdxl.gguf --listen-ip 127.0.0.1 --listen-port {port}"
     vram_mb: 9000
     api_type: image
+    image_pipeline: sd-server  # preset or map; see below
     match:
       path_prefix: /sdapi/v1
       path_default: true   # fallback when the body has no model id
-    health_check: /sdapi/v1/options
+    health_check: /v1/models # sd-server has no /health; no shim needed
     idle_ttl_seconds: 300
 
   - model_id: stt-large
@@ -178,6 +179,35 @@ stanza.
 `audio_out`, `tools`, `reasoning`; an unknown flag is a load error. It is
 published in `/v1/models` and `/_router/status`. A vision chat model (started
 with an `--mmproj`) stays `api_type: chat` and adds `capabilities: [vision]`.
+
+`image_pipeline` (only on `api_type: image`) runs the image request handling on
+the node that owns the stanza, for requests from local clients and for requests
+proxied in from peers. It is a preset name or a map:
+
+```yaml
+image_pipeline: sd-server   # the sd-server checks
+image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
+image_pipeline:
+  caption: "" | ideogram4    # caption format; "" = no caption step
+  enhancer: {model: enhancer-model, timeout_seconds: 30}
+  retry_blocked: 2           # blocked responses that may be retried
+```
+
+`caption` is a format name, so another format can be added later; an unknown
+name is a load error. The enhancer names the model and timeout the caption step
+uses. `sd-server` and `ideogram4` are the presets; an unknown preset, or
+`image_pipeline` on a stanza that is not `api_type: image`, fails load with a
+message naming the valid values.
+
+A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
+--listen-port {port}` and `health_check: /v1/models` (sd-server has no
+`/health`). The Python shim in `deploy/` stays supported for nodes that still
+wrap sd-server with it.
+
+The request body kept in Activity is the client's original, even when a
+pipeline step rewrites it; a step can attach notes (for example the rewritten
+prompt) that are listed with the capture. A response step may add headers or
+ask for one retry.
 
 An `api_type` gives a model-less request a default route. The type serves these
 API paths:

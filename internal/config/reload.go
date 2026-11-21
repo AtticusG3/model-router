@@ -101,6 +101,7 @@ func (r *Reloader) Watch(ctx context.Context, every time.Duration) {
 
 func (r *Reloader) watch(ctx context.Context, every time.Duration, hup <-chan os.Signal) {
 	last := r.baseline
+	var pending fileStamp // a change seen once; applied when the next poll agrees
 	tick := time.NewTicker(every)
 	defer tick.Stop()
 	for {
@@ -109,15 +110,36 @@ func (r *Reloader) watch(ctx context.Context, every time.Duration, hup <-chan os
 			return
 		case <-hup:
 			r.log.Infof("received SIGHUP, reloading config")
-			last = r.stamp()
+			last, pending = r.stamp(), fileStamp{}
 			_ = r.Reload()
 		case <-tick.C:
 			// A missing file mid-rename is not a change; wait for the next tick.
-			if s, ok := r.statOK(); ok && s != last {
+			s, ok := r.statOK()
+			if !ok {
+				pending = fileStamp{}
+				continue
+			}
+			var apply bool
+			if apply, pending = settle(last, pending, s); apply {
 				last = s
 				_ = r.Reload()
 			}
 		}
+	}
+}
+
+// settle decides whether a polled file stamp is a change to apply now. A change
+// is applied only once the next poll sees the same file, so a file caught
+// mid-write (truncated, then rewritten) never replaces the running config. next
+// is the stamp to remember as pending.
+func settle(last, pending, s fileStamp) (apply bool, next fileStamp) {
+	switch {
+	case s == last:
+		return false, fileStamp{}
+	case s != pending:
+		return false, s
+	default:
+		return true, fileStamp{}
 	}
 }
 

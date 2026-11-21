@@ -144,3 +144,29 @@ func TestWatchFileChangeAndSIGHUP(t *testing.T) {
 	hup <- syscall.SIGHUP
 	wait(3)
 }
+
+func TestSettleSkipsAFileCaughtMidWrite(t *testing.T) {
+	a := fileStamp{size: 1}
+	b := fileStamp{size: 2}
+	c := fileStamp{size: 3}
+	cases := []struct {
+		name          string
+		last, pending fileStamp
+		seen          fileStamp
+		apply         bool
+		next          fileStamp
+	}{
+		{"first sighting is held", a, fileStamp{}, b, false, b},
+		{"same file on the next poll applies", a, b, b, true, fileStamp{}},
+		{"a newer write replaces the pending one", a, b, c, false, c},
+		{"the running file is not a change", a, b, a, false, fileStamp{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			apply, next := settle(tc.last, tc.pending, tc.seen)
+			if apply != tc.apply || next != tc.next {
+				t.Fatalf("settle = %v %+v, want %v %+v", apply, next, tc.apply, tc.next)
+			}
+		})
+	}
+}

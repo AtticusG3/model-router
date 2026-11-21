@@ -705,7 +705,8 @@
       }
       const cap=await json('/_router/activity/'+id);
       const p=capParsed(e,cap);
-      $('capture-meta').textContent=(cap.truncated?'Bodies truncated to 256 KB. ':'')+(p.ok?'':'Not a recognised chat or image body, showing the raw view. ');
+      const notes=(cap.notes||[]).length?'Pipeline: '+cap.notes.join('; ')+'. ':'';
+      $('capture-meta').textContent=notes+(cap.truncated?'Bodies truncated to 256 KB. ':'')+(p.ok?'':'Not a recognised chat or image body, showing the raw view. ');
       $('capture-parsed').innerHTML=p.html;
       $('capture-req').textContent=prettyBody(cap.req_body);
       $('capture-resp').textContent=prettyBody(cap.resp_body);

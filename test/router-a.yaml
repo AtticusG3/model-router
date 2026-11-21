@@ -23,6 +23,8 @@ stanzas:
     vram_mb: 0
     spin_up_seconds: 10
     api_type: image
+    health_check: /v1/models
+    image_pipeline: sd-server
     match:
       path_prefix: /sdapi/v1
       path_default: true

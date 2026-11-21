@@ -57,6 +57,9 @@ type Router struct {
 	httpc    *http.Client
 	activity *ActivityLog
 	metrics  *Metrics
+	// imageSteps builds the steps a stanza's image_pipeline runs; empty until a
+	// build adds them.
+	imageSteps func(*config.Stanza) []imageStep
 }
 
 // New builds a Router from parsed config.
@@ -81,6 +84,7 @@ func New(cfg *config.Config, logger *Logger, node string) *Router {
 		httpc:           &http.Client{Timeout: 0}, // no overall timeout; streaming is long
 		activity:        NewActivityLog(),
 		metrics:         NewMetrics(),
+		imageSteps:      defaultImageSteps,
 	}
 	r.cfgp.Store(cfg)
 	return r
@@ -1575,6 +1579,10 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 	m.markUsed()
 	defer m.markUsed()
 	if s := r.stanzaOf(key); s != nil {
+		if s.ImagePipeline != nil {
+			r.proxyImage(w, req, Target{Local: key}, m.proxy(), key, r.node, s)
+			return nil
+		}
 		if err := filterLocal(req, s); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return nil

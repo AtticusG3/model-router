@@ -105,6 +105,66 @@ var APITypes = []string{
 // Capabilities are the optional capability flags a stanza may declare.
 var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning"}
 
+// ImagePipeline is a stanza's image request pipeline. The YAML value is either
+// a preset name (sd-server or ideogram4, see SPEC.md) or a map; a preset is
+// shorthand for the map it names. Only api_type: image may set it.
+type ImagePipeline struct {
+	// Caption is the caption format a prompt is enhanced into, or "" for no
+	// caption step.
+	Caption string `yaml:"caption"`
+	// Enhancer names the model and timeout used by a caption step.
+	Enhancer *ImageEnhancer `yaml:"enhancer"`
+	// RetryBlocked is how many times a blocked response may be retried.
+	RetryBlocked int `yaml:"retry_blocked"`
+
+	// preset is the bare-string form, expanded by Parse so an unknown name is
+	// reported with the stanza id.
+	preset string
+}
+
+// ImageEnhancer is the model that turns a prompt into a caption.
+type ImageEnhancer struct {
+	Model          string `yaml:"model"`
+	TimeoutSeconds int    `yaml:"timeout_seconds"`
+}
+
+// imagePipelinePresets are the names image_pipeline accepts as a bare string.
+// sd-server runs the standard image checks; ideogram4 adds ideogram4-format
+// caption enhancement.
+var imagePipelinePresets = []string{"sd-server", "ideogram4"}
+
+// imageCaptionFormats are the names image_pipeline.caption accepts, besides
+// the empty string (no caption step).
+var imageCaptionFormats = []string{"ideogram4"}
+
+// UnmarshalYAML accepts a preset name or a map.
+func (p *ImagePipeline) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode && value.Tag != "!!null" {
+		return value.Decode(&p.preset)
+	}
+	type plain ImagePipeline
+	return value.Decode((*plain)(p))
+}
+
+// expand replaces a preset with the fields it stands for.
+func (p *ImagePipeline) expand() error {
+	if p.preset == "" {
+		return nil
+	}
+	switch p.preset {
+	case "sd-server":
+	case "ideogram4":
+		if p.Caption == "" {
+			p.Caption = "ideogram4"
+		}
+	default:
+		return fmt.Errorf("unknown image_pipeline preset %q; must be one of %s",
+			p.preset, strings.Join(imagePipelinePresets, ", "))
+	}
+	p.preset = ""
+	return nil
+}
+
 // Stanza is one model this node can serve. See SPEC.md.
 type Stanza struct {
 	ModelID string `yaml:"model_id"`
@@ -179,6 +239,10 @@ type Stanza struct {
 	// Filters rewrite the request body before the backend sees it. Its
 	// SetParamsByID mints extra ids that resolve to this stanza.
 	Filters Filters `yaml:"filters"`
+	// ImagePipeline runs the image request pipeline for this stanza: request
+	// rewriting, one response retry and response headers. Only api_type: image
+	// may set it. See SPEC.md.
+	ImagePipeline *ImagePipeline `yaml:"image_pipeline"`
 	// MaxRequestBodyMB overrides the top-level max_request_body_mb for this
 	// stanza. 0 = inherit.
 	MaxRequestBodyMB int `yaml:"max_request_body_mb"`
@@ -592,6 +656,25 @@ func Parse(raw []byte) (*Config, error) {
 			if !slices.Contains(Capabilities, c) {
 				return nil, fmt.Errorf("stanza %q: capability %q is not valid; must be one of %s",
 					s.ModelID, c, strings.Join(Capabilities, ", "))
+			}
+		}
+		if s.ImagePipeline != nil {
+			if err := s.ImagePipeline.expand(); err != nil {
+				return nil, fmt.Errorf("stanza %q: %w", s.ModelID, err)
+			}
+			if s.APIType != APITypeImage {
+				return nil, fmt.Errorf("stanza %q: image_pipeline is only valid with api_type: image", s.ModelID)
+			}
+			p := s.ImagePipeline
+			if p.Caption != "" && !slices.Contains(imageCaptionFormats, p.Caption) {
+				return nil, fmt.Errorf("stanza %q: image_pipeline caption %q is not valid; use one of %s",
+					s.ModelID, p.Caption, strings.Join(imageCaptionFormats, ", "))
+			}
+			if p.RetryBlocked < 0 {
+				return nil, fmt.Errorf("stanza %q: image_pipeline retry_blocked must not be negative", s.ModelID)
+			}
+			if p.Enhancer != nil && p.Enhancer.Model == "" {
+				return nil, fmt.Errorf("stanza %q: image_pipeline enhancer needs a model", s.ModelID)
 			}
 		}
 		if s.HealthCheck == "" {

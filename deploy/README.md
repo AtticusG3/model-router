@@ -4,6 +4,10 @@ Wrapper between model-router and sd-server, installed as the stanza command so
 the router sees one healthy endpoint. This copy is the source of truth; the
 installed binary is replaced by copying this file.
 
+A stanza that sets `image_pipeline` runs the same checks inside the router and
+needs no shim; this shim stays supported for nodes that still wrap sd-server
+with it. See `SPEC.md` for the option and its presets.
+
 Backend runtime layout (environments, torch tracks, weights, ports, probe):
 see [`backends.md`](backends.md).
 
