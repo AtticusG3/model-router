@@ -60,6 +60,7 @@ func NewHandler(r *Router, logger *Logger) http.Handler {
 		{"/logs/stream/{model_id...}", handleModelLogStream(r, logger)},
 		{"/_router/activity/{id}/thumb", handleActivityBlob(r)},
 		{"/_router/activity/{id}/audio", handleActivityBlob(r)},
+		{"/_router/activity/stream", handleActivityStream(r)},
 		{"/_router/activity/{id}", handleActivityCapture(r)},
 		{"/_router/activity", handleActivity(r)},
 		{"/_router/telemetry", func(w http.ResponseWriter, req *http.Request) {
@@ -192,6 +193,49 @@ func handleActivity(r *Router) http.HandlerFunc {
 		a := r.Activity()
 		running := a.InProgress()
 		writeJSON(w, map[string]any{"entries": a.List(), "in_progress": running})
+	}
+}
+
+// handleActivityStream is the Activity page's live feed (SSE): a snapshot
+// event shaped like GET /_router/activity, then one entry event per recorded
+// row. Event names leave room for in-progress updates on the same stream.
+func handleActivityStream(r *Router) http.HandlerFunc {
+	return func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		a := r.Activity()
+		// Subscribe first: a request that finishes after it arrives as an entry
+		// event, so nothing in the snapshot's in_progress list is left running.
+		rows, live, cancel := a.Subscribe()
+		defer cancel()
+		running := a.InProgress()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+		send := func(event string, v any) {
+			b, _ := json.Marshal(v)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
+			fl.Flush()
+		}
+		send("snapshot", map[string]any{"entries": rows, "in_progress": running})
+		for {
+			select {
+			case <-req.Context().Done():
+				return
+			case e, ok := <-live:
+				if !ok {
+					return
+				}
+				send("entry", e)
+			}
+		}
 	}
 }
 

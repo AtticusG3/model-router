@@ -877,6 +877,7 @@ line lists each peer's skip reason (`cooling`, `telemetry stale`,
 | `GET /logs` | Recent combined log as `text/plain`; `Accept: text/html` redirects to `/ui/`. |
 | `GET /logs/stream`, `/logs/stream/proxy`, `/logs/stream/upstream`, `/logs/stream/mesh` | Live plain-text stream: combined, router-only, all backend output, mesh. History first unless `?no-history`. |
 | `GET /logs/stream/{model_id}` | One model's backend output (ids may contain slashes). Unknown id: 404. A model named `proxy`, `upstream` or `mesh` is shadowed by the filter paths. |
+| `GET /_router/activity/stream` | Server-sent events: `snapshot` on connect (same JSON as `GET /_router/activity`), then `entry` (one row, same JSON as a list element) each time a row is recorded. A subscriber more than 32 rows behind is disconnected and reconnects for a fresh snapshot; it never holds up recording. `X-Accel-Buffering: no`. |
 | `GET /_router/activity`, `GET /_router/activity/{id}`, `GET /_router/activity/{id}/thumb`, `GET /_router/activity/{id}/audio` | In-memory generation log (`entries`, plus the requests still running as `in_progress`, as in telemetry), request/response captures, and the image thumbnail or speech audio kept for the row (404 when nothing was kept). |
 | `GET /upstream/{model_id}/...` | Strip the prefix and proxy to that local backend. |
 | `GET /ui/` | Embedded operator UI. |

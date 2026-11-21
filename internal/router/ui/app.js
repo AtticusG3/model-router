@@ -8,7 +8,7 @@
   // Family id -> SVG, filled from ui/families at build time.
   const FAMILY_ICONS=__EMBED_FAMILY_ICONS__;
   const pageCopy={dashboard:['Fleet node','Overview','Live capacity and model activity for this router.'],playground:['Operator tools','Playground','Try a streaming chat, an image, an embeddings, a rerank, a speech, a transcription, a video, a music or sound effect request, or a load test against this router.'],activity:['Observability','Activity','Generation, audio, video and realtime requests on this node, with token or media stats and captured bodies.'],logs:['Observability','Logs','Live router, upstream and mesh output.']};
-  document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart()});
+  document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{const view=b.dataset.view;document.querySelectorAll('.nav button').forEach(x=>{x.classList.remove('active');x.removeAttribute('aria-current')});const wasLogs=$('logs').classList.contains('active'),wasAct=$('activity').classList.contains('active');document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');b.setAttribute('aria-current','page');$(view).classList.add('active');$('eyebrow').textContent=pageCopy[view][0];$('page-title').textContent=pageCopy[view][1];$('page-subtitle').textContent=pageCopy[view][2];if(view!=='logs')logStop();else if(!wasLogs)logStart();if(view!=='activity')actStop();else if(!wasAct)actStart()});
   async function json(url,opts){const r=await fetch(url,opts);const text=await r.text();let data;try{data=JSON.parse(text)}catch(e){data={error:text}}if(!r.ok){const e=new Error(data.error||text||('HTTP '+r.status));e.status=r.status;throw e}return data}
   function setHealth(ok,message){$('health').textContent=message;$('side-health').textContent=ok?'Status updates every 3 seconds':'Unable to reach status endpoint';$('health-dot').className='status-dot '+(ok?'':'off');$('side-dot').className='status-dot '+(ok?'':'off')}
   window.refresh=async function(){try{status=await json('/_router/status');const node=status.node||'unknown';const now=new Date();$('side-node').textContent=node;$('updated').textContent='Updated '+now.toLocaleTimeString();setHealth(true,'Router healthy');renderSummary();renderGPUs();renderModels();renderPeers();fillSelectors()}catch(e){setHealth(false,e.message);$('updated').textContent='Snapshot unavailable'}};
@@ -721,36 +721,78 @@
     if(snap){s.line.getBoundingClientRect();[s.line,s.dot].forEach(n=>{n.style.transition=''})}
     s.n=values.length;
   }
+  // actPaint redraws the stat cards, sparklines and rows from newest-first finished rows.
+  function actPaint(rows){
+    actRows=rows;
+    $('act-count').textContent=rows.length;
+    const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
+    const durs=rows.map(e=>Number(e.duration_ms)||0).filter(v=>v>0);
+    const errs=rows.filter(e=>e.status>=400).length;
+    $('act-avg-gen').innerHTML=gens.length?(gens.reduce((a,b)=>a+b,0)/gens.length).toFixed(1)+'<small> tok/s</small>':'—<small> tok/s</small>';
+    $('act-avg-dur').textContent=durs.length?fmtDur(durs.reduce((a,b)=>a+b,0)/durs.length):'—';
+    $('act-errors').textContent=errs;
+    const chrono=rows.slice().reverse();
+    spark($('chart-gen'), chrono.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0), '#63dda1');
+    spark($('chart-prompt'), chrono.map(e=>Number(e.tokens&&e.tokens.prompt_per_second)||0).filter(v=>v>0), '#58d6e6');
+    spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
+    spark($('chart-ttft'), chrono.map(e=>Number(e.ttft_ms)||0).filter(v=>v>0), '#f1bb62');
+    $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
+    acts=new Map(rows.map(e=>[String(e.id),e]));
+    thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
+    // Rows only animate in once the first paint is done and the tab is showing.
+    syncRows(rows,!actFirst&&$('activity').classList.contains('active'));
+    actFirst=false;
+  }
   async function activity(){
     try{
-      const d=await json('/_router/activity');
-      const rows=d.entries||[];
-      $('act-count').textContent=rows.length;
-      const gens=rows.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0);
-      const durs=rows.map(e=>Number(e.duration_ms)||0).filter(v=>v>0);
-      const errs=rows.filter(e=>e.status>=400).length;
-      $('act-avg-gen').innerHTML=gens.length?(gens.reduce((a,b)=>a+b,0)/gens.length).toFixed(1)+'<small> tok/s</small>':'—<small> tok/s</small>';
-      $('act-avg-dur').textContent=durs.length?fmtDur(durs.reduce((a,b)=>a+b,0)/durs.length):'—';
-      $('act-errors').textContent=errs;
-      const chrono=rows.slice().reverse();
-      spark($('chart-gen'), chrono.map(e=>Number(e.tokens&&e.tokens.tokens_per_second)||0).filter(v=>v>0), '#63dda1');
-      spark($('chart-prompt'), chrono.map(e=>Number(e.tokens&&e.tokens.prompt_per_second)||0).filter(v=>v>0), '#58d6e6');
-      spark($('chart-dur'), chrono.map(e=>Number(e.duration_ms)||0), '#8db8ff');
-      spark($('chart-ttft'), chrono.map(e=>Number(e.ttft_ms)||0).filter(v=>v>0), '#f1bb62');
-      $('chart-gen-label').textContent=gens.length?'tok/s':'tok/s';
-      acts=new Map(rows.map(e=>[String(e.id),e]));
-      thumbs.forEach((_,id)=>{if(!acts.has(id))thumbs.delete(id)});
-      // Rows only animate in once the first paint is done and the tab is showing.
-      syncRows(rows,!actFirst&&$('activity').classList.contains('active'));
-      actFirst=false;
-      $('activity-hint').textContent='In-memory on this node';
+      actPaint((await json('/_router/activity')).entries||[]);
+      $('activity-hint').textContent='Polling every 3 s · in-memory on this node';
     }catch(e){
       // Keep the rows already on screen; a failed poll should not wipe the table.
       $('activity-hint').textContent=e.message;
       if(!$('activity-rows').querySelector('tr[data-id]'))setNote(e.message);
     }
   }
-  let actFirst=true,acts=new Map();
+  let actFirst=true,acts=new Map(),actRows=[];
+
+  // The Activity view listens on /_router/activity/stream only while it is showing.
+  // A proxy that holds the stream back sends no snapshot, so after ACT_STREAM_WAIT
+  // (or on an error before the first snapshot) the view polls every 3 s instead.
+  const ACT_STREAM_WAIT=5000,ACT_MAX=200; // ACT_MAX is the server's ring size.
+  let actES=null,actWait=0,actPollTimer=0;
+  function actStop(){
+    if(actES)actES.close();
+    actES=null;
+    clearTimeout(actWait);clearInterval(actPollTimer);
+  }
+  function actPoll(){
+    actStop();
+    activity();
+    actPollTimer=setInterval(activity,3000);
+  }
+  function actStart(){
+    actStop();
+    if(!window.EventSource)return actPoll();
+    const es=actES=new EventSource('/_router/activity/stream');
+    let live=false;
+    actWait=setTimeout(actPoll,ACT_STREAM_WAIT);
+    es.addEventListener('snapshot',ev=>{
+      live=true;clearTimeout(actWait);
+      actPaint(JSON.parse(ev.data).entries||[]);
+      $('activity-hint').textContent='Live · in-memory on this node';
+    });
+    es.addEventListener('entry',ev=>{
+      const e=JSON.parse(ev.data);
+      actPaint([e,...actRows.filter(r=>r.id!==e.id)].slice(0,ACT_MAX));
+    });
+    // A dropped live stream reconnects by itself and resends the snapshot; poll only
+    // when it never went live or the browser has given up.
+    es.onerror=()=>{
+      if(actES!==es)return;
+      if(!live||es.readyState===EventSource.CLOSED)return actPoll();
+      $('activity-hint').textContent='Reconnecting to the live stream…';
+    };
+  }
 
   // Rows are matched by id and updated in place; see syncRows.
   const IMG_PATH=/\/(images\/(generations|edits|variations)|txt2img|img2img)$/;
@@ -1158,5 +1200,5 @@
     if(!logPause)logPaint();
   });
 
-  resumeVideo();refresh();activity();setInterval(refresh,3000);setInterval(activity,3000);
+  resumeVideo();refresh();setInterval(refresh,3000);
 })();

@@ -210,10 +210,39 @@ type ActivityLog struct {
 	captures  map[int]storedCapture
 	captureSz int
 	running   map[int]*InProgressEntry
+	subs      map[chan ActivityEntry]struct{}
 }
 
 func NewActivityLog() *ActivityLog {
-	return &ActivityLog{captures: map[int]storedCapture{}, running: map[int]*InProgressEntry{}}
+	return &ActivityLog{captures: map[int]storedCapture{}, running: map[int]*InProgressEntry{}, subs: map[chan ActivityEntry]struct{}{}}
+}
+
+// Subscribe returns the rows List would return plus a channel of rows recorded
+// after them. The channel is closed when cancel runs or when the subscriber
+// falls behind; record never waits on a reader.
+func (a *ActivityLog) Subscribe() (rows []ActivityEntry, live <-chan ActivityEntry, cancel func()) {
+	ch := make(chan ActivityEntry, 32)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// Read the rows under the lock that registers ch, so no row lands in neither.
+	rows = make([]ActivityEntry, 0, len(a.entries))
+	for i := len(a.entries) - 1; i >= 0; i-- {
+		rows = append(rows, a.entries[i])
+	}
+	a.subs[ch] = struct{}{}
+	return rows, ch, func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.dropSub(ch)
+	}
+}
+
+// dropSub closes ch once; the caller holds a.mu.
+func (a *ActivityLog) dropSub(ch chan ActivityEntry) {
+	if _, ok := a.subs[ch]; ok {
+		delete(a.subs, ch)
+		close(ch)
+	}
 }
 
 // begin registers a running request and reserves the Activity id its row
@@ -349,6 +378,15 @@ func (a *ActivityLog) record(entry ActivityEntry, cap ActivityCapture, blob []by
 		if sc, ok := a.captures[evicted.ID]; ok {
 			a.captureSz -= sc.size
 			delete(a.captures, evicted.ID)
+		}
+	}
+	for ch := range a.subs {
+		select {
+		case ch <- entry:
+		default:
+			// A full buffer means a stalled reader: close it so it reconnects
+			// for a fresh snapshot instead of silently missing rows.
+			a.dropSub(ch)
 		}
 	}
 	return entry
