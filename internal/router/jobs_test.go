@@ -594,6 +594,10 @@ func TestVideoAdapterLifecycle(t *testing.T) {
 
 	id := submitJob(t, h, "vid")
 	waitJob(t, "adapter job completed", func() bool { return jobStatus(t, h, id) == "completed" })
+	// The router frees a completed job's slot on its own poll tick, which can
+	// lag the backend's answer under load: settle that hold before submitting
+	// again, so the DELETE assertion below judges only its own job.
+	waitJob(t, "completed job's slot freed", func() bool { return r.occupancyOf("vid") == 0 })
 	rec := doJob(h, http.MethodGet, "/v1/videos/"+id+"/content", "")
 	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "video/webm" || rec.Body.String() != "fake-webm-bytes" {
 		t.Fatalf("content = %d %q %q", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
