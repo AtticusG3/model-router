@@ -102,6 +102,19 @@ func TestReloadRejectsInvalidKeepsRunning(t *testing.T) {
 	}
 }
 
+// writeAtomic swaps the file in by rename: os.WriteFile truncates first, and a
+// watcher tick between truncate and write sees an empty (valid) config.
+func writeAtomic(t *testing.T, path, content string) {
+	t.Helper()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWatchFileChangeAndSIGHUP(t *testing.T) {
 	r, path, applied, mu := newTestReloader(t, validYAML)
 	hup := make(chan os.Signal, 1)
@@ -120,11 +133,11 @@ func TestWatchFileChangeAndSIGHUP(t *testing.T) {
 	}
 
 	// A valid write triggers apply.
-	os.WriteFile(path, []byte("stanzas: []\nlisten: 127.0.0.1:19003\n"), 0o644)
+	writeAtomic(t, path, "stanzas: []\nlisten: 127.0.0.1:19003\n")
 	wait(1)
 
 	// An invalid write is rejected and recorded, with no further apply.
-	os.WriteFile(path, []byte("stanzas: [\n"), 0o644)
+	writeAtomic(t, path, "stanzas: [\n")
 	for i := 0; i < 300; i++ {
 		if msg, _ := r.LastError(); msg != "" {
 			break
@@ -139,7 +152,7 @@ func TestWatchFileChangeAndSIGHUP(t *testing.T) {
 	}
 
 	// SIGHUP re-runs validation with the file untouched.
-	os.WriteFile(path, []byte(validYAML), 0o644)
+	writeAtomic(t, path, validYAML)
 	wait(2)
 	hup <- syscall.SIGHUP
 	wait(3)

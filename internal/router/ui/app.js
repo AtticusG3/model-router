@@ -319,21 +319,40 @@
     }catch(e){fail(e.message)}
   };
 
+  // Subtitle results (srt, vtt) keep their text and format here for the Copy and Download buttons.
+  let transcript=null;
   window.sendTranscription=async function(){
-    const out=$('transcribe-output'),model=$('transcribe-model').value,file=$('transcribe-file').files[0];
+    const out=$('transcribe-output'),model=$('transcribe-model').value,file=$('transcribe-file').files[0],format=$('transcribe-format').value,language=$('transcribe-language').value;
     const fail=m=>{out.className='output error';out.textContent=m};
+    transcript=null;$('transcribe-actions').hidden=true;
     if(!model)return fail('No transcription model is available. Add a catalog entry with api_type: transcription.');
     if(!file)return fail('Choose an audio file.');
     out.className='output muted';out.textContent='Transcribing…';
     try{
-      const fd=new FormData();fd.append('model',model);fd.append('file',file);
+      const fd=new FormData();fd.append('model',model);fd.append('response_format',format);if(language)fd.append('language',language);fd.append('file',file);
       const r=await fetch('/v1/audio/transcriptions',{method:'POST',body:fd});
       const text=await r.text();
       let d;try{d=JSON.parse(text)}catch(e){d=null}
       if(!r.ok){const e=d&&d.error;throw new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))}
       out.className='output';
-      out.textContent=d&&typeof d.text==='string'?d.text:text;
+      out.textContent=format==='verbose_json'&&d?JSON.stringify(d,null,2):d&&typeof d.text==='string'?d.text:text;
+      if(format==='srt'||format==='vtt'){
+        transcript={text,format};
+        $('transcribe-copy').textContent='Copy '+format.toUpperCase();$('transcribe-download').textContent='Download .'+format;
+        $('transcribe-actions').hidden=false;
+      }
     }catch(e){fail(e.message)}
+  };
+  window.copyTranscript=async function(){
+    const b=$('transcribe-copy'),label='Copy '+transcript.format.toUpperCase();
+    // The clipboard API needs a secure context; over plain http the Download button still works.
+    try{await navigator.clipboard.writeText(transcript.text);b.textContent='Copied'}catch(e){b.textContent='Copy failed'}
+    setTimeout(()=>{b.textContent=label},1500);
+  };
+  window.downloadTranscript=function(){
+    const url=URL.createObjectURL(new Blob([transcript.text],{type:transcript.format==='vtt'?'text/vtt':'application/x-subrip'}));
+    const a=document.createElement('a');a.href=url;a.download='transcript.'+transcript.format;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
 
   // Load test: the browser drives /v1/chat/completions like any other client, so nothing here touches backends directly.

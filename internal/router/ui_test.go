@@ -67,6 +67,24 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 	}
 }
 
+// The Transcription tab sends the chosen response format and language, and
+// offers Copy and Download for subtitle results only.
+func TestEmbeddedUITranscriptionOptions(t *testing.T) {
+	for _, want := range []string{
+		`<select id="transcribe-format">`, `<option value="json">`, `<option value="verbose_json">`,
+		`<option value="text">`, `<option value="srt">`, `<option value="vtt">`,
+		`<select id="transcribe-language">`, `<option value="">Backend default</option>`, `<option value="ja">`,
+		"format=$('transcribe-format').value", "language=$('transcribe-language').value",
+		"fd.append('response_format',format)", "if(language)fd.append('language',language)",
+		`id="transcribe-actions" hidden`, "format==='srt'||format==='vtt'",
+		"window.copyTranscript", "navigator.clipboard.writeText", "window.downloadTranscript", "a.download='transcript.'+",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+}
+
 // Brand tokens, motion and the live activity table are part of the embedded shell.
 func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 	for _, want := range []string{

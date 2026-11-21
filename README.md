@@ -125,6 +125,11 @@ model loaded while the session is open. A client that cannot put the model in
 the URL can name it in its first `session.update` instead (SPEC.md, Realtime
 sessions). A browser sends its UI sign-in key on the handshake.
 
+The Transcription tab uploads a file to `/v1/audio/transcriptions` with the
+chosen response format and language (Backend default sends none). An SRT or
+WebVTT result gets Copy and Download buttons; Copy needs the page on HTTPS or
+localhost, Download works anywhere.
+
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
 click a row for request/response). Captures live in memory only (256 KB per
@@ -226,6 +231,53 @@ the `api_type` that path serves — `/v1/audio/speech` → `speech`,
 `path_default: true` stanza (or its only stanza) is used; several candidates and
 no default is a `400` that names them. Only one stanza per `api_type` may be
 `path_default`; `-check` rejects a second.
+
+### Transcription
+
+`api_type: transcription` serves the OpenAI multipart upload on
+`/v1/audio/transcriptions`. The backend picked in `docs/research/stt-backends.md`
+is whisper.cpp `whisper-server`; started with
+`--request-path /v1/audio --inference-path /transcriptions` it serves the
+OpenAI path itself and ignores the `model` field:
+
+```yaml
+  - model_id: whisper-large-v3-turbo
+    name: "Whisper large-v3 Turbo (ggml Q5_0, STT)"
+    aliases: [whisper-1, stt, transcription]
+    command: >
+      /opt/ai/bin/whisper-server
+      --model /opt/ai/models/ggml-large-v3-turbo-q5_0.bin
+      --vad-model /opt/ai/models/ggml-silero-v6.2.0.bin
+      --host 127.0.0.1 --port {port}
+      --request-path /v1/audio --inference-path /transcriptions
+      --language auto --convert --vad --flash-attn --threads 8
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 2000
+    device: 0
+    spin_up_seconds: 60
+    api_type: transcription
+    match: {body_field: model}
+    health_check: /v1/audio/health
+    idle_ttl_seconds: 300
+    slots: 1
+```
+
+- Every `response_format` (`json`, `text`, `srt`, `vtt`, `verbose_json`) and
+  `timestamp_granularities[]` passes through untouched. `json` and
+  `verbose_json` keep `application/json`; `text`, `srt` and `vtt` reach the
+  client as `text/plain; charset=utf-8`, whatever type the backend sent.
+- This stanza serves transcriptions only: `whisper-server` has no translation
+  path. Send `translate=true` on the transcription path, or run a second
+  process; `docs/research/stt-backends.md` explains both.
+- `slots` is a hard cap for transcription: extra uploads wait in the router
+  (not on the backend, which would hold each one in memory) for up to
+  `admit_timeout_seconds`, then get `503` with `Retry-After`.
+- The router never times out a long transcription itself.
+  `request_timeout_seconds` on a stanza (default none) cuts a request off
+  with `504` after that long.
+- A backend that serves the API under another path gets
+  `path_rewrite: [{from: /v1/audio/transcriptions, to: /inference}]` (any
+  stanza; first matching prefix wins, local instances only).
 
 ## Test
 
