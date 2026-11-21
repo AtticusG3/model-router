@@ -29,7 +29,12 @@ import (
 const (
 	maxActivityEntries = 200
 	maxCaptureBody     = 256 * 1024
-	maxCaptureBytes    = 8 * 1024 * 1024
+	// maxStatsTail is how much of a response past the capture clip is kept
+	// for token parsing. The usage/timings chunk of a stream is last, so a
+	// stream longer than maxCaptureBody (roughly 1k streamed tokens) lost its
+	// token counts entirely before this tail existed.
+	maxStatsTail    = 64 * 1024
+	maxCaptureBytes = 8 * 1024 * 1024
 	// maxImageBody is the extra buffer kept for an image-generation response so
 	// the thumbnail is decoded from the whole body, not the clipped capture.
 	// Longer responses are captured truncated with no thumbnail.
@@ -59,6 +64,11 @@ type TokenStats struct {
 	PromptPerSecond  float64 `json:"prompt_per_second,omitempty"`
 	TokensPerSecond  float64 `json:"tokens_per_second,omitempty"`
 	PromptMs         float64 `json:"prompt_ms,omitempty"`
+	// PromptEvalTokens is timings.prompt_n: prompt tokens the engine actually
+	// evaluated, which excludes prompt cache hits (timings.cache_n).
+	PromptEvalTokens int `json:"prompt_eval_tokens,omitempty"`
+	// PredictedMs is timings.predicted_ms: time spent decoding.
+	PredictedMs float64 `json:"predicted_ms,omitempty"`
 }
 
 // ActivityEntry is one proxied generation (or other model) request.
@@ -252,6 +262,9 @@ type activityWriter struct {
 	ttftMs    int
 	ttftSet   bool
 	scan      bytes.Buffer
+	// tail keeps the last maxStatsTail bytes written past max, so token
+	// stats can still be parsed from a long stream's final chunk.
+	tail bytes.Buffer
 	// img keeps a full copy of an image response (up to imgMax) so the
 	// thumbnail can be decoded before the capture body is clipped.
 	img          bytes.Buffer
@@ -346,11 +359,24 @@ func (w *activityWriter) captureBody(p []byte) {
 	switch {
 	case remain <= 0:
 		w.truncated = true
+		w.keepTail(p)
 	case len(p) > remain:
 		w.body.Write(p[:remain])
 		w.truncated = true
+		w.keepTail(p[remain:])
 	default:
 		w.body.Write(p)
+	}
+}
+
+// keepTail appends bytes past the capture clip to the stats tail, keeping
+// only the newest maxStatsTail bytes.
+func (w *activityWriter) keepTail(p []byte) {
+	w.tail.Write(p)
+	if w.tail.Len() > 2*maxStatsTail {
+		keep := append([]byte(nil), w.tail.Bytes()[w.tail.Len()-maxStatsTail:]...)
+		w.tail.Reset()
+		w.tail.Write(keep)
 	}
 }
 
@@ -803,6 +829,12 @@ func mergeTokenStats(dst, src TokenStats) TokenStats {
 	if src.PromptMs != 0 {
 		dst.PromptMs = src.PromptMs
 	}
+	if src.PromptEvalTokens != 0 {
+		dst.PromptEvalTokens = src.PromptEvalTokens
+	}
+	if src.PredictedMs != 0 {
+		dst.PredictedMs = src.PredictedMs
+	}
 	return dst
 }
 
@@ -817,7 +849,9 @@ func statsFromMap(obj map[string]any) TokenStats {
 	}
 	if t, ok := obj["timings"].(map[string]any); ok {
 		if s.PromptTokens == 0 {
-			s.PromptTokens = asInt(t["prompt_n"])
+			// usage.prompt_tokens counts cache hits; prompt_n does not, so
+			// add cache_n back to keep one meaning for PromptTokens.
+			s.PromptTokens = asInt(t["prompt_n"]) + asInt(t["cache_n"])
 		}
 		if s.CompletionTokens == 0 {
 			s.CompletionTokens = asInt(t["predicted_n"])
@@ -825,6 +859,8 @@ func statsFromMap(obj map[string]any) TokenStats {
 		s.PromptPerSecond = asFloat(t["prompt_per_second"])
 		s.TokensPerSecond = asFloat(t["predicted_per_second"])
 		s.PromptMs = asFloat(t["prompt_ms"])
+		s.PromptEvalTokens = asInt(t["prompt_n"])
+		s.PredictedMs = asFloat(t["predicted_ms"])
 		if cached := asInt(t["cache_n"]); cached != 0 {
 			s.CachedTokens = cached
 		}
@@ -933,6 +969,11 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	var tokens TokenStats
 	if !rec.media {
 		tokens = parseTokenStats(rec.body.Bytes(), ct)
+		// A clipped stream carries its usage/timings in the tail, after the
+		// capture limit. Later chunks win, as they do within one body.
+		if rec.truncated && rec.tail.Len() > 0 {
+			tokens = mergeTokenStats(tokens, parseTokenStats(rec.tail.Bytes(), ct))
+		}
 	}
 	ttft := rec.ttftMs
 	if !rec.ttftSet {

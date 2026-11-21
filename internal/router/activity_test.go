@@ -428,3 +428,89 @@ func TestActivityWriterFlagsImageBufferTruncation(t *testing.T) {
 		t.Fatalf("img = %q, truncated = %v", w.img.String(), w.imgTruncated)
 	}
 }
+
+func TestParseTokenStatsTimingsPhases(t *testing.T) {
+	body := []byte(`{"usage":{"prompt_tokens":23,"completion_tokens":40,"prompt_tokens_details":{"cached_tokens":5}},"timings":{"cache_n":5,"prompt_n":18,"prompt_ms":1068.6,"predicted_n":40,"predicted_ms":604.6,"predicted_per_second":66.2}}`)
+	s := parseTokenStats(body, "application/json")
+	if s.PromptTokens != 23 || s.CachedTokens != 5 || s.PromptEvalTokens != 18 || s.PredictedMs != 604.6 || s.CompletionTokens != 40 {
+		t.Fatalf("stats = %+v", s)
+	}
+}
+
+// A stream longer than the capture clip must still yield its final
+// usage/timings chunk, which arrives after the clip.
+func TestActivityWriterKeepsStatsPastCaptureClip(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "text/event-stream")
+	w := &activityWriter{ResponseWriter: rec, max: maxCaptureBody, started: time.Now()}
+	chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("x", 200) + "\"}}]}\n\n")
+	for written := 0; written < maxCaptureBody+3*maxStatsTail; written += len(chunk) {
+		_, _ = w.Write(chunk)
+	}
+	_, _ = w.Write([]byte("data: {\"usage\":{\"prompt_tokens\":900,\"completion_tokens\":2500,\"prompt_tokens_details\":{\"cached_tokens\":800}},\"timings\":{\"prompt_n\":100,\"prompt_ms\":250,\"predicted_n\":2500,\"predicted_ms\":40000}}\n\ndata: [DONE]\n\n"))
+	if !w.truncated {
+		t.Fatal("capture should be truncated")
+	}
+	if w.tail.Len() > 2*maxStatsTail {
+		t.Fatalf("tail grew to %d bytes", w.tail.Len())
+	}
+	head := parseTokenStats(w.body.Bytes(), "text/event-stream")
+	if head.CompletionTokens != 0 {
+		t.Fatalf("clipped head unexpectedly carries stats: %+v", head)
+	}
+	got := mergeTokenStats(head, parseTokenStats(w.tail.Bytes(), "text/event-stream"))
+	if got.CompletionTokens != 2500 || got.PromptTokens != 900 || got.CachedTokens != 800 || got.PromptEvalTokens != 100 || got.PredictedMs != 40000 {
+		t.Fatalf("tail stats = %+v", got)
+	}
+}
+
+func TestActivityRecordsTokensForLongStream(t *testing.T) {
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/_router/load" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunk := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"" + strings.Repeat("y", 300) + "\"}}]}\n\n")
+		for n := 0; n < maxCaptureBody+maxStatsTail; n += len(chunk) {
+			_, _ = w.Write(chunk)
+		}
+		_, _ = w.Write([]byte("data: {\"timings\":{\"cache_n\":40,\"prompt_n\":60,\"prompt_ms\":120,\"predicted_n\":1500,\"predicted_ms\":25000,\"predicted_per_second\":60}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer peer.Close()
+
+	cfg, err := config.Load("../../test/router-a.yaml")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	cfg.Peer("digger").BaseURL = peer.URL
+	logger := NewLogger(io.Discard, false)
+	r := New(cfg, logger, "router-a")
+	h := NewHandler(r, logger)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewBufferString(`{"model":"digger/remote-model","stream":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	entries := r.Activity().List()
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d", len(entries))
+	}
+	tok := entries[0].Tokens
+	if tok.PromptTokens != 100 || tok.CompletionTokens != 1500 || tok.PromptEvalTokens != 60 || tok.CachedTokens != 40 || tok.PredictedMs != 25000 {
+		t.Fatalf("long stream tokens = %+v", tok)
+	}
+	out := r.metrics.Render("router-a")
+	for _, want := range []string{
+		`model_router_phase_tokens_total{model="remote-model",phase="decode"} 1500`,
+		`model_router_phase_seconds_total{model="remote-model",phase="decode"} 25.000`,
+		`model_router_phase_tokens_total{model="remote-model",phase="prefill"} 60`,
+		`model_router_tokens_total{model="remote-model",kind="cached"} 40`,
+		`model_router_tokens_total{model="remote-model",kind="prompt"} 100`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("metrics missing %q\n%s", want, out)
+		}
+	}
+}
