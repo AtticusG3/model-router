@@ -237,6 +237,12 @@ flushed per chunk and their Activity row keeps the content type, byte count and
 a body hash instead of the body (a speech response of at most 256 KB is kept
 for the Activity player).
 
+`voice_dir` (top level, empty by default) enables the router voice library: one
+`<id>.wav` clip and one `<id>.json` sidecar per cloned voice. `voice_max_mb`
+(default 10) and `voice_max_seconds` (default 60) cap an uploaded clip. A
+speech stanza may set `clone_mode: ref_audio` (default) or `speaker_ref_b64` to
+pick the reference shape its backend takes. See Speech and `SPEC.md`.
+
 `stream_load_progress: true` (top level, default off) writes "loading model… N%"
 chunks into the reasoning stream of a `stream: true` chat completion while its
 model starts, so chat UIs do not look hung. See the Supervisor section of
@@ -319,15 +325,22 @@ no default is a `400` that names them. Only one stanza per `api_type` may be
 
 An `api_type: speech` stanza serves `/v1/audio/speech` (and
 `/v1/audio/speech/batch`) and the voice routes under `/v1/audio/voices`, by
-`model` or the speech default. `response_format` (`mp3`, `opus`, `aac`, `flac`,
-`wav`, `pcm`) and the backend's `Content-Type` pass through, and a streamed
-answer reaches the client chunk by chunk. A model-less `GET /v1/audio/voices`
-merges the voices of the speech default and every other speech stanza already
-running, each tagged with its `model`; it never starts a second model. For a
-speech stanza `slots` caps the syntheses in the backend at once: a request over
-it waits up to `admit_timeout_seconds`, then gets `503` with `Retry-After`. The
-Playground Speech tab lists a running model's voices, offers every format, and
-plays MP3 or AAC as it arrives where the browser allows. Backend choice:
+`model` or the speech default. With `voice_dir` set, the router owns model-less
+`/v1/audio/voices` itself: `POST` multipart (`name`, `file`, `ref_text`,
+`language`, `consent`) registers a cloned clip, `GET` lists, and
+`DELETE /v1/audio/voices/{id}` removes it. The clip and sidecar survive a
+restart, and a speech request that names a library voice reaches any local
+instance or peer with the reference already attached in the stanza's
+`clone_mode`. Without `voice_dir`, voice routes go to the speech default.
+`response_format` (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`) and the backend's
+`Content-Type` pass through, and a streamed answer reaches the client chunk by
+chunk. A model-less `GET /v1/audio/voices` without a library merges the voices
+of the speech default and every other speech stanza already running, each
+tagged with its `model`; it never starts a second model. For a speech stanza
+`slots` caps the syntheses in the backend at once: a request over it waits up to
+`admit_timeout_seconds`, then gets `503` with `Retry-After`. The Playground
+Speech tab lists a running model's voices, offers every format, and plays MP3
+or AAC as it arrives where the browser allows. Backend choice:
 `docs/research/tts-backends.md`. Example stanza (§6.1 there, command shortened):
 
 ```yaml
