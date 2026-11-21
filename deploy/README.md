@@ -17,7 +17,7 @@ see [`backends.md`](backends.md).
 Usage:
 
 ```
-sd-router-shim [--prompt-enhance] [--retry-blocked] {port} -- sd-server [args...]
+sd-router-shim [--prompt-enhance] [--enhancer-timeout SECONDS] [--retry-blocked] {port} -- sd-server [args...]
 ```
 
 The shim starts sd-server on a free loopback port, answers `GET /health`,
@@ -35,19 +35,31 @@ A request is forwarded unchanged when the prompt is already a JSON object,
 when the body sets `"enhance_prompt": false`, or when it is an img2img call.
 The response carries `X-SD-Shim-Prompt-Original` and
 `X-SD-Shim-Prompt-Enhanced` (percent-encoded) so the activity log shows what
-was sent.
+was sent, and `X-SD-Shim-Prompt-Source: enhancer` or `template` to say which
+path built it. None of these headers is set when the body went through
+untouched.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `SHIM_ENHANCER_URL` | `http://127.0.0.1:18080/v1` | chat-completions base URL |
-| `SHIM_ENHANCER_MODEL` | first running model that is not an embedding or reranking model | chat model id |
+| `SHIM_ENHANCER_MODEL` | first running model that is not an embedding or reranking model | chat model id; must be listed and running |
 | `SHIM_ENHANCER_TIMEOUT` | `20` | seconds before the template fallback |
+| `--enhancer-timeout SECONDS` | unset | same as `SHIM_ENHANCER_TIMEOUT`, and wins over it |
 | `SHIM_BLOCKED_RETRIES` | `1` | retries, only with `--retry-blocked` |
 
-If the enhancer times out, returns malformed JSON, or returns a caption
-without an element that has an in-range bbox, the shim sends a deterministic
-template instead: one centred element whose description is the original
-prompt. sd-server never receives a broken caption.
+Both timeout settings are per stanza: set the env var in the stanza's `env:`
+list, or put the flag in the stanza command so it shows next to the other
+shim flags. The timeout is one wall-clock budget for the catalogue lookup and
+the chat call together, so a slow or trickled reply cannot hold the image
+request past it.
+
+Any enhancer failure only drops the rewrite: a timeout, a model that is not
+running, an unreadable catalogue, a connection or HTTP error, a reply that is
+not JSON or has no `choices`, a caption without an element that has an
+in-range bbox, a malformed `SHIM_ENHANCER_URL`, or any other exception. The
+shim then sends a deterministic template: the original prompt as the
+high-level description and as one centred element. sd-server never receives a
+broken caption, and stderr gets one line with the reason.
 
 The system prompt asks for `style_description` only when the request asks for
 a style, medium, camera, lighting or aesthetic; otherwise the shim removes it.
@@ -57,7 +69,8 @@ a style, medium, camera, lighting or aesthetic; otherwise the shim removes it.
 The shim keeps the image model loaded. model-router has no header or query
 parameter that asks a request not to cold-load, so the shim checks
 `GET {SHIM_ENHANCER_URL}/models` first. When the chat model is not already
-running, it skips the call and uses the template. It therefore never starts a
+running, is missing from the catalogue, or the catalogue cannot be read, it
+skips the call and uses the template. It therefore never starts a
 load that could evict the image model, and it never waits on a slot while the
 image model holds a card. If a request later lands on a stopped model it falls
 back to the template as well. Coupling the check and the chat call in the
