@@ -113,7 +113,7 @@ Schema:
   "compositional_deconstruction": {
     "background": "what fills the frame behind the subjects",
     "elements": [
-      {"type": "obj", "bbox": [x1, y1, x2, y2], "desc": "detailed neutral description"}
+      {"type": "obj", "bbox": [x_min, y_min, x_max, y_max], "desc": "detailed neutral description"}
     ]
   },
   "style_description": {
@@ -125,7 +125,8 @@ Schema:
 }
 
 Rules:
-- bbox values are integers on a 0-1000 grid, x1 < x2 and y1 < y2, measured from the top-left.
+- bbox values are integers on a 0-1000 grid measured from the top-left, x_min < x_max and y_min < y_max.
+- x runs left to right across the canvas width; y runs top to bottom down the canvas height.
 - Place elements so they fit the canvas given in the request.
 - Keep the subject, count, actions and intent of the request. Never add subjects that were not asked for.
 - Give every element a type, a bbox and a detailed neutral desc.
@@ -167,6 +168,30 @@ def _valid_bbox(value: object) -> bool:
     )
 
 
+# Key order per element type from the caption spec; keys it does not list are dropped.
+ELEMENT_KEYS = {
+    "obj": ("type", "bbox", "desc", "color_palette"),
+    "text": ("type", "bbox", "text", "desc", "color_palette"),
+}
+
+
+def _valid_element(el: object) -> bool:
+    return (
+        isinstance(el, dict)
+        and isinstance(el.get("type"), str)
+        and isinstance(el.get("desc"), str)
+        and bool(el["desc"].strip())
+        and _valid_bbox(el.get("bbox"))
+    )
+
+
+def _spec_element(el: dict) -> dict:
+    """Turn an x-first enhancer element into the spec's [y_min, x_min, y_max, x_max] and key order."""
+    x_min, y_min, x_max, y_max = el["bbox"]
+    el = {**el, "bbox": [y_min, x_min, y_max, x_max]}
+    return {k: el[k] for k in ELEMENT_KEYS.get(el["type"], ELEMENT_KEYS["obj"]) if k in el}
+
+
 def _valid_caption(value: object) -> bool:
     if not isinstance(value, dict):
         return False
@@ -183,14 +208,7 @@ def _valid_caption(value: object) -> bool:
     elements = cd.get("elements")
     if not isinstance(elements, list):
         return False
-    return any(
-        isinstance(el, dict)
-        and isinstance(el.get("type"), str)
-        and isinstance(el.get("desc"), str)
-        and bool(el["desc"].strip())
-        and _valid_bbox(el.get("bbox"))
-        for el in elements
-    )
+    return any(_valid_element(el) for el in elements)
 
 
 def _strip_code_fence(text: str) -> str:
@@ -268,7 +286,7 @@ def _ask_enhancer(prompt: str, width: int, height: int, timeout: float) -> tuple
             {"role": "system", "content": CAPTION_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Canvas: {width}x{height} pixels.\n\nRequest: {prompt}",
+                "content": f"Canvas: {width} pixels wide (x) by {height} pixels tall (y).\n\nRequest: {prompt}",
             },
         ],
         "temperature": 0,
@@ -285,6 +303,9 @@ def _ask_enhancer(prompt: str, width: int, height: int, timeout: float) -> tuple
     caption = json.loads(_strip_code_fence(content))
     if not _valid_caption(caption):
         return None, "invalid caption"
+    # The model answers x-first; the image model reads bboxes y-first.
+    cd = caption["compositional_deconstruction"]
+    cd["elements"] = [_spec_element(el) for el in cd["elements"] if _valid_element(el)]
     if not _asks_for_style(prompt):
         caption.pop("style_description", None)
     return json.dumps(caption, separators=(",", ":"), ensure_ascii=False), None
