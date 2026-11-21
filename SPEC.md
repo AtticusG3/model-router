@@ -161,7 +161,7 @@ stanzas:
     slots: 2               # 0 = read --parallel / -np from command, else 1
     spin_up_seconds: 60    # 0 = default 60
     api_type: chat         # see api_type below; empty means chat
-    capabilities: [vision] # optional: vision, audio_in, audio_out, tools, reasoning; video: duration, resolution, seed
+    capabilities: [vision] # optional: vision, video_in, audio_in, audio_out, tools, reasoning; video: duration, resolution, seed
     family: qwen           # optional: catalog family icon; default is the metadata file, then a guess from the id, then the name
     params: 27B            # optional: catalog parameter count; wins over the metadata file and the hub
     owner: Example Labs    # optional: catalog owner; default is the metadata file, then the hub, then the family's owner
@@ -237,8 +237,10 @@ unknown value is a load error that lists the valid values, so a typo is caught
 by `-check` instead of silently hiding the model. `-check` prints the type per
 stanza.
 
-`capabilities` is an optional list per stanza from `vision`, `audio_in`,
-`audio_out`, `tools`, `reasoning`; an unknown flag is a load error. Video
+`capabilities` is an optional list per stanza from `vision`, `video_in`,
+`audio_in`, `audio_out`, `tools`, `reasoning`; an unknown flag is a load error.
+`video_in` means the chat backend takes `video_url` content parts itself; the
+Playground sends a vision model without it sampled frames instead. Video
 models add `duration`, `resolution` and `seed` when they accept those request
 fields; one of those flags on another `api_type` is a load error. It is
 published in `/v1/models` and `/_router/status`. A vision chat model (started
@@ -1035,7 +1037,10 @@ line lists each peer's skip reason (`cooling`, `telemetry stale`,
 
 `api_type` and `capabilities` are published in `/v1/models` and
 `/_router/status` (each catalog row carries `api_type` and `capabilities`), and
-the UI uses them to pick which models the Playground tabs offer. `api_type` also
+the UI uses them to pick which models the Playground tabs offer and which mic
+and camera controls the Chat tab shows. A local speech row also carries
+`clone_mode`, so the Playground shapes a one-off voice clone the way the
+backend takes it. `api_type` also
 gives a model-less request its default route (see the api_type table in the
 Config section). A request that names a model, or a stanza's explicit
 `match.path_prefix`, still wins over that fallback.

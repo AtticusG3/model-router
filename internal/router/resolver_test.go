@@ -352,6 +352,57 @@ stanzas:
 	}
 }
 
+// The Playground capture panel (#194) reads video_in to send a clip natively
+// and a speech stanza's clone_mode to shape a one-off voice reference.
+func TestVideoInAndCloneModePublished(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: vl-chat
+    command: "x --port {port}"
+    vram_mb: 0
+    api_type: chat
+    capabilities: [vision, video_in]
+  - model_id: tts-a
+    command: "x --port {port}"
+    vram_mb: 0
+    api_type: speech
+  - model_id: tts-b
+    command: "x --port {port}"
+    vram_mb: 0
+    api_type: speech
+    clone_mode: speaker_ref_b64
+`)
+	h := NewHandler(r, NewLogger(io.Discard, false))
+	for _, path := range []string{"/v1/models", "/_router/status"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		var body struct {
+			Data   []ModelStatus `json:"data"`
+			Models []ModelStatus `json:"models"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		got := map[string]ModelStatus{}
+		for _, m := range append(body.Data, body.Models...) {
+			got[m.ID] = m
+		}
+		if c := got["vl-chat"].Capabilities; !slices.Equal(c, []string{"vision", "video_in"}) {
+			t.Errorf("%s vl-chat capabilities = %v", path, c)
+		}
+		if m := got["vl-chat"].CloneMode; m != "" {
+			t.Errorf("%s vl-chat clone_mode = %q, want none on a chat model", path, m)
+		}
+		if m := got["tts-a"].CloneMode; m != "ref_audio" {
+			t.Errorf("%s tts-a clone_mode = %q, want the ref_audio default", path, m)
+		}
+		if m := got["tts-b"].CloneMode; m != "speaker_ref_b64" {
+			t.Errorf("%s tts-b clone_mode = %q", path, m)
+		}
+	}
+}
+
 func TestCatalogUniqueMeshModels(t *testing.T) {
 	r := spilloverRouter(t, `
 start_port: 5900

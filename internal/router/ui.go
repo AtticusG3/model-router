@@ -17,6 +17,12 @@ var uiCSS string
 //go:embed ui/app.js
 var uiJS string
 
+// uiMediaCaptureJS is the Playground mic and camera capture script. It loads
+// before app.js.
+//
+//go:embed ui/mediacapture.js
+var uiMediaCaptureJS string
+
 // uiAppJS is app.js as served, with the bundled family icons filled in.
 var uiAppJS = strings.Replace(uiJS, "__EMBED_FAMILY_ICONS__", familyIconsJSON(), 1)
 
@@ -24,6 +30,7 @@ var uiAppJS = strings.Replace(uiJS, "__EMBED_FAMILY_ICONS__", familyIconsJSON(),
 // files so the fleet needs only the model-router binary.
 var webUIHTML = strings.NewReplacer(
 	"__EMBED_CSS__", uiCSS,
+	"__EMBED_MEDIA_CAPTURE_JS__", uiMediaCaptureJS,
 	"__EMBED_JS__", uiAppJS,
 ).Replace(uiIndexHTML)
 

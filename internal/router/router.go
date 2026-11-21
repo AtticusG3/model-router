@@ -2325,6 +2325,9 @@ type ModelStatus struct {
 	APIType   string `json:"api_type,omitempty"`
 	// Capabilities lists what the backend supports (vision, tools, ...).
 	Capabilities []string `json:"capabilities,omitempty"`
+	// CloneMode is a speech stanza's voice reference shape (ref_audio or
+	// speaker_ref_b64), so a client can send a one-off clone the backend takes.
+	CloneMode string `json:"clone_mode,omitempty"`
 	// GPUs lists where running local instances sit, one entry per instance.
 	GPUs []int `json:"gpus,omitempty"`
 	// Family is the model's family and maker; nil when unknown.
@@ -2432,7 +2435,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
-			Capabilities: s.Capabilities, GPUs: gpus, Family: fam, Info: info,
+			Capabilities: s.Capabilities, CloneMode: s.CloneMode, GPUs: gpus, Family: fam, Info: info,
 		})
 		seen[id] = true
 		// A filter-set id is a catalog row of its own, sharing the stanza's state.

@@ -272,12 +272,16 @@
   }
   window.clearHistory=tab=>{hist[tab].forEach(histDrop);hist[tab]=[];histRender(tab)};
 
+  // capture.js reads each model's capabilities (and a speech model's clone_mode) through this.
+  window.routerModels=()=>status.models||[];
+  const capture=()=>window.MediaCapture||null;
+
   window.sendChat=async function(){
     const out=$('chat-output');
     out.className='output chat-output';
     out.innerHTML='';
-    const body={model:$('chat-model').value,messages:[{role:'user',content:$('chat-prompt').value}],max_tokens:Number($('chat-tokens').value)||256,temperature:Number($('chat-temp').value)||0.7,stream:true};
-    const h=histStart('chat');
+    const body={model:$('chat-model').value,messages:[{role:'user',content:capture()?capture().chatContent($('chat-prompt').value):$('chat-prompt').value}],max_tokens:Number($('chat-tokens').value)||256,temperature:Number($('chat-temp').value)||0.7,stream:true};
+    const n=capture()?capture().chatAttachmentCount():0,h=histStart('chat',n?$('chat-prompt').value+' (+'+n+' attachment'+(n>1?'s':'')+')':undefined);
     let reasoning='',content='',raf=0;
     const schedule=()=>{if(raf)return;raf=requestAnimationFrame(()=>{raf=0;paintChat(out,reasoning,content,true)})};
     try{
@@ -456,6 +460,8 @@
     out.className='output muted';out.textContent='Generating audio…';
     try{
       const body={model,input,response_format:format};if(voice)body.voice=voice;
+      // A one-off clone from the capture panel replaces the voice for this request only.
+      const clone=capture()&&capture().speechClone(model);if(clone){delete body.voice;Object.assign(body,clone)}
       const r=await fetch('/v1/audio/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!r.ok){const text=await r.text();let d;try{d=JSON.parse(text)}catch(e){d=null}const e=d&&d.error;throw new Error('HTTP '+r.status+': '+((e&&e.message)||e||text||r.statusText))}
       if(speechLive)URL.revokeObjectURL(speechLive);
@@ -528,12 +534,12 @@
     if(t){$('transcribe-copy').textContent='Copy '+t.format.toUpperCase();$('transcribe-download').textContent='Download .'+t.format}
   }
   window.sendTranscription=async function(){
-    const out=$('transcribe-output'),model=$('transcribe-model').value,file=$('transcribe-file').files[0],format=$('transcribe-format').value,language=$('transcribe-language').value;
+    const out=$('transcribe-output'),model=$('transcribe-model').value,file=$('transcribe-file').files[0]||(capture()&&capture().transcriptionFile()),format=$('transcribe-format').value,language=$('transcribe-language').value;
     let h=null;
     const fail=m=>{out.className='output error';out.textContent=m;histEnd(h,'error')};
     showTranscript(null);
     if(!model)return fail('No transcription model is available. Add a catalog entry with api_type: transcription.');
-    if(!file)return fail('Choose an audio file.');
+    if(!file)return fail('Choose an audio file or record one.');
     h=histStart('transcription',file.name);
     out.className='output muted';out.textContent='Transcribing…';
     try{
@@ -640,7 +646,7 @@
   }
   window.sendVideo=async function(){
     if(videoJob)return;
-    const out=$('video-output'),model=$('video-model').value,prompt=$('video-prompt').value.trim(),ref=$('video-reference').files[0];
+    const out=$('video-output'),model=$('video-model').value,prompt=$('video-prompt').value.trim(),ref=$('video-reference').files[0]||(capture()&&capture().videoReference());
     const fail=m=>{out.className='output error';out.textContent=m};
     if(!model)return fail('No video model is available. Add a catalog entry with api_type: video.');
     if(!prompt)return fail('Enter a prompt.');
