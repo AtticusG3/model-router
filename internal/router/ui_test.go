@@ -221,6 +221,25 @@ func TestEmbeddedUIBrandAndLiveActivity(t *testing.T) {
 	}
 }
 
+// The capture dialog names the clipped fields and opens a clipped body in the
+// parsed view: an image placeholder shows the stored thumbnail and a stream's
+// dropped middle is marked. Only a raw cut is reported as such.
+func TestEmbeddedUICaptureClippedFields(t *testing.T) {
+	for _, want := range []string{
+		"'Clipped to fit 256 KB: '+cap.clipped_fields.join(', ')", "Bodies cut at 256 KB as raw bytes. ",
+		"setCapView(p.ok?'parsed':'raw')", "if(!v||CLIPPED_IMG.test(v))return ''",
+		"clippedImg?'<img class=\"cap-img\" alt=\"Thumbnail of the generated image\" src=\"/_router/activity/'+esc(e.id)+'/thumb\">",
+		"else if(l.startsWith(': [clipped '))out[last]+=",
+	} {
+		if !strings.Contains(webUIHTML, want) {
+			t.Errorf("embedded UI missing %q", want)
+		}
+	}
+	if strings.Contains(webUIHTML, "Bodies truncated to 256 KB.") {
+		t.Error("the dialog still reports every long body as truncated")
+	}
+}
+
 // Some proxies hold a text/plain stream until it ends. The Logs page must stop
 // waiting for headers and poll the JSON snapshot instead, and say so. A model
 // source has no lines in the combined snapshot, so it polls its own.

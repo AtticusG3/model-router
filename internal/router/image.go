@@ -99,8 +99,9 @@ type originalImageBody struct {
 
 type originalImageBodyKey struct{}
 
-// captureOriginalImageBody keeps the first maxCaptureBody bytes of the client's
-// body and leaves the whole body replayable on req.
+// captureOriginalImageBody keeps the first bytes of the client's body (up to
+// maxClipSource of JSON, maxCaptureBody of anything else) and leaves the whole
+// body replayable on req.
 func captureOriginalImageBody(req *http.Request) (*originalImageBody, error) {
 	ob := &originalImageBody{}
 	if req.Body == nil || req.Body == http.NoBody {
@@ -109,12 +110,19 @@ func captureOriginalImageBody(req *http.Request) (*originalImageBody, error) {
 	}
 	ob.hasBody = true
 	read, err := io.ReadAll(io.LimitReader(req.Body, maxCaptureBody+1))
+	limit := captureLimit(read, maxClipSource)
+	if err == nil && len(read) > maxCaptureBody && limit > maxCaptureBody {
+		// A JSON body (an init image in base64) is read on to be clipped by field.
+		var more []byte
+		more, err = io.ReadAll(io.LimitReader(req.Body, int64(limit-maxCaptureBody)))
+		read = append(read, more...)
+	}
 	if err != nil {
 		return nil, err
 	}
 	ob.body = read
-	if len(read) > maxCaptureBody {
-		ob.body = read[:maxCaptureBody]
+	if len(read) > limit {
+		ob.body = read[:limit]
 		ob.truncated = true
 	} else {
 		// ReadAll stopped at the body's end, not at the capture cap.

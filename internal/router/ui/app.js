@@ -996,12 +996,14 @@
   }
 
   const parseJSON=s=>{try{return JSON.parse(s)}catch(e){return null}};
+  const CLIPPED_IMG=/^\[image \d+: /;
   // imgSrcs reads image data from an OpenAI-style (data[]) or sd.cpp-style (images[]) response.
   function imgSrcs(d){
     const list=d&&(Array.isArray(d.data)?d.data:Array.isArray(d.images)?d.images:[])||[];
     return list.map(x=>{
       const v=typeof x==='string'?x:(x&&(x.b64_json||x.url))||'';
-      if(!v)return '';
+      // A clipped capture holds "[image 0: png 1.3 MB]" in place of the bytes.
+      if(!v||CLIPPED_IMG.test(v))return '';
       if(/^(https?:|data:image\/)/i.test(v))return v;
       return 'data:image/'+(v.startsWith('/9j/')?'jpeg':v.startsWith('UklG')?'webp':'png')+';base64,'+v;
     }).filter(Boolean);
@@ -1009,12 +1011,13 @@
   // chatReply reads a chat completion, whole or streamed as SSE. It returns null when the body is neither.
   function chatReply(body){
     const out={text:'',think:'',finish:''};
+    let last='text';
     const take=d=>{
       const c=d&&Array.isArray(d.choices)&&d.choices[0];
       if(!c)return false;
       const m=c.message||c.delta||{};
-      if(typeof m.content==='string')out.text+=m.content;
-      if(typeof m.reasoning_content==='string')out.think+=m.reasoning_content;
+      if(typeof m.content==='string'){out.text+=m.content;if(m.content)last='text'}
+      if(typeof m.reasoning_content==='string'){out.think+=m.reasoning_content;if(m.reasoning_content)last='think'}
       if(c.finish_reason)out.finish=c.finish_reason;
       return true;
     };
@@ -1022,7 +1025,8 @@
     const whole=parseJSON(s);
     if(whole)return take(whole)?out:null;
     let ok=false;
-    s.split('\n').forEach(l=>{if(l.startsWith('data:')){const d=parseJSON(l.slice(5).trim());if(d&&take(d))ok=true}});
+    // A clipped stream keeps its first and last events; mark the gap where the middle was.
+    s.split('\n').forEach(l=>{if(l.startsWith('data:')){const d=parseJSON(l.slice(5).trim());if(d&&take(d))ok=true}else if(l.startsWith(': [clipped '))out[last]+='\n'+l.slice(2)+'\n'});
     return ok?out:null;
   }
   const msgText=c=>typeof c==='string'?c:Array.isArray(c)?c.map(p=>p&&p.type==='text'?p.text:'['+((p&&p.type)||'part')+']').join('\n'):c==null?'':JSON.stringify(c);
@@ -1043,7 +1047,8 @@
       ok=!!(req||imgs.length);
       const size=r.size||(r.width&&r.height?r.width+'×'+r.height:'—');
       html+=capBlock('Image request','<dl class="cap-summary">'+capStat('Prompt',r.prompt||'—')+capStat('Size',size)+capStat('Count',r.n||imgs.length||'—')+'</dl>');
-      html+=capBlock('Result',imgs.length?imgs.map(s=>'<img class="cap-img" alt="Generated image" src="'+esc(s)+'">').join(''):'<p class="subtle">No image in the response body. It may be clipped or not JSON; the raw view has the bytes.</p>');
+      const clippedImg=!imgs.length&&/"\[image \d+: /.test(cap.resp_body||'');
+      html+=capBlock('Result',imgs.length?imgs.map(s=>'<img class="cap-img" alt="Generated image" src="'+esc(s)+'">').join(''):clippedImg?'<img class="cap-img" alt="Thumbnail of the generated image" src="/_router/activity/'+esc(e.id)+'/thumb"><p class="subtle">The image was clipped from the capture; this is the stored thumbnail.</p>':'<p class="subtle">No image in the response body. It may be clipped or not JSON; the raw view has the bytes.</p>');
     }else if(req&&Array.isArray(req.messages)){
       const reply=chatReply(cap.resp_body);
       ok=true;
@@ -1106,7 +1111,8 @@
       const cap=await json('/_router/activity/'+id);
       const p=capParsed(e,cap);
       const notes=(cap.notes||[]).length?'Pipeline: '+cap.notes.join('; ')+'. ':'';
-      $('capture-meta').textContent=notes+(cap.truncated?'Bodies truncated to 256 KB. ':'')+(p.ok?'':'Not a recognised chat or image body, showing the raw view. ');
+      const clipped=(cap.clipped_fields||[]).length?'Clipped to fit 256 KB: '+cap.clipped_fields.join(', ')+'. ':'';
+      $('capture-meta').textContent=notes+clipped+(cap.truncated?'Bodies cut at 256 KB as raw bytes. ':'')+(p.ok?'':'Not a recognised chat or image body, showing the raw view. ');
       $('capture-parsed').innerHTML=p.html;
       $('capture-req').textContent=prettyBody(cap.req_body);
       $('capture-resp').textContent=prettyBody(cap.resp_body);

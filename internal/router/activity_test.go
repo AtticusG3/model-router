@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -300,12 +301,13 @@ func TestActivitySkipsNonGenerationRequests(t *testing.T) {
 	}
 }
 
-// An image response above the capture limit still yields a thumbnail: the router
-// buffers the whole body, decodes and downscales the first image before clipping
-// the capture, and serves it from /_router/activity/{id}/thumb.
+// An sd.cpp txt2img response with a 1.5 MB image still yields a thumbnail: the
+// router buffers the whole body, decodes and downscales the first image, and
+// serves it from /_router/activity/{id}/thumb. The capture keeps valid JSON with
+// the image swapped for a placeholder.
 func TestActivityImageThumbnail(t *testing.T) {
 	// Incompressible noise, so the base64 JSON body stays above the capture limit.
-	src := image.NewNRGBA(image.Rect(0, 0, 512, 512))
+	src := image.NewNRGBA(image.Rect(0, 0, 512, 768))
 	rnd := rand.New(rand.NewPCG(1, 2))
 	for i := range src.Pix {
 		src.Pix[i] = byte(rnd.IntN(256))
@@ -354,14 +356,20 @@ func TestActivityImageThumbnail(t *testing.T) {
 		t.Fatal("expected capture")
 	}
 
-	// The stored capture is still clipped to the limit even though the whole
-	// body was buffered for the thumbnail.
+	// The stored capture fits the limit as JSON that still parses, with the
+	// image named instead of cut mid-string.
 	cap, ok := r.Activity().Capture(entries[0].ID)
 	if !ok {
 		t.Fatal("capture missing")
 	}
-	if !cap.Truncated || len(cap.RespBody) != maxCaptureBody {
-		t.Fatalf("capture = truncated %v, %d bytes, want truncated at %d", cap.Truncated, len(cap.RespBody), maxCaptureBody)
+	if cap.Truncated || len(cap.RespBody) > maxCaptureBody || !json.Valid([]byte(cap.RespBody)) {
+		t.Fatalf("capture = truncated %v, %d bytes, valid JSON %v; want clipped JSON within %d", cap.Truncated, len(cap.RespBody), json.Valid([]byte(cap.RespBody)), maxCaptureBody)
+	}
+	if want := []string{"response.images[0]"}; !slices.Equal(cap.ClippedFields, want) {
+		t.Fatalf("clipped fields = %q, want %q", cap.ClippedFields, want)
+	}
+	if !strings.Contains(cap.RespBody, `"images":["[image 0: png 1.`) || !strings.Contains(cap.RespBody, `"parameters":{}`) {
+		t.Fatalf("capture body = %.200q, want the image placeholder and the other fields kept", cap.RespBody)
 	}
 
 	thumbReq := httptest.NewRequest("GET", "/_router/activity/1/thumb", nil)
@@ -435,14 +443,26 @@ func TestActivityThumbnailDecodeFailureSurfaced(t *testing.T) {
 	}
 }
 
-// The extra image buffer stops at imgMax and flags the cut, so recordProxy can
-// report an oversized response instead of a decode failure.
-func TestActivityWriterFlagsImageBufferTruncation(t *testing.T) {
+// The response buffer stops at max and flags the cut, so recordProxy can report
+// an oversized image instead of a decode failure.
+func TestActivityWriterFlagsBufferTruncation(t *testing.T) {
 	rec := httptest.NewRecorder()
-	w := &activityWriter{ResponseWriter: rec, max: maxCaptureBody, imgMax: 4, started: time.Now()}
+	w := &activityWriter{ResponseWriter: rec, max: 4, started: time.Now()}
 	_, _ = w.Write([]byte("abcdef"))
-	if !w.imgTruncated || w.img.String() != "abcd" {
-		t.Fatalf("img = %q, truncated = %v", w.img.String(), w.imgTruncated)
+	if !w.truncated || w.body.String() != "abcd" {
+		t.Fatalf("body = %q, truncated = %v", w.body.String(), w.truncated)
+	}
+}
+
+// Kept media stops at the 256 KB capture clip even with the larger JSON buffer,
+// since it is served whole for the player.
+func TestActivityWriterCapsMediaAtCaptureClip(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "audio/wav")
+	w := &activityWriter{ResponseWriter: rec, max: maxClipSource, keepMedia: true, started: time.Now()}
+	_, _ = w.Write(make([]byte, maxCaptureBody+1))
+	if !w.truncated || w.body.Len() != maxCaptureBody {
+		t.Fatalf("media body = %d bytes, truncated = %v; want cut at %d", w.body.Len(), w.truncated, maxCaptureBody)
 	}
 }
 
@@ -517,6 +537,11 @@ func TestActivityRecordsTokensForLongStream(t *testing.T) {
 	tok := entries[0].Tokens
 	if tok.PromptTokens != 100 || tok.CompletionTokens != 1500 || tok.PromptEvalTokens != 60 || tok.CachedTokens != 40 || tok.PredictedMs != 25000 {
 		t.Fatalf("long stream tokens = %+v", tok)
+	}
+	// The capture keeps valid SSE: the middle events are summarised, not cut.
+	cap, _ := r.Activity().Capture(entries[0].ID)
+	if cap.Truncated || len(cap.RespBody) > maxCaptureBody || len(cap.ClippedFields) != 1 || !strings.HasPrefix(cap.ClippedFields[0], "response.events[") {
+		t.Fatalf("stream capture = truncated %v, %d bytes, clipped %q", cap.Truncated, len(cap.RespBody), cap.ClippedFields)
 	}
 	out := r.metrics.Render("router-a")
 	for _, want := range []string{

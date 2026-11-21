@@ -203,7 +203,11 @@ localhost, Download works anywhere.
 The chat/image selectors keep the current choice across the 3s status poll.
 **Activity** lists proxied generation requests on this node (token stats, charts,
 click a row for request/response). Captures live in memory only (256 KB per
-body, 8 MB total) and reset on restart. Image responses also keep a downscaled
+body, 8 MB total) and reset on restart. A longer JSON body or SSE stream is
+clipped inside so it still parses: the longest strings are shortened, base64
+images become `[image 0: png 1.3 MB]`, the middle of a long stream becomes one
+`: [clipped N events, …]` comment, and the dialog lists the clipped fields.
+Other bodies are cut at 256 KB and marked truncated. Image responses also keep a downscaled
 thumbnail (long edge 160 px, JPEG), counted in that 8 MB. A media response
 (`audio/*`, `video/*`, `application/octet-stream`) keeps only its content type,
 byte count and a body hash; a speech response of at most 256 KB is also kept
