@@ -25,8 +25,11 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
 - Peers pull `GET /_router/telemetry` every few seconds: the catalog of
   local models it shares, loaded models (fresh/stale), each copy's image
   pipeline caption, live free VRAM, and free VRAM if stale or idle models were
-  evicted. A router peer serves whatever its catalog advertises, so
-  `peers[].models` is only needed for `kind: openai` peers and older routers. Optional LAN discovery scans
+  evicted. Requests reach whatever a router peer's catalog advertises, so for
+  routing `peers[].models` is only needed for `kind: openai` peers and older
+  routers. A `peer/model` pool target still needs the model in that peer's
+  `models` list: pool targets are checked against config only, and an unlisted
+  one fails the load or reload with `pool ... unknown target`. Optional LAN discovery scans
   private /24s at startup and on a backoff timer for router peers the config
   does not name.
 - Spills requests to peers when the local node can't serve them (model not
@@ -259,11 +262,21 @@ walked. A peer-qualified id and a request proxied in from a peer are
 unaffected.
 
 `share: false` (per stanza, default `true`) keeps a model off the mesh: it is
-left out of the telemetry catalog and loaded list, and a request proxied in from
-a peer (or a peer's `POST /_router/load` or `/upstream/`) for it gets
+left out of the telemetry catalog and loaded list, its requests are left out of
+the telemetry activity feed (`in_progress`, `recent`), and a request proxied in
+from a peer (or a peer's `POST /_router/load` or `/upstream/`) for it gets
 `404 model not shared`, even if that peer's config still names it, and whether
 it is named by id, alias, filter-set id or a pool (a pool skips unshared members
-for a peer). Local clients are unaffected.
+for a peer). Local clients are unaffected, and the local Activity page still
+lists them.
+
+**Upgrade every caller before you set `share: false`.** A router on 2252e2b or
+earlier does not send `X-Model-Router-Peer` on its `POST /_router/load`, so
+this node takes it for a local client. If that caller still lists the model in
+its `peers[].models`, its load goes through: the model is loaded here, possibly
+evicting another one, and only the proxied request after it gets
+`404 model not shared`. Upgrade those callers first, or remove the model from
+their `peers[].models`.
 
 `max_request_body_mb` (top level, default 256, at most 1048576 = 1 TiB; a stanza may override it) caps
 one request body. Over the cap the client gets `413` before any model is

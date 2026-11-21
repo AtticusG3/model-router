@@ -2561,7 +2561,12 @@ func (r *Router) TelemetrySnapshot() *Telemetry {
 		Timestamp:    now.Unix(),
 	}
 	if r.activity != nil {
-		t.InProgress, t.Recent = r.activity.InProgress(), r.activity.Recent()
+		// Requests to an unshared model stay off the mesh too. InProgress and
+		// Recent return fresh copies, so filtering them leaves the log (and the
+		// local Activity API) with every row.
+		unshared := func(model string) bool { s := r.stanzaOf(model); return s != nil && !s.Shared() }
+		t.InProgress = slices.DeleteFunc(r.activity.InProgress(), func(e InProgressEntry) bool { return unshared(e.Model) })
+		t.Recent = slices.DeleteFunc(r.activity.Recent(), func(e RecentEntry) bool { return unshared(e.Model) })
 	}
 	return t
 }
