@@ -280,13 +280,14 @@ proxied in from peers. It is a preset name or a map:
 image_pipeline: sd-server   # the sd-server checks
 image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
 image_pipeline:
-  caption: "" | ideogram4    # caption format; "" = no caption step
+  caption: "" | ideogram4 | z-image   # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
   retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
-`caption` is a format name, so another format can be added later; an unknown
-name is a load error. The serving node advertises the format in its telemetry,
+`caption` names a prompt profile (`internal/router/imageprompt_*.go`), so a
+model family adds a file and an allow-list entry; an unknown name is a load
+error. `z-image` has no bare preset name; use the map form. The serving node advertises the format in its telemetry,
 so a peer spill prefers copies that run the same pipeline. The enhancer names
 the model and timeout the caption step uses. `sd-server` and `ideogram4` are
 the presets; an unknown preset, or `image_pipeline` on a stanza that is not
@@ -324,6 +325,19 @@ verbatim in the template caption (`high_level_description` and one element
 `X-SD-Shim-Prompt-Original` and `X-SD-Shim-Prompt-Enhanced` (percent-encoded)
 and `X-SD-Shim-Prompt-Source: enhancer | template`, and the Activity capture
 notes the caption sent.
+
+`caption: z-image` runs the same step, with the same skip rules, enhancer
+lookup, budget, cancel and headers, but asks for natural-language prose
+instead of a JSON caption: one detailed paragraph (about 80 to 200 words)
+covering subject, setting, framing for the canvas, lighting, colours and
+style, with any on-image text copied exactly inside English double quotes and
+no quality tags. The reply must be non-empty prose, not a JSON object, and
+must keep every double-quoted span of the original prompt word for word. On
+any failure the original prompt goes out verbatim (the body is not rewritten)
+with `X-SD-Shim-Prompt-Source: original`; it is never wrapped in the ideogram4
+template. `negative_prompt` and img2img requests are left alone. The research
+behind the profile is in
+[`docs/research/z-image-prompt-style.md`](docs/research/z-image-prompt-style.md).
 
 A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
 --listen-port {port}` and `health_check: /v1/models` (sd-server has no

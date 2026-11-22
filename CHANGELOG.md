@@ -8,7 +8,13 @@ The repo has no release tags yet. `0.1.0` is back-filled from the merges on `mas
 
 ## [Unreleased]
 
+### Added
+
+- `image_pipeline.caption: z-image`: txt2img prompts for Z-Image stanzas are expanded into detailed prose by the enhancer model, falling back to the original prompt verbatim. Enabled on the tracked Z-Image base and Juggernaut Z Fast stanzas (#205).
+
 ### Changed
+
+- The image caption step is now a table of prompt profiles keyed by `image_pipeline.caption`; ideogram4 behaviour is unchanged (#205).
 
 - Brought the docs up to the docs standard: a docs index, diagrams, page stamps and backlinks, and the docs rule in `AGENTS.md` (#185).
 
