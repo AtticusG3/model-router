@@ -165,7 +165,7 @@ stanzas:
     port: 5821
 
   - model_id: z-anime-turbo
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Z-Anime Turbo (8-step GGUF)"
     aliases: [z-anime, z-anime-waldron]
     command: >

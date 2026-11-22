@@ -33,7 +33,11 @@ The modes are gated on the model's capabilities, published on `/_router/status` 
 | `img2img` | The model accepts `/sdapi/v1/img2img` with a source image | Tracked `configs/*.yaml`, stanza `capabilities` |
 | `inpaint` | The model accepts a mask, so Outpaint is offered | Same |
 
-A model without `img2img` has Edit disabled. Without `inpaint`, Outpaint is disabled. The tab falls back to Generate and shows the reason under the mode control. On **Path default** the gate follows the stanza marked `path_default: true`.
+A model without `img2img` has Edit disabled. Without `inpaint`, Outpaint is disabled. The tab falls back to Generate and shows the reason under the mode control. On **Path default** the gate follows the stanza marked `path_default: true`. If the mesh has no path-default image stanza, the tab uses the union of listed image flags.
+
+`/_router/status` and `/v1/models` always include a `capabilities` array, even when it is empty. A selected model without `img2img` does not inherit the flag from another model.
+
+`z-anime-turbo` stays generate-only in the tracked configs until a patched sd-server is deployed and approved. The live shared binary still omits reference tokens from Z-Image positional embeddings, so a router-path `POST /sdapi/v1/img2img` (the router copies `init_images[0]` into `extra_images`) aborts that process. txt2img is fine. A patch and build script live in [`third_party/stable-diffusion.cpp`](../../third_party/stable-diffusion.cpp/README.md); they were tested on a spare port and they stop the assert. Leave `capabilities` without `img2img` until that binary is the one the stanza runs. The #126 rollback (reverting a stanza to the shim command line) is unchanged.
 
 ## Generate
 
@@ -95,7 +99,8 @@ Explicit margins work the same way: `"outpaint": {"top": 128, "bottom": 128, "le
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Edit or Outpaint is greyed out | The stanza has no `img2img` / `inpaint` flag | Add the flag to `configs/<node>.yaml` and to the live config |
+| Edit or Outpaint is greyed out | The stanza has no `img2img` / `inpaint` flag | Add the flag to `configs/<node>.yaml` and to the live config, only if the backend actually serves that mode |
+| `z-anime-turbo` Edit is greyed out, or a curl img2img returns `502 upstream error` | The live sd-server still aborts on Z-Image edit (PE length, #203) | Leave Edit off until the patched binary in `third_party/stable-diffusion.cpp` is deployed and approved. txt2img still works |
 | `400 img2img requires non-empty init_images` | No source, or the upload did not decode | Re-pick the file. Only PNG, JPEG and WEBP are accepted |
 | `400 outpaint preset "x"` | Unknown preset | Use `1.5x`, `2x` or `a:b` |
 | The border comes back as grey | The model ignored the mask | Try an `inpaint`-capable stanza. Not every img2img model reads masks |
@@ -104,12 +109,14 @@ Explicit margins work the same way: `"outpaint": {"top": 128, "bottom": 128, "le
 ## See also
 
 - [Router config reference](../../SPEC.md): capability flags and the request pipeline.
+- [Z-Image reference-token PE patch for sd-server](../../third_party/stable-diffusion.cpp/README.md): the patch, build script and deploy steps.
 - [Video playground](../../README.md): the other async job playground.
 
 ## Linked from
 
 <!-- backlinks:start -->
 - [Model Router: SPEC](../../SPEC.md)
+- [Z-Image reference-token PE patch for sd-server](../../third_party/stable-diffusion.cpp/README.md)
 - [model-router](../../README.md)
 - [Playground guides](README.md)
 <!-- backlinks:end -->

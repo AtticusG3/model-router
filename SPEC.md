@@ -247,9 +247,11 @@ models add `duration`, `resolution` and `seed` when they accept those request
 fields; image models add `img2img` (accepts `/sdapi/v1/img2img` with a source
 image) and `inpaint` (accepts a mask, so the Playground offers Outpaint). A
 flag on the wrong `api_type` is a load error. Every flag is published in
-`/v1/models` and `/_router/status`; a catalog row also carries `path_default`
-when its stanza is the one a request with no model name lands on, so the
-Playground gates Edit and Outpaint on that stanza. The Image tab how-to is
+`/v1/models` and `/_router/status` as a `capabilities` array that is always
+present, including when it is empty, so a model with no flags is not read as
+"unknown". A catalog row also carries `path_default` when its stanza is the
+one a request with no model name lands on, so the Playground gates Edit and
+Outpaint on that stanza. The Image tab how-to is
 [docs/playground/image-editing.md](docs/playground/image-editing.md). A vision chat model (started
 with an `--mmproj`) stays `api_type: chat` and adds `capabilities: [vision]`.
 

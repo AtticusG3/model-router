@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -483,5 +485,83 @@ func TestImagePipelineEarlyReplyMarksCapturePartial(t *testing.T) {
 	}
 	if !cap.Truncated {
 		t.Fatal("capture not marked partial after an early backend reply")
+	}
+}
+
+// TestImageBackendCrashRecoversOnRepeatRequest covers #203: when the image
+// backend aborts mid-request (sd-server hits a GGML_ASSERT), the router
+// reports the upstream failure and a second request reloads the stanza
+// without a manual unload.
+func TestImageBackendCrashRecoversOnRepeatRequest(t *testing.T) {
+	var hits atomic.Int32
+	var current atomic.Pointer[fakeProc]
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"object":"list","data":[]}`)
+	})
+	mux.HandleFunc("/sdapi/v1/img2img", func(w http.ResponseWriter, req *http.Request) {
+		if hits.Add(1) == 1 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("backend cannot hijack")
+				return
+			}
+			conn, _, err := hj.Hijack()
+			if err != nil {
+				t.Errorf("hijack: %v", err)
+				return
+			}
+			_ = conn.Close()
+			if p := current.Load(); p != nil {
+				p.exit(io.EOF)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"images":["ok"]}`)
+	})
+	r := imageTestRouter(t, mux)
+	r.spawn = func(string, []string) (Proc, error) {
+		p := newFakeProc()
+		current.Store(p)
+		return p, nil
+	}
+
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n" + strings.Repeat("\x00", 16)))
+	body := `{"prompt":"a red car","init_images":["` + png + `"],"denoising_strength":0.6}`
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/sdapi/v1/img2img", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		NewHandler(r, NewLogger(io.Discard, false)).ServeHTTP(rec, req)
+		return rec
+	}
+
+	first := post()
+	if first.Code != http.StatusBadGateway {
+		t.Fatalf("first request status = %d body = %s, want 502", first.Code, first.Body.String())
+	}
+	if !strings.Contains(first.Body.String(), "upstream error") {
+		t.Fatalf("first body = %q, want an upstream error", first.Body.String())
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var second *httptest.ResponseRecorder
+	for {
+		second = post()
+		if second.Code == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("repeat request did not recover: status = %d body = %s", second.Code, second.Body.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !strings.Contains(second.Body.String(), `"images"`) {
+		t.Fatalf("repeat body = %s, want images", second.Body.String())
+	}
+	if hits.Load() < 2 {
+		t.Fatalf("backend hits = %d, want at least two", hits.Load())
 	}
 }

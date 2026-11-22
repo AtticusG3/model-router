@@ -509,9 +509,7 @@ func handleModels(r *Router) http.HandlerFunc {
 			if ms.Name != "" {
 				rec["name"] = ms.Name
 			}
-			if len(ms.Capabilities) > 0 {
-				rec["capabilities"] = ms.Capabilities
-			}
+			rec["capabilities"] = publishedCaps(ms.Capabilities)
 			if ms.CloneMode != "" {
 				rec["clone_mode"] = ms.CloneMode
 			}

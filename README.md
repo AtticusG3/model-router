@@ -377,7 +377,8 @@ per stanza.
 `audio_in`, `audio_out`, `tools`, `reasoning`, for video models `duration`,
 `resolution`, `seed`, and for image models `img2img` and `inpaint`. An unknown
 flag fails load, as does a flag on the wrong `api_type`. Capabilities are
-published in `/v1/models` and `/_router/status`, so a vision chat model (started
+published in `/v1/models` and `/_router/status` as an array that is always
+present, including when it is empty, so a vision chat model (started
 with an `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`. `video_in`
 marks a chat model that takes `video_url` parts itself (a vLLM Qwen-VL server,
 not llama-server); without it the Playground sends a camera clip as sampled
@@ -553,6 +554,7 @@ cmd/fake-model/          test backend (OpenAI + sdapi + audio/voice/realtime/vid
 internal/config/         config loading/validation
 internal/router/         matcher, admission, supervisor, telemetry, pools, proxy, server
 configs/                 per-node YAML + qwen-fixed-chat-template.jinja
-deploy/                  systemd units, swap-over procedure, sd-server shim + tests
+deploy/                  systemd units, swap-over procedure, sd-server shim + tests, Z-Image patch build script
+third_party/             vendor patches (sd-server Z-Image PE, #203)
 test/                    smoke-test configs + launcher
 ```

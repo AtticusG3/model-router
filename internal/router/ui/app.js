@@ -322,20 +322,22 @@
   let imageCtl,imageSource={data:null,w:0,h:0,name:''},imageResult=null;
   window.cancelImage=()=>{if(imageCtl)imageCtl.abort()};
 
-  // Capabilities come from /_router/status. Path default means "the stanza a
-  // request lands on when no model is named", so it follows that stanza's flags;
-  // if the mesh has no such stanza listed, fall back to the union of image
-  // models rather than hiding modes the router can actually serve.
-  function imageCaps(){
-    const list=(status.models||[]).filter(m=>m.api_type==='image');
-    const id=$('image-model').value;
+  // Capabilities come from /_router/status. A named model uses only its own
+  // flags (missing or empty means Generate only). Path default follows the
+  // stanza marked path_default; if the mesh has no such stanza, fall back to
+  // the union of image models rather than hiding modes the router can serve.
+  // --- image caps picker (kept pure; ui_image_test.go runs it under node) ---
+  window.imageCapsFor=function(models,id){
+    const list=(models||[]).filter(m=>m.api_type==='image');
     const m=id?list.find(x=>x.id===id):list.find(x=>x.path_default);
-    const caps=m&&m.capabilities?m.capabilities.slice():null;
-    if(caps)return caps;
+    if(id)return (m&&Array.isArray(m.capabilities))?m.capabilities.slice():[];
+    if(m)return Array.isArray(m.capabilities)?m.capabilities.slice():[];
     const out=[];
     for(const x of list)for(const c of (x.capabilities||[]))if(!out.includes(c))out.push(c);
     return out;
-  }
+  };
+  // --- end image caps picker ---
+  function imageCaps(){return imageCapsFor(status.models||[],$('image-model').value)}
   // An empty or unknown value means Generate: the tab ships on Generate and a
   // restored history entry may not carry the mode.
   function imageMode(){const m=$('image-mode').value;return (m==='edit'||m==='outpaint')?m:'generate'}

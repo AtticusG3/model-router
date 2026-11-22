@@ -13,6 +13,12 @@ The repo has no release tags yet. `0.1.0` is back-filled from the merges on `mas
 - `image_pipeline.caption: z-image`: txt2img prompts for Z-Image stanzas are expanded into detailed prose by the enhancer model, falling back to the original prompt verbatim. Enabled on the tracked Z-Image base and Juggernaut Z Fast stanzas (#205).
 - `image_pipeline.caption: z-anime`: txt2img prompts for Z-Anime stanzas, including booru-style tag lists, are rewritten into front-loaded descriptive prose, falling back to the original prompt verbatim. Enabled on the tracked `z-anime-turbo` stanzas (#206).
 
+### Fixed
+
+- `z-anime-turbo` no longer advertises `img2img`. The live sd-server build aborts on Z-Image edit because positional embeddings omit the reference tokens (#203). The Playground Image tab offers Generate only for that model. A tested patch and build script are in `third_party/stable-diffusion.cpp`. The stanza stays generate-only until a deploy of that binary is approved.
+- `/_router/status` and `/v1/models` always publish a `capabilities` array, including an empty one, so a model with no flags is not treated as "inherit every other model's flags". The Image tab follows the selected model's flags (or the `path_default` stanza on Path default).
+- A stanza whose backend dies mid-request is reloaded on the next request, without a manual unload. Covered by a test (#203).
+
 ### Changed
 
 - The image caption step is now a table of prompt profiles keyed by `image_pipeline.caption`; ideogram4 behaviour is unchanged (#205).

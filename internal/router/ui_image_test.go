@@ -110,3 +110,58 @@ if (bad) process.exit(1);
 		t.Fatalf("gating rule failed: %v\n%s", runErr, out)
 	}
 }
+
+// TestImageCapsDoesNotInheritOtherModels is the #203 gate: a selected model
+// without img2img must not inherit the flag from another image model, and a
+// path_default stanza with no flags must not fall back to the union either.
+func TestImageCapsDoesNotInheritOtherModels(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not installed; the caps picker is exercised in the browser")
+	}
+	start := strings.Index(uiAppJS, "// --- image caps picker")
+	end := strings.Index(uiAppJS, "// --- end image caps picker ---")
+	if start < 0 || end < 0 {
+		t.Fatal("image caps picker markers are missing from app.js")
+	}
+	rule := uiAppJS[start:end]
+	harness := "globalThis.window = globalThis;\n" + rule + `
+const models = [
+  {id:'edit-ok', api_type:'image', capabilities:['img2img']},
+  {id:'gen-only', api_type:'image'},
+  {id:'gen-empty', api_type:'image', capabilities:[]},
+  {id:'path-def', api_type:'image', path_default:true},
+  {id:'chat', api_type:'chat', capabilities:['vision']},
+];
+const cases = [
+  {id:'gen-only', want:[]},
+  {id:'gen-empty', want:[]},
+  {id:'edit-ok', want:['img2img']},
+  {id:'path-def', want:[]},
+  {id:'', want:[]}, // Path default follows path-def, which has no flags
+  {id:'missing', want:[]},
+];
+let bad = 0;
+for (const c of cases) {
+  const got = imageCapsFor(models, c.id);
+  const ok = JSON.stringify(got) === JSON.stringify(c.want);
+  if (!ok) { bad++; console.error('FAIL', JSON.stringify(c), '->', JSON.stringify(got)); }
+}
+// Union only when Path default has no path_default stanza at all.
+const noDefault = models.filter(m => m.id !== 'path-def');
+const union = imageCapsFor(noDefault, '');
+if (JSON.stringify(union) !== JSON.stringify(['img2img'])) {
+  bad++; console.error('FAIL union', JSON.stringify(union));
+}
+if (bad) process.exit(1);
+`
+	dir := t.TempDir()
+	file := filepath.Join(dir, "caps.js")
+	if err := os.WriteFile(file, []byte(harness), 0o600); err != nil {
+		t.Fatalf("write harness: %v", err)
+	}
+	out, runErr := exec.Command(node, file).CombinedOutput()
+	if runErr != nil {
+		t.Fatalf("image caps picker failed: %v\n%s", runErr, out)
+	}
+}
