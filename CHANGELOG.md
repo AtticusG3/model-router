@@ -4,9 +4,13 @@ All notable changes to this project are recorded here.
 Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Versions: [SemVer 2.0.0](https://semver.org/spec/v2.0.0.html).
 Dates are YYYY-MM-DD (AEST).
 
-The repo has no release tags yet. `0.1.0` is back-filled from the merges on `master` up to 2026-11-22. Tag it `v0.1.0` when the first release is cut.
+Tags: `v0.1.0` (back-filled from the merges on `master` up to 2026-11-22, re-pointed onto the rewritten history) and `v0.2.0` (22 Nov 2026). Cut a release by tagging `master` and pasting the version's section into the release body.
 
 ## [Unreleased]
+
+Nothing yet.
+
+## [0.3.0] - 2026-11-22
 
 ### Added
 
