@@ -512,6 +512,9 @@ func handleModels(r *Router) http.HandlerFunc {
 			if len(ms.Capabilities) > 0 {
 				rec["capabilities"] = ms.Capabilities
 			}
+			if ms.CloneMode != "" {
+				rec["clone_mode"] = ms.CloneMode
+			}
 			if ms.PathDefault {
 				rec["path_default"] = true
 			}

@@ -9,6 +9,7 @@ The operator Playground at `/ui/` has one tab per backend type. These pages cove
 | Page | What it covers |
 |---|---|
 | [Edit and outpaint an image](image-editing.md) | Image tab Generate, Edit and Outpaint modes, capability gating, the outpaint request contract |
+| [Use the mic and camera](mic-and-camera.md) | Chat, Transcription, Speech and Video capture, capability gating, the browser-to-request formats |
 
 ## See also
 
