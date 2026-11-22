@@ -28,6 +28,23 @@ ss -tlnp | grep -E ':(18080|8081|8082)\b'   # per-node port from the table below
 install -m 0755 build/model-router /opt/ai/bin/model-router
 install -m 0644 configs/<node>.yaml /opt/ai/config/model-router.yaml
 install -m 0644 configs/qwen-fixed-chat-template.jinja /opt/ai/config/qwen-fixed-chat-template.jinja
+
+# 1b. The per-node overlay (#195): REAL peer URLs, discovery subnets and
+#     trusted proxies live in /opt/ai/config/local/<node>.yaml, which is
+#     untracked and merged at load time. NEVER copy a repo config over it, and
+#     never write real addresses into configs/<node>.yaml.
+#
+#       /opt/ai/config/local/<node>.yaml     real values (already on the node)
+#       configs/local/<node>.yaml            gitignored copy for reference
+#
+#     First install on a node that has none: split one out of its live config
+#     before installing the placeholder file.
+#
+#       deploy/overlay-split.py --node <node> /opt/ai/config/model-router.yaml
+#       install -m 0644 configs/local/<node>.yaml /opt/ai/config/local/<node>.yaml
+#
+#     Existing overlay: leave it alone. `-check` prints `overlay: <path>` when
+#     one is merged, so step 2 shows whether the node got its real values.
 # (peers are inline in the config for v0.1; the SPEC's separate peers.yaml can
 #  be introduced later without schema changes)
 

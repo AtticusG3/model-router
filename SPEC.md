@@ -95,6 +95,31 @@ One file per node (`-config`, default `/opt/ai/config/model-router.yaml`).
 (default hostname). `-check` validates and prints the derived catalog,
 including extra-instance ports, then exits.
 
+### Per-node overlay (`-overlay`)
+
+Tracked configs carry **placeholder addresses**: the LAN /24 as `10.99.0.x`,
+tailnet hosts as `203.0.113.x`, last octet preserved. The real per-node values
+(peer `base_url`s, `discovery.subnets`/`exclude`, `security.trusted_proxies` and
+`security.api_keys`) live in an untracked overlay:
+
+```
+<config dir>/local/<node>.yaml      default; <node> is -node or the hostname
+-overlay <path>                     explicit file
+```
+
+Merge semantics: deep merge over the parsed YAML document; maps merge key by
+key, lists and scalars in the overlay replace the base value. `peers` is a list,
+so an overlay that names peers replaces the whole list. A missing overlay is not
+an error (a fresh checkout runs on placeholders alone); an overlay that exists
+but fails to parse or validate **is** an error and the load is refused, never a
+silent fallback to the tracked file. The same merge runs on every reload
+(SIGHUP, file watch, `POST /_router/reload`), so editing either file reloads
+correctly. `-check` prints `overlay: <path>` when one is merged.
+
+Rationale for load-time rather than deploy-time: the live stanza flow (patch
+`/opt/ai/config/model-router.yaml`, restart) is unchanged, no new install step
+exists, and a config copied from `configs/` can never carry a real address.
+
 ```yaml
 listen: 0.0.0.0:18080
 start_port: 5800          # base for auto-allocated ports
@@ -217,9 +242,33 @@ stanza.
 `capabilities` is an optional list per stanza from `vision`, `audio_in`,
 `audio_out`, `tools`, `reasoning`; an unknown flag is a load error. Video
 models add `duration`, `resolution` and `seed` when they accept those request
-fields; one of those flags on another `api_type` is a load error. It is
-published in `/v1/models` and `/_router/status`. A vision chat model (started
+fields; image models add `img2img` (accepts `/sdapi/v1/img2img` with a source
+image) and `inpaint` (accepts a mask, so the Playground offers Outpaint). A
+flag on the wrong `api_type` is a load error. Every flag is published in
+`/v1/models` and `/_router/status`; a catalog row also carries `path_default`
+when its stanza is the one a request with no model name lands on, so the
+Playground gates Edit and Outpaint on that stanza. The Image tab how-to is
+[docs/playground/image-editing.md](docs/playground/image-editing.md). A vision chat model (started
 with an `--mmproj`) stays `api_type: chat` and adds `capabilities: [vision]`.
+
+### Outpaint
+
+`POST /sdapi/v1/img2img` accepts an extra `outpaint` object on any
+`api_type: image` stanza, with or without an `image_pipeline`:
+
+```json
+{"init_images": ["<base64>"], "prompt": "empty beach at dusk",
+ "denoising_strength": 0.95, "outpaint": {"preset": "16:9"}}
+```
+
+The router decodes `init_images[0]`, pads it with mid grey (`128,128,128`),
+builds a same-size mask (white = fill, black = keep), sets `width`/`height` to
+the padded canvas, attaches `mask` and removes `outpaint` before the backend
+sees the request. `preset` takes `1.5x`, `2x` or a ratio such as `16:9`; explicit
+`top`/`bottom`/`left`/`right` pixels are the alternative and are mutually
+exclusive with `preset`. Caps: 4096 px per side, 8192 px on the result. The
+maths is in `internal/router/outpaint.go`; it runs before the img2img body
+checks, so a curl client and the Playground take the same path.
 
 `image_pipeline` (only on `api_type: image`) runs the image request handling on
 the node that owns the stanza, for requests from local clients and for requests

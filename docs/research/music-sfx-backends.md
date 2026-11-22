@@ -812,6 +812,70 @@ This repo
   `internal/router/router.go`, `cmd/fake-model/main.go`
 - the GPU host's node config under `configs/`
 
+## 7. Deployed on buster (2026-11-21)
+
+`ace-step-music` is live: GPU0, port 5941 (shim) with ACE-Step's REST server on
+the private port 5942 in the same process group, `api_type: audio_gen`,
+`match: {path_default: true}`, `capabilities: [audio_out]`, `vram_mb: 17000`,
+`idle_ttl_seconds: 300`, `spin_up_seconds: 120`, **no `hold_seconds`**.
+
+- **`hold_seconds` blocked every handoff.** Both heavy backends share GPU0
+  (video books 19 GB, music 17 GB, plus the 3.6 GB embed model), so only one can
+  be resident. With `hold_seconds: 900` a stanza stays un-evictable for 15
+  minutes after its last request and the other backend gets
+  `503 no GPU can take … now and no peer served it` even though nothing is
+  running. Dropping the hold and keeping `idle_ttl_seconds: 300` makes the
+  handoff work: a music job issued after the video model's TTL returned an id
+  and a completed 15 s clip, with the router reclaiming the idle video model to
+  make room. The hold exists for realtime sessions, not for job models: a job
+  already holds its model through occupancy.
+
+**What the deployment corrected in this note:**
+
+- **`ACE-Step/acestep-5Hz-lm-1.7B` exists; the HF API answered 404 transiently**
+  and a retry downloaded the full 3.5 GB. The 1.7B is what runs here: it costs
+  ~3.9 GB more VRAM (13.4 -> 17.3 GB) and ~14 s more on a cold 15 s job, and
+  replaces the 0.6B's weaker prompt/lyrics metadata.
+- **The locked torch build is broken on this host.** `uv sync` pins
+  `torch 2.10.0+cu128`, and with it *every* bf16 GEMM fails with
+  `CUBLAS_STATUS_INVALID_VALUE`: a bare `4096³` bfloat16 matmul reproduces it,
+  so it is the wheel, not the model. `torch 2.11.0+cu130` (and a matching
+  `torchvision 0.26.0+cu130`, or the CUDA-version check refuses to import)
+  generates normally. cu130 has **no sm_70**, so this venv cannot serve a V100;
+  a V100 placement needs its own cu128 venv and the fp16 caveats in §4.4.
+- **`ACESTEP_CONFIG_PATH` takes a model name, not a path.** A filesystem path
+  is rejected with `Unknown DiT model: <path>`; names resolve under
+  `ACESTEP_CHECKPOINTS_DIR`.
+- **The router rejects `job:` on anything that is not `api_type: video`.** An
+  `audio_gen` stanza is tracked by the generic job collection as long as its
+  backend speaks the OpenAI job shape, which is what the shim provides, so no
+  adapter key.
+- **A quoted `bash -lc '…'` in a YAML folded command reaches the backend as a
+  broken shell word** (`unexpected EOF while looking for matching '`). The
+  launcher is a script in the repo (`deploy/acestep-shim/run.sh`, `PORT` from the
+  router) instead.
+
+**Shim.** `deploy/acestep-shim/server.py` turns `POST /v1/audio/generations`,
+`GET …/{id}` and `GET …/{id}/content` into `/release_task`, `/query_result` and
+`/v1/audio?path=`. Status maps 0 → `in_progress`, 1 → `completed`, 2 → `failed`.
+`DELETE` ends the router's hold only: ACE-Step has no per-task cancel route, so
+the server finishes what it started.
+
+**Measured, 3090, 48 kHz stereo out:**
+
+| request | LM | wall | ratio | file |
+|---|---|---|---|---|
+| 15 s (cold: model + LM load on first job) | 0.6B | 60 s | 4.0x | 2.7 MB |
+| 30 s | 0.6B | 61 s | 2.0x | 5.8 MB |
+| 180 s (3 min) | 0.6B | 182 s | 1.0x | 34.6 MB |
+| 15 s (cold) | 1.7B | 74 s | 4.9x | 2.7 MB |
+| 30 s (warm) | 1.7B | 12 s | 0.4x | 5.8 MB |
+
+Peak VRAM **17.3 GB** with the 1.7B LM (13.4 GB with the 0.6B), against a
+4.9 GB host baseline; the stanza books 17 GB of the 24 GB card and cannot be
+resident beside the video stanza. Durations accepted 10-600 s; 30 s and
+180 s verified end to end through `:18080`.
+
 ## See also
 
 - [Docs index](../README.md): every docs page, by reader.

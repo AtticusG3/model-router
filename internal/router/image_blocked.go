@@ -72,7 +72,9 @@ func blockedRetryStep(max int) imageStep {
 // stanza has caption: ideogram4, and the blocked-card retry when the stanza
 // asks for one.
 func (r *Router) defaultImageSteps(s *config.Stanza) []imageStep {
-	steps := []imageStep{{Rewrite: checkImg2img}}
+	// Outpaint runs first: it pads init_images[0] and attaches the mask, then
+	// checkImg2img validates the padded body and mirrors it into extra_images.
+	steps := []imageStep{{Rewrite: outpaintRewrite}, {Rewrite: checkImg2img}}
 	if s == nil || s.ImagePipeline == nil {
 		return steps
 	}

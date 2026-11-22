@@ -227,6 +227,7 @@ stanzas:
     port: 5910
 
   - model_id: krea-2-turbo
+    capabilities: [img2img]
     name: "Krea 2.0 Turbo"
     command: >
       /opt/ai/bin/sd-health-proxy {port} --
@@ -249,6 +250,7 @@ stanzas:
     port: 5915
 
   - model_id: z-anime-turbo
+    capabilities: [img2img]
     name: "Z-Anime Turbo (8-step distill)"
     aliases: [z-anime]
     command: >
@@ -273,6 +275,7 @@ stanzas:
     port: 5916
 
   - model_id: ideogram4
+    capabilities: [img2img]
     name: "Ideogram 4"
     command: >
       /opt/ai/bin/sd-health-proxy {port} --

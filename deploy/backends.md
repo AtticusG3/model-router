@@ -196,17 +196,33 @@ backend exists; before then probe the native API by hand.
 
 A backend ticket runs this script on the node and pastes the `PASS` line.
 
-## 7. Config mirror
+## 7. Config mirror: placeholders in git, real values in the overlay
 
-The repo copy of the node config is byte-identical to the live config;
-production is the authority. If the two already differ, reconcile that first
-by copying the live file over the repo copy; do not merge them by hand. Then
-apply the `reserved_ports` change on the node, re-sync and validate:
+**The repo copy is not byte-identical to the live config, by design (#195).**
+Tracked `configs/<node>.yaml` carries placeholder addresses only (LAN as
+`10.99.0.x`, tailnet as `203.0.113.x`, last octet preserved). The real per-node
+values live in `/opt/ai/config/local/<node>.yaml`, which is untracked (and
+`configs/local/` is gitignored) and is merged over the tracked file at load time.
+
+Stanzas are the exception that keeps the old advice: a **stanza** patch goes into
+the live `/opt/ai/config/model-router.yaml` first and then into
+`configs/<node>.yaml` (with placeholder addresses), because stanzas are the same
+on every node and carry no real addresses.
+
+Refreshing from live: use the splitter, never a bare `cp`:
 
 ```bash
-cp /opt/ai/config/model-router.yaml configs/<node>.yaml
-diff -q configs/<node>.yaml /opt/ai/config/model-router.yaml && echo in sync
-./build/model-router -check -config /opt/ai/config/model-router.yaml
+# writes configs/local/<node>.yaml (real values) and configs/<node>.yaml (scrubbed)
+deploy/overlay-split.py --node <node> /opt/ai/config/model-router.yaml
+
+# proves the tracked file has no real address; also runs in go test ./...
+deploy/overlay-split.py --node <node> --check configs/<node>.yaml
+
+# validate what the node will actually load (tracked + overlay)
+./build/model-router -check -config configs/<node>.yaml \
+  --overlay configs/local/<node>.yaml        # prints `overlay: <path>`
 ```
 
-A non-empty diff is a bug, not a merge conflict to resolve in the repo copy.
+A bare `cp /opt/ai/config/model-router.yaml configs/<node>.yaml` is now a bug:
+it puts real addresses back into git, which is what #184/#195 removed. The
+`internal/config` guard test fails the build if one gets committed.

@@ -177,7 +177,7 @@ public requests get 401.
 ```yaml
 security:
   api_keys: [replace-with-a-long-random-key]
-  trusted_proxies: [10.0.0.5, 10.99.0.0/24]   # optional
+  trusted_proxies: [10.99.0.5, 10.99.0.0/24]   # optional; placeholders, see Overlay below
 ```
 
 `MODEL_ROUTER_API_KEYS` (comma separated) adds keys from the environment.
@@ -256,6 +256,32 @@ proxy-only upstreams like openrouter), `preload`, `telemetry` tuning and
 `discovery`. Staged fleet configs are in `configs/` (plus
 `qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
 stanzas). The swap procedure is in `deploy/swap-over.md`.
+
+### Addresses, placeholders and the per-node overlay
+
+Tracked files carry **placeholder addresses only** (#184/#195): the LAN /24 is
+written as `10.99.0.x` and tailnet hosts as `203.0.113.x`, keeping the original
+last octet. The real values live in an untracked overlay that is merged over the
+tracked config at load time:
+
+```
+/opt/ai/config/model-router.yaml         <- tracked config, placeholders
+/opt/ai/config/local/buster.yaml         <- overlay, REAL values, gitignored
+```
+
+`model-router` looks for `<config dir>/local/<node>.yaml` by default, where
+`<node>` is `-node` or the hostname; `-overlay <path>` names one explicitly, and
+`-overlay ""` is not needed because the default is the convention. A missing
+overlay is normal: a fresh checkout runs on the tracked file alone. Maps merge
+recursively and the overlay wins; lists (such as `peers`) and scalars replace the
+base value. An overlay that exists but does not parse or validate is an error,
+never a silent fallback. `-check` prints `overlay: <path>` when one was merged.
+
+`deploy/overlay-split.py` builds the pair from a live config (it writes
+`configs/local/<node>.yaml` and rewrites `configs/<node>.yaml` with
+placeholders); `--check` fails if a tracked file still holds a real address. A Go
+test (`internal/config`) enforces the same rule in `go test ./...` and `make
+check`, so a real address cannot be committed by accident.
 
 `discovery` (default on) scans the local network for router peers at startup
 and on a backoff timer. `ports` default to `[18080, 8081, 8082]`; `subnets` is
@@ -341,11 +367,16 @@ values, so a typo like `transcribe` is caught at load. `-check` prints the type
 per stanza.
 
 `capabilities` is an optional list per stanza: `vision`, `audio_in`,
-`audio_out`, `tools`, `reasoning`, and for video models `duration`,
-`resolution`, `seed`. An unknown flag fails load. Capabilities are published in
+`audio_out`, `tools`, `reasoning`, for video models `duration`, `resolution`,
+`seed`, and for image models `img2img` and `inpaint`. An unknown flag fails
+load, as does a flag on the wrong `api_type`. Capabilities are published in
 `/v1/models` and `/_router/status`, so a vision chat model (started with an
 `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`. The video flags
-control which optional fields the Playground's Video tab shows.
+control which optional fields the Playground's Video tab shows; `img2img` and
+`inpaint` enable the Image tab's Edit and Outpaint modes. A catalog row also
+carries `path_default: true` when its stanza is the default route, so Path
+default follows that stanza's flags. See
+[docs/playground/image-editing.md](docs/playground/image-editing.md).
 
 `job` (only on `api_type: video`) picks the adapter in front of the backend's
 async job API: `openai` (default, the backend speaks `/v1/videos`) or `sdcpp`

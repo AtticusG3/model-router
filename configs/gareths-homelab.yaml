@@ -144,6 +144,7 @@ stanzas:
     port: 5810
 
   - model_id: krea-2-turbo
+    capabilities: [img2img]
     name: "Krea 2.0 Turbo"
     command: >
       /opt/ai/bin/sd-server
@@ -164,6 +165,7 @@ stanzas:
     port: 5821
 
   - model_id: z-anime-turbo
+    capabilities: [img2img]
     name: "Z-Anime Turbo (8-step GGUF)"
     aliases: [z-anime, z-anime-waldron]
     command: >
@@ -187,6 +189,7 @@ stanzas:
     port: 5823
 
   - model_id: ideogram4
+    capabilities: [img2img]
     name: "Ideogram 4"
     command: >
       /opt/ai/bin/sd-server
@@ -209,6 +212,7 @@ stanzas:
     port: 5827
 
   - model_id: sdxl-lightning
+    capabilities: [img2img]
     name: "Waldron SDXL Lightning (Juggernaut XI)"
     aliases: [sdxl-lightning-waldron]
     command: >
@@ -226,6 +230,7 @@ stanzas:
     port: 5822
 
   - model_id: sdxl-juggernaut-xi
+    capabilities: [img2img, inpaint]
     name: "Waldron SDXL Photo Edit (Juggernaut XI img2img)"
     aliases: [photo-edit-waldron]
     command: >
@@ -249,6 +254,7 @@ stanzas:
     port: 5824
 
   - model_id: z-image-juggernaut-fast
+    capabilities: [img2img]
     name: "Waldron Juggernaut Z Fast (4-step GGUF)"
     aliases: [juggernaut-z-waldron]
     command: >
@@ -272,6 +278,7 @@ stanzas:
     port: 5825
 
   - model_id: z-image
+    capabilities: [img2img]
     name: "Waldron Z Image base (Q8 GGUF)"
     aliases: [z-image-waldron]
     command: >
@@ -295,6 +302,7 @@ stanzas:
     port: 5826
 
   - model_id: flux2-klein
+    capabilities: [img2img]
     name: "Flux.2 Klein (Waldron)"
     aliases: [flux2-klein-waldron]
     command: >
@@ -316,6 +324,7 @@ stanzas:
     unlisted: false
     port: 5828
   - model_id: flux3-klein
+    capabilities: [img2img, inpaint]
     name: "Flux.3 Image Klein"
     aliases: [flux3-klein-waldron]
     command: >
@@ -339,6 +348,7 @@ stanzas:
 
 
   - model_id: fibo-2.0-edit-turbo
+    capabilities: [img2img, inpaint]
     name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
     aliases: [fibo-2.0, fibo-edit-turbo]
     command: >

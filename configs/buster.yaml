@@ -161,6 +161,7 @@ stanzas:
     port: 5904
 
   - model_id: krea-2-turbo
+    capabilities: [img2img]
     name: "Krea 2.0 Turbo (text-to-image, Q8_0)"
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -186,6 +187,7 @@ stanzas:
     port: 5915
 
   - model_id: krea-character-creator
+    capabilities: [img2img]
     name: "Krea 2 character creator (QuadView + Identity Edit LoRAs)"
     aliases: [krea-character]
     command: >
@@ -214,6 +216,7 @@ stanzas:
     port: 5916
 
   - model_id: krea2-ostris-edit
+    capabilities: [img2img]
     name: "Krea 2 Ostris Edit (dual-ref + Identity Edit LoRA)"
     aliases: [krea2-ostris-edit]
     command: >
@@ -241,6 +244,7 @@ stanzas:
     port: 18100
 
   - model_id: z-anime-turbo
+    capabilities: [img2img]
     name: "Z-Anime Turbo (8-step distill)"
     aliases: [z-anime]
     command: >
@@ -267,6 +271,7 @@ stanzas:
     port: 5918
 
   - model_id: ideogram4
+    capabilities: [img2img]
     name: "Ideogram 4"
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -297,6 +302,7 @@ stanzas:
     port: 5919
 
   - model_id: qwen-image-2.1
+    capabilities: [img2img, inpaint]
     name: "Qwen Image 2.1 (official Q8_0, t2i + edit)"
     aliases: [qwen-image-2.1-uncensored, qwen21-uncensored]
     command: >
@@ -332,6 +338,7 @@ stanzas:
     port: 5922
 
   - model_id: flux3-klein
+    capabilities: [img2img, inpaint]
     name: "FLUX.3 Image Klein (distilled 16-step, Q8_0, t2i + edit)"
     aliases: [flux3, flux-3-klein]
     command: >
@@ -365,6 +372,7 @@ stanzas:
     port: 5925
 
   - model_id: fibo-2.0-edit-turbo
+    capabilities: [img2img, inpaint]
     name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
     aliases: [fibo-2.0, fibo-edit-turbo]
     command: >
@@ -558,7 +566,7 @@ stanzas:
       --threads 14
       -l 127.0.0.1 --listen-port {port}
     env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "GGML_CUDA_PDL=0"]
-    vram_mb: 22000
+    vram_mb: 19000
     device: 0
     spin_up_seconds: 120
     api_type: video
@@ -567,11 +575,36 @@ stanzas:
       adapter: sdcpp
     match: {path_default: true}
     health_check: /sdapi/v1/sd-models
-    idle_ttl_seconds: 900
-    hold_seconds: 900
+    idle_ttl_seconds: 300
     slots: 1
     unlisted: false
     port: 5938
+
+  # #89 music: ACE-Step 1.5 turbo (2B DiT) + the 0.6B planning LM, behind a
+  # small OpenAI-shaped shim that turns the router's audio_gen job API into
+  # ACE-Step's own task API (/release_task, /query_result, /v1/audio?path=).
+  # The upstream 1.7B LM repo in the research note does not exist on HF
+  # (ACE-Step/acestep-5Hz-lm-1.7B is a 404); 0.6B and 4B are the published ones.
+  # torch is pinned to 2.11.0+cu130 in its own venv: the locked 2.10.0+cu128
+  # build fails every bf16 GEMM on this box with CUBLAS_STATUS_INVALID_VALUE.
+  # cu130 has no sm_70, so this stanza is GPU0 only; a V100 placement would
+  # need a second venv on cu128.
+  - model_id: ace-step-music
+    name: "ACE-Step 1.5 turbo (music, 10-600 s, 48 kHz stereo)"
+    command: >
+      /usr/bin/env PORT={port} /home/kevyn/projects/model-router/deploy/acestep-shim/run.sh
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "HF_HOME=/opt/ai/hf/acestep"]
+    vram_mb: 17000
+    device: 0
+    spin_up_seconds: 120
+    api_type: audio_gen
+    capabilities: [audio_out]
+    match: {path_default: true}
+    health_check: /health
+    idle_ttl_seconds: 300
+    slots: 1
+    unlisted: false
+    port: 5941
 
 peers:
   - name: gareths-homelab
