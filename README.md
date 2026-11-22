@@ -212,6 +212,13 @@ names that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
 fresh peer and streams the reply. The Image tab is the same for `api_type:
 image` (or Path default for the configured sd.cpp route).
 
+The Chat, Transcription, Speech and Video tabs can record from the browser's
+mic and camera: photos, clips and voice notes for chat models flagged `vision`,
+`video_in` or `audio_in`, a mic take for transcription, a voice clone for
+speech, and a camera reference for video. The browser only allows this on
+HTTPS or `localhost`. See
+[Use the mic and camera in the Playground](docs/playground/mic-and-camera.md).
+
 The Realtime tab opens a websocket session on `/v1/realtime?model=<id>` for an
 `api_type: realtime` entry and streams text replies. The router passes the
 upgrade through to the backend or peer that serves the model and holds the
@@ -366,16 +373,19 @@ An empty value means `chat`; anything else fails `-check` and lists the valid
 values, so a typo like `transcribe` is caught at load. `-check` prints the type
 per stanza.
 
-`capabilities` is an optional list per stanza: `vision`, `audio_in`,
-`audio_out`, `tools`, `reasoning`, for video models `duration`, `resolution`,
-`seed`, and for image models `img2img` and `inpaint`. An unknown flag fails
-load, as does a flag on the wrong `api_type`. Capabilities are published in
-`/v1/models` and `/_router/status`, so a vision chat model (started with an
-`--mmproj`) is `api_type: chat` plus `capabilities: [vision]`. The video flags
-control which optional fields the Playground's Video tab shows; `img2img` and
-`inpaint` enable the Image tab's Edit and Outpaint modes. A catalog row also
-carries `path_default: true` when its stanza is the default route, so Path
-default follows that stanza's flags. See
+`capabilities` is an optional list per stanza: `vision`, `video_in`,
+`audio_in`, `audio_out`, `tools`, `reasoning`, for video models `duration`,
+`resolution`, `seed`, and for image models `img2img` and `inpaint`. An unknown
+flag fails load, as does a flag on the wrong `api_type`. Capabilities are
+published in `/v1/models` and `/_router/status`, so a vision chat model (started
+with an `--mmproj`) is `api_type: chat` plus `capabilities: [vision]`. `video_in`
+marks a chat model that takes `video_url` parts itself (a vLLM Qwen-VL server,
+not llama-server); without it the Playground sends a camera clip as sampled
+frames. The video flags control which optional fields the Playground's Video tab
+shows; `img2img` and `inpaint` enable the Image tab's Edit and Outpaint modes. A
+catalog row also carries `path_default: true` when its stanza is the default
+route, so Path default follows that stanza's flags. A speech stanza's
+`clone_mode` is published next to its capabilities. See
 [docs/playground/image-editing.md](docs/playground/image-editing.md).
 
 `job` (only on `api_type: video`) picks the adapter in front of the backend's

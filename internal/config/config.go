@@ -154,7 +154,9 @@ var APITypes = []string{
 
 // Capabilities are the optional capability flags a stanza may declare. The
 // video flags describe the optional video playground fields the model accepts.
-var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning", "duration", "resolution", "seed", "img2img", "inpaint"}
+// video_in marks a chat model that takes video_url content parts natively; a
+// vision model without it gets sampled frames from the Playground instead.
+var Capabilities = []string{"vision", "video_in", "audio_in", "audio_out", "tools", "reasoning", "duration", "resolution", "seed", "img2img", "inpaint"}
 
 // ImagePipeline is a stanza's image request pipeline. The YAML value is either
 // a preset name (sd-server or ideogram4, see SPEC.md) or a map; a preset is

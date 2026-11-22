@@ -124,6 +124,31 @@ button.primary:active:not(:disabled){transform:none;box-shadow:var(--elev-1)}
 .capture-dialog .capture-grid{max-height:none}
 .capture-dialog .capture-body{min-height:120px;max-height:45vh}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+/* Playground mic and camera capture (#194) */
+.media-capture{display:grid;gap:13px;padding:12px;border:1px dashed var(--line-strong);border-radius:9px}
+.media-group{display:grid;gap:6px}
+.media-label{color:var(--muted);font-size:11px;font-weight:650}
+.media-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.form .media-row button,.form .media-take button,.form .media-attach button{width:auto;margin-top:0}
+.form .media-row select.media-dev{width:auto;flex:1 1 160px;max-width:260px}
+.media-meter{flex:1 1 90px;min-width:60px;height:10px}
+.media-time{min-width:3.5em;color:var(--muted)}
+button.recording{border-color:var(--red);color:var(--red);background:var(--red-soft)}
+.media-note{margin:0;font-size:11px}
+.media-preview{width:100%;max-height:260px;border-radius:8px;background:#000;object-fit:contain}
+.media-take{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.media-take audio{flex:1 1 220px}
+.media-take img,.media-take video{max-width:100%;max-height:180px;border-radius:8px}
+.media-attach{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.media-attach li{display:flex;align-items:center;gap:10px;padding:6px;border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:11px}
+.media-attach li span{flex:1}
+.media-attach img,.media-attach video{width:72px;height:54px;object-fit:cover;border-radius:6px;background:#000}
+.media-attach audio{width:200px;max-width:45%}
+.form label.media-check{display:flex;align-items:center;gap:8px}
+.form label.media-check input{width:auto}
+.media-clone{border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.media-clone[open]{display:grid;gap:12px}
+.media-clone summary{cursor:pointer;color:var(--muted);font-weight:650}
 
 .drop-zone{margin:0;padding:14px;border:1px dashed var(--line-strong);border-radius:9px;color:var(--muted);font-size:11px;text-align:center;cursor:pointer}
 .drop-zone:hover,.drop-zone:focus-visible,.drop-zone.drag{border-color:var(--cyan);color:var(--text);outline:none}
