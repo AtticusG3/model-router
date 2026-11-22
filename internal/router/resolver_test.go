@@ -352,6 +352,49 @@ stanzas:
 	}
 }
 
+// A stanza with no capabilities list must still publish an empty array, so
+// a client can tell "this model has no flags" from "the field was omitted".
+func TestEmptyCapabilitiesPublished(t *testing.T) {
+	r := spilloverRouter(t, `
+start_port: 5900
+stanzas:
+  - model_id: gen-only
+    command: "x --port {port}"
+    vram_mb: 0
+    api_type: image
+  - model_id: edit-ok
+    command: "x --port {port}"
+    vram_mb: 0
+    api_type: image
+    capabilities: [img2img]
+`)
+	h := NewHandler(r, NewLogger(io.Discard, false))
+	for _, path := range []string{"/v1/models", "/_router/status"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		var body struct {
+			Data   []ModelStatus `json:"data"`
+			Models []ModelStatus `json:"models"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: %v\n%s", path, err, rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"capabilities":[]`) {
+			t.Fatalf("%s missing empty capabilities array: %s", path, rec.Body.String())
+		}
+		got := map[string]ModelStatus{}
+		for _, m := range append(body.Data, body.Models...) {
+			got[m.ID] = m
+		}
+		if c := got["gen-only"].Capabilities; c == nil || len(c) != 0 {
+			t.Errorf("%s gen-only capabilities = %#v, want empty slice", path, c)
+		}
+		if c := got["edit-ok"].Capabilities; !slices.Equal(c, []string{"img2img"}) {
+			t.Errorf("%s edit-ok capabilities = %v", path, c)
+		}
+	}
+}
+
 // The Playground capture panel (#194) reads video_in to send a clip natively
 // and a speech stanza's clone_mode to shape a one-off voice reference.
 func TestVideoInAndCloneModePublished(t *testing.T) {

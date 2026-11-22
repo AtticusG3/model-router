@@ -2327,7 +2327,9 @@ type ModelStatus struct {
 	VramMB    int64  `json:"vram_mb,omitempty"`
 	APIType   string `json:"api_type,omitempty"`
 	// Capabilities lists what the backend supports (vision, tools, ...).
-	Capabilities []string `json:"capabilities,omitempty"`
+	// Always published, including an empty list, so a model with no flags is
+	// not mistaken for "unknown, inherit the others".
+	Capabilities []string `json:"capabilities"`
 	// CloneMode is a speech stanza's voice reference shape (ref_audio or
 	// speaker_ref_b64), so a client can send a one-off clone the backend takes.
 	CloneMode string `json:"clone_mode,omitempty"`
@@ -2388,6 +2390,15 @@ func peerModelStatus(p *config.Peer, id string, t *Telemetry, seen time.Time, fr
 	return ps
 }
 
+// publishedCaps returns caps for a catalog row. A nil slice becomes an empty
+// one so JSON encodes [] rather than null.
+func publishedCaps(c []string) []string {
+	if c == nil {
+		return []string{}
+	}
+	return c
+}
+
 // LocalModelStatuses lists unique mesh models (local + reachable remotes).
 func (r *Router) LocalModelStatuses() []ModelStatus {
 	return r.catalogStatuses()
@@ -2441,7 +2452,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 		out = append(out, ModelStatus{
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
-			Capabilities: s.Capabilities, CloneMode: s.CloneMode, GPUs: gpus, Family: fam, Info: info,
+			Capabilities: publishedCaps(s.Capabilities), CloneMode: s.CloneMode, GPUs: gpus, Family: fam, Info: info,
 			PathDefault: s.Match.PathDefault,
 		})
 		seen[id] = true
@@ -2468,7 +2479,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 			seen[m] = true
 			// A remote id has no stanza here; the metadata file and the peer's advertised hf_repo fill it in.
 			fam, info := r.catalogInfo(md, m, remoteStanza(t, m))
-			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available", Family: fam, Info: info})
+			out = append(out, ModelStatus{ID: m, Type: "model", Origin: "remote", State: "available", Capabilities: publishedCaps(nil), Family: fam, Info: info})
 		}
 	}
 	for i := range out {
