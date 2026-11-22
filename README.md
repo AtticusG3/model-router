@@ -401,7 +401,7 @@ in from peers. A preset name selects the steps, or a map names them:
   becomes ready and before a request that names a LoRA, and retry once when
   sd-server still answers `invalid lora path`.
 - `ideogram4`: `sd-server` plus ideogram4-format caption enhancement.
-- `image_pipeline: {caption: "" | ideogram4 | z-image | z-anime, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
+- `image_pipeline: {caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
   enhancer model and timeout feed the caption step, and `retry_blocked` resends
   a blocked `txt2img` request with a new random seed up to N times (default 0;
   above 5 fails load).
@@ -423,7 +423,11 @@ back to a template caption holding the prompt verbatim; the reply's
 z-image` uses the same step to expand the prompt into detailed prose, and
 falls back to the original prompt verbatim (`X-SD-Shim-Prompt-Source:
 original`). `caption: z-anime` does the same for Z-Anime, turning tag
-lists into descriptive sentences.
+lists into descriptive sentences, `caption: krea2` does the same for
+Krea 2 Turbo, following the vendor's expansion rules, and `caption:
+flux2-klein` does the same for FLUX.2 Klein, which does no prompt upsampling
+of its own. `caption: flux3-klein` writes the long scene caption FLUX.3 Image
+Klein is trained on, following the vendor's upsampler rules.
 
 A bare sd-server stanza needs no shim: run it with `sd-server --listen-ip
 127.0.0.1 --listen-port {port}` with `health_check: /v1/models` (sd-server has
