@@ -132,6 +132,7 @@ stanzas:
   # ---------------- Image (sd.cpp) ----------------
   # All share /sdapi/v1; krea-2-turbo is the path_default (no body model -> krea-2-turbo).
   - model_id: krea-2-turbo
+    capabilities: [img2img]
     name: "Krea2"
     command: >
       /opt/ai/bin/sd-server
@@ -154,6 +155,7 @@ stanzas:
     port: 5950
 
   - model_id: krea-2-redcraft
+    capabilities: [img2img]
     name: "RedCraft"
     command: >
       /opt/ai/bin/sd-server
@@ -176,6 +178,7 @@ stanzas:
     port: 5951
 
   - model_id: krea-2-darkbeast3
+    capabilities: [img2img]
     name: "Krea DarkBeast 3"
     command: >
       /opt/ai/bin/sd-server
@@ -198,6 +201,7 @@ stanzas:
     port: 5952
 
   - model_id: krea-2-imagine
+    capabilities: [img2img]
     name: "Krea (Grok) Imagine"
     command: >
       /opt/ai/bin/sd-server
@@ -220,6 +224,7 @@ stanzas:
     port: 5953
 
   - model_id: krea-2-darkbeast-2
+    capabilities: [img2img]
     name: "Darkbeast2"
     command: >
       /opt/ai/bin/sd-server
@@ -307,6 +312,7 @@ stanzas:
     port: 5956
 
   - model_id: sdxl-lightning
+    capabilities: [img2img]
     name: "Juggernaut XI Lightning"
     command: >
       /opt/ai/bin/sd-server
@@ -330,6 +336,7 @@ stanzas:
     port: 5957
 
   - model_id: sdxl-juggernaut-xi
+    capabilities: [img2img, inpaint]
     name: "Juggernaut XI SDXL"
     command: >
       /opt/ai/bin/sd-server
@@ -352,6 +359,7 @@ stanzas:
     port: 5958
 
   - model_id: z-anime-turbo
+    capabilities: [img2img]
     name: "Z-Anime Turbo (8-step distill)"
     aliases: [z-anime]
     command: >
@@ -377,6 +385,7 @@ stanzas:
     port: 5959
 
   - model_id: z-image-juggernaut-fast
+    capabilities: [img2img]
     name: "Juggernaut Z Fast"
     command: >
       /opt/ai/bin/sd-server
@@ -401,6 +410,7 @@ stanzas:
     port: 5960
 
   - model_id: flux2-klein
+    capabilities: [img2img]
     name: "Flux.2 Klein 9B"
     command: >
       /opt/ai/bin/sd-server
@@ -422,6 +432,7 @@ stanzas:
     port: 5961
 
   - model_id: sdxl-realvis-lightning
+    capabilities: [img2img]
     name: "RealVisXL v5.0 Lightning"
     command: >
       /opt/ai/bin/sd-server
@@ -447,6 +458,7 @@ stanzas:
     port: 5962
 
   - model_id: sd3.5-large
+    capabilities: [img2img]
     name: "Stable Diffusion 3.5 Large"
     command: >
       /opt/ai/bin/sd-server
@@ -470,6 +482,7 @@ stanzas:
     port: 5963
 
   - model_id: sd3.5-inpaint
+    capabilities: [img2img, inpaint]
     name: "SD3.5 img2img (1024)"
     command: >
       /opt/ai/bin/sd-server
@@ -492,6 +505,7 @@ stanzas:
     port: 5964
 
   - model_id: z-image
+    capabilities: [img2img]
     name: "Z Image Base"
     command: >
       /opt/ai/bin/sd-server
@@ -516,6 +530,7 @@ stanzas:
     port: 5965
 
   - model_id: z-image-redcraft
+    capabilities: [img2img]
     name: "RedCraft z-image-turbo"
     command: >
       /opt/ai/bin/sd-server
@@ -542,6 +557,7 @@ stanzas:
     port: 5966
 
   - model_id: boogu-image-edit
+    capabilities: [img2img, inpaint]
     name: "Boogu image edit"
     command: >
       /opt/ai/bin/sd-server
@@ -565,6 +581,7 @@ stanzas:
     port: 5967
 
   - model_id: qwen-image-edit-2511
+    capabilities: [img2img, inpaint]
     name: "Qwen image edit 2.5.11"
     command: >
       /opt/ai/bin/sd-server
@@ -598,6 +615,7 @@ stanzas:
     port: 5968
 
   - model_id: ideogram4
+    capabilities: [img2img]
     name: "Ideogram 4"
     command: >
       /opt/ai/bin/sd-server

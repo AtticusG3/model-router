@@ -161,6 +161,7 @@ stanzas:
     port: 5904
 
   - model_id: krea-2-turbo
+    capabilities: [img2img]
     name: "Krea 2.0 Turbo (text-to-image, Q8_0)"
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -186,6 +187,7 @@ stanzas:
     port: 5915
 
   - model_id: krea-character-creator
+    capabilities: [img2img]
     name: "Krea 2 character creator (QuadView + Identity Edit LoRAs)"
     aliases: [krea-character]
     command: >
@@ -214,6 +216,7 @@ stanzas:
     port: 5916
 
   - model_id: krea2-ostris-edit
+    capabilities: [img2img]
     name: "Krea 2 Ostris Edit (dual-ref + Identity Edit LoRA)"
     aliases: [krea2-ostris-edit]
     command: >
@@ -241,6 +244,7 @@ stanzas:
     port: 18100
 
   - model_id: z-anime-turbo
+    capabilities: [img2img]
     name: "Z-Anime Turbo (8-step distill)"
     aliases: [z-anime]
     command: >
@@ -267,6 +271,7 @@ stanzas:
     port: 5918
 
   - model_id: ideogram4
+    capabilities: [img2img]
     name: "Ideogram 4"
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -297,6 +302,7 @@ stanzas:
     port: 5919
 
   - model_id: qwen-image-2.1
+    capabilities: [img2img, inpaint]
     name: "Qwen Image 2.1 (official Q8_0, t2i + edit)"
     aliases: [qwen-image-2.1-uncensored, qwen21-uncensored]
     command: >
@@ -332,6 +338,7 @@ stanzas:
     port: 5922
 
   - model_id: flux3-klein
+    capabilities: [img2img, inpaint]
     name: "FLUX.3 Image Klein (distilled 16-step, Q8_0, t2i + edit)"
     aliases: [flux3, flux-3-klein]
     command: >
@@ -365,6 +372,7 @@ stanzas:
     port: 5925
 
   - model_id: fibo-2.0-edit-turbo
+    capabilities: [img2img, inpaint]
     name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
     aliases: [fibo-2.0, fibo-edit-turbo]
     command: >

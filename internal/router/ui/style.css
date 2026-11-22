@@ -124,3 +124,13 @@ button.primary:active:not(:disabled){transform:none;box-shadow:var(--elev-1)}
 .capture-dialog .capture-grid{max-height:none}
 .capture-dialog .capture-body{min-height:120px;max-height:45vh}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+.drop-zone{margin:0;padding:14px;border:1px dashed var(--line-strong);border-radius:9px;color:var(--muted);font-size:11px;text-align:center;cursor:pointer}
+.drop-zone:hover,.drop-zone:focus-visible,.drop-zone.drag{border-color:var(--cyan);color:var(--text);outline:none}
+.image-result.image-pair{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));align-items:start;place-items:start center;text-align:left}
+.image-result figure{margin:0;display:grid;gap:6px;justify-items:center;max-width:100%}
+.image-result figcaption{font-size:11px}
+.outpaint-preview{margin:0;display:grid;gap:8px}
+.outpaint-canvas{position:relative;width:100%;aspect-ratio:4/3;background:repeating-linear-gradient(45deg,#111823 0 8px,#0d141d 8px 16px);border:1px solid var(--line-strong);border-radius:8px;overflow:hidden}
+.outpaint-canvas img{position:absolute;object-fit:fill;border:1px solid var(--cyan);box-shadow:0 0 0 9999px rgba(88,214,230,.12)}
+.outpaint-marker{position:absolute;pointer-events:none;border:1px dashed var(--cyan);border-radius:2px}

@@ -24,7 +24,7 @@
   function renderPeers(){const ps=status.peers||{};const disc=new Set(status.discovered||[]);const cards=Object.keys(ps).sort().map(n=>{const p=ps[n]||{};const gs=p.gpus||[];const loaded=(p.loaded_models||[]).map(m=>typeof m==='string'?m:((m.instance||m.id||'')+(m.gpu>=0?' @gpu'+(m.gpus&&m.gpus.length?m.gpus.join(','):m.gpu):'')+(m.freshness?' '+m.freshness:'')+(m.slots?(' '+m.in_flight+'/'+m.slots):'')));return '<article class="panel peer-card"><div class="peer-head"><div><div class="peer-name">'+esc(n)+(disc.has(n)?' <span class="subtle">discovered</span>':'')+'</div><div class="subtle mono">'+(p.timestamp?'Last seen '+new Date(p.timestamp*1000).toLocaleTimeString():'No timestamp')+'</div></div><span class="peer-state">'+(gs.length?'Fresh telemetry':'No telemetry')+'</span></div><div class="peer-detail"><div><div class="peer-label">GPU memory</div><div class="peer-value">'+esc(gs.map(g=>g.free_mb+' MB free'+(g.free_if_stale_evicted_mb&&g.free_if_stale_evicted_mb!==g.free_mb?' / '+g.free_if_stale_evicted_mb+' if stale evicted':'')).join(' · ')||'—')+'</div></div><div><div class="peer-label">Loaded models</div><div class="peer-value">'+esc(loaded.join(', ')||'None reported')+'</div></div></div></article>'}).join('');setHTML($('peers'),cards||'<div class="panel empty">No fresh peer telemetry.</div>')}
   function sameOptions(sel,ids){return sel.options.length===ids.length&&ids.every((id,i)=>sel.options[i].value===id)}
   function fillSelect(sel,ids,html){const prev=sel.value;if(sameOptions(sel,ids))return;sel.innerHTML=html;if([...sel.options].some(o=>o.value===prev))sel.value=prev}
-  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));const vids=(status.models||[]).filter(m=>m.api_type==='video');fillSelect($('video-model'),vids.length?vids.map(m=>m.id):[''],vids.length?vids.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No video models available</option>');const ags=(status.models||[]).filter(m=>m.api_type==='audio_gen');fillSelect($('audiogen-model'),[''].concat(ags.map(m=>m.id)),'<option value="">Path default</option>'+ags.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));videoOptions();actPeerFill()}
+  function fillSelectors(){const local=(status.models||[]).filter(m=>(m.origin||'local')==='local').map(m=>m.id);fillSelect($('log-model'),[''].concat(local),'<option value="">Model…</option>'+local.map(id=>'<option value="'+esc(id)+'">'+esc(id)+'</option>').join(''));const models=(status.models||[]).filter(m=>m.api_type!=='image');const ids=models.map(m=>m.id);fillSelect($('chat-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const embs=(status.models||[]).filter(m=>m.api_type==='embedding');fillSelect($('embed-model'),embs.length?embs.map(m=>m.id):[''],embs.length?embs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No embedding models available</option>');const rrs=(status.models||[]).filter(m=>m.api_type==='rerank');fillSelect($('rerank-model'),rrs.length?rrs.map(m=>m.id):[''],rrs.length?rrs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No rerank models available</option>');const sps=(status.models||[]).filter(m=>m.api_type==='speech');fillSelect($('speech-model'),sps.length?sps.map(m=>m.id):[''],sps.length?sps.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No speech models available</option>');const trs=(status.models||[]).filter(m=>m.api_type==='transcription');fillSelect($('transcribe-model'),trs.length?trs.map(m=>m.id):[''],trs.length?trs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No transcription models available</option>');fillSelect($('load-model'),ids.length?ids:[''],ids.length?models.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No models available</option>');const rts=(status.models||[]).filter(m=>m.api_type==='realtime');fillSelect($('rt-model'),rts.length?rts.map(m=>m.id):[''],rts.length?rts.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No realtime models available</option>');const imgs=(status.models||[]).filter(m=>m.api_type==='image');fillSelect($('image-model'),[''].concat(imgs.map(m=>m.id)),'<option value="">Path default</option>'+imgs.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));const vids=(status.models||[]).filter(m=>m.api_type==='video');fillSelect($('video-model'),vids.length?vids.map(m=>m.id):[''],vids.length?vids.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+(m.origin==='remote'?' (remote)':'')+'</option>').join(''):'<option value="">No video models available</option>');const ags=(status.models||[]).filter(m=>m.api_type==='audio_gen');fillSelect($('audiogen-model'),[''].concat(ags.map(m=>m.id)),'<option value="">Path default</option>'+ags.map(m=>'<option value="'+esc(m.id)+'">'+esc(m.id)+'</option>').join(''));videoOptions();imageModeUpdate();actPeerFill()}
   // Duration, resolution and seed are opt-in per video model through its capabilities list.
   function videoOptions(){const m=(status.models||[]).find(x=>x.id===$('video-model').value)||{};const caps=m.capabilities||[];for(const k of ['duration','resolution','seed'])$('video-opt-'+k).hidden=!caps.includes(k)}
   window.loadModel=async function(id){try{await json('/_router/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:id})});await refresh()}catch(e){alert('Load failed: '+e.message)}};
@@ -204,10 +204,10 @@
 
   // Playground history lives in these arrays only, never in browser storage, so a reload clears it.
   // Per tab: the output panel, the model field, then the other inputs a restore fills back in.
-  const HIST={chat:['chat-output','chat-model','chat-prompt','chat-tokens','chat-temp'],image:['image-output','image-model','image-prompt','image-negative','image-width','image-height','image-steps','image-seed'],embeddings:['embed-output','embed-model','embed-input'],rerank:['rerank-output','rerank-model','rerank-query','rerank-docs'],speech:['speech-output','speech-model','speech-voice','speech-format','speech-input'],transcription:['transcribe-output','transcribe-model','transcribe-format','transcribe-language'],video:['video-output','video-model','video-prompt','video-seconds','video-resolution','video-seed'],audiogen:['audiogen-output','audiogen-model','audiogen-prompt','audiogen-lyrics','audiogen-seconds','audiogen-seed'],load:['load-output','load-model','load-prompt','load-conc','load-count','load-tokens'],realtime:['rt-output','rt-model']};
+  const HIST={chat:['chat-output','chat-model','chat-prompt','chat-tokens','chat-temp'],image:['image-output','image-model','image-prompt','image-negative','image-width','image-height','image-steps','image-cfg','image-seed','image-batch','image-mode','image-strength','image-fill-strength','image-preset'],embeddings:['embed-output','embed-model','embed-input'],rerank:['rerank-output','rerank-model','rerank-query','rerank-docs'],speech:['speech-output','speech-model','speech-voice','speech-format','speech-input'],transcription:['transcribe-output','transcribe-model','transcribe-format','transcribe-language'],video:['video-output','video-model','video-prompt','video-seconds','video-resolution','video-seed'],audiogen:['audiogen-output','audiogen-model','audiogen-prompt','audiogen-lyrics','audiogen-seconds','audiogen-seed'],load:['load-output','load-model','load-prompt','load-conc','load-count','load-tokens'],realtime:['rt-output','rt-model']};
   const HIST_MAX=50,HIST_MEDIA=20,HIST_STATUS={ok:['Done','status-ok'],error:['Failed','status-bad'],cancelled:['Cancelled','subtle']};
   // Only these ids are selects: a restore checks their value still exists as an option.
-  const HIST_SELECTS=new Set(['chat-model','image-model','embed-model','rerank-model','speech-model','speech-voice','speech-format','transcribe-model','transcribe-format','transcribe-language','video-model','video-resolution','audiogen-model','load-model','rt-model']);
+  const HIST_SELECTS=new Set(['chat-model','image-model','image-mode','image-preset','embed-model','rerank-model','speech-model','speech-voice','speech-format','transcribe-model','transcribe-format','transcribe-language','video-model','video-resolution','audiogen-model','load-model','rt-model']);
   const hist={},histBlank={},histBusy={};
   let histSeq=0;
   for(const tab in HIST){
@@ -315,33 +315,206 @@
     }
   };
   // shortcut: fixed 3 minute client timeout and no progress text, make it a field if slow image models need longer.
-  let imageCtl;
+  let imageCtl,imageSource={data:null,w:0,h:0,name:''},imageResult=null;
   window.cancelImage=()=>{if(imageCtl)imageCtl.abort()};
+
+  // Capabilities come from /_router/status. Path default means "the stanza a
+  // request lands on when no model is named", so it follows that stanza's flags;
+  // if the mesh has no such stanza listed, fall back to the union of image
+  // models rather than hiding modes the router can actually serve.
+  function imageCaps(){
+    const list=(status.models||[]).filter(m=>m.api_type==='image');
+    const id=$('image-model').value;
+    const m=id?list.find(x=>x.id===id):list.find(x=>x.path_default);
+    const caps=m&&m.capabilities?m.capabilities.slice():null;
+    if(caps)return caps;
+    const out=[];
+    for(const x of list)for(const c of (x.capabilities||[]))if(!out.includes(c))out.push(c);
+    return out;
+  }
+  // An empty or unknown value means Generate: the tab ships on Generate and a
+  // restored history entry may not carry the mode.
+  function imageMode(){const m=$('image-mode').value;return (m==='edit'||m==='outpaint')?m:'generate'}
+  function imageNote(msg){const n=$('image-mode-note');n.textContent=msg||'';n.hidden=!msg}
+
+  // --- image gating rule (kept pure; ui_test.go runs it under node) ---
+  window.imageModeState=function(caps,mode){
+    const editOk=(caps||[]).includes('img2img'),outpaintOk=(caps||[]).includes('inpaint');
+    let next=mode,note='';
+    if(mode==='edit'&&!editOk){next='generate';note='This model has no img2img capability, so Edit is unavailable.'}
+    if(mode==='outpaint'&&!outpaintOk){next='generate';note='This model has no inpaint capability, so Outpaint is unavailable.'}
+    return {mode:next,editOk,outpaintOk,note};
+  };
+  // --- end image gating rule ---
+  window.imageModeUpdate=function(){
+    const st=imageModeState(imageCaps(),imageMode());
+    for(const o of Array.from($('image-mode').options)){
+      if(o.value==='edit')o.disabled=!st.editOk;
+      if(o.value==='outpaint')o.disabled=!st.outpaintOk;
+    }
+    $('image-mode').value=st.mode;
+    let note=st.note;
+    const m=st.mode,needSource=m!=='generate';
+    $('image-source-opts').hidden=!needSource;
+    $('image-edit-opts').hidden=m!=='edit';
+    $('image-outpaint-opts').hidden=m!=='outpaint';
+    $('image-generate').textContent=m==='generate'?'Generate image':(m==='edit'?'Apply edit':'Outpaint image');
+    if(needSource&&!imageSource.data)note=note||'Choose a source image first.';
+    imageNote(note);
+    imageOutpaintPreview();
+  };
+
+  window.randomiseImageSeed=function(){$('image-seed').value=Math.floor(Math.random()*2147483647)};
+
+  // Presets resolve in the UI for the preview only; the router resolves them
+  // again from the request, so a curl client gets the same canvas.
+  function presetMargins(w,h,preset){
+    if(!preset)return null;
+    if(/^[\d.]+x$/.test(preset)){
+      const s=Number(preset.slice(0,-1));
+      return {top:Math.floor((Math.round(h*s)-h)/2),bottom:Math.ceil((Math.round(h*s)-h)/2),left:Math.floor((Math.round(w*s)-w)/2),right:Math.ceil((Math.round(w*s)-w)/2)};
+    }
+    const m=preset.split(':');
+    if(m.length!==2)return null;
+    let aw=Number(m[0]),ah=Number(m[1]);
+    if(!aw||!ah)return null;
+    const g=(a,b)=>b?g(b,a%b):a;
+    const d=g(aw,ah);aw/=d;ah/=d;
+    const k=Math.max(Math.ceil(w/aw),Math.ceil(h/ah),1);
+    const nw=k*aw,nh=k*ah;
+    return {top:Math.floor((nh-h)/2),bottom:nh-h-Math.floor((nh-h)/2),left:Math.floor((nw-w)/2),right:nw-w-Math.floor((nw-w)/2)};
+  }
+  function outpaintMargins(){
+    const p=$('image-preset').value;
+    if(p)return presetMargins(imageSource.w,imageSource.h,p)||{top:0,bottom:0,left:0,right:0};
+    return {top:Number($('image-pad-top').value)||0,bottom:Number($('image-pad-bottom').value)||0,left:Number($('image-pad-left').value)||0,right:Number($('image-pad-right').value)||0};
+  }
+  window.imageOutpaintPreview=function(){
+    const box=$('image-outpaint-preview');
+    if(imageMode()!=='outpaint'||!imageSource.data){box.hidden=true;return}
+    const mg=outpaintMargins(),nw=imageSource.w+mg.left+mg.right,nh=imageSource.h+mg.top+mg.bottom;
+    if(nw<=0||nh<=0||(mg.left+mg.right+mg.top+mg.bottom)===0){box.hidden=true;return}
+    const img=$('image-outpaint-img');
+    img.src=imageSource.data;
+    // Scale the preserved source inside the padded box so the new area reads as a border.
+    const scale=Math.min(100,(imageSource.w/nw)*100),sx=(mg.left/nw)*100,sy=(mg.top/nh)*100;
+    img.style.width=scale.toFixed(2)+'%';
+    img.style.left=sx.toFixed(2)+'%';
+    img.style.top=sy.toFixed(2)+'%';
+    img.style.height=((imageSource.h/nh)*100).toFixed(2)+'%';
+    // The dashed outline sits on the kept source, so the shaded border reads as
+    // the area the model must fill.
+    const mk=$('image-outpaint-marker');
+    mk.style.left=sx.toFixed(2)+'%';mk.style.top=sy.toFixed(2)+'%';
+    mk.style.width=scale.toFixed(2)+'%';mk.style.height=((imageSource.h/nh)*100).toFixed(2)+'%';
+    $('image-outpaint-meta').textContent=imageSource.w+'×'+imageSource.h+' → '+nw+'×'+nh+' (top '+mg.top+', bottom '+mg.bottom+', left '+mg.left+', right '+mg.right+')';
+    box.hidden=false;
+  };
+
+  // The request builder. Kept pure (no DOM reads beyond the caller's inputs) so
+  // the shape is one place: generate is txt2img, edit and outpaint are img2img,
+  // and outpaint carries the margins or preset the router resolves.
+  window.imageRequestBody=function(mode){
+    const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,
+      steps:Number($('image-steps').value),cfg_scale:Number($('image-cfg').value),
+      seed:Number($('image-seed').value),batch_size:Number($('image-batch').value)};
+    if($('image-model').value)body.model=$('image-model').value;
+    if(mode==='generate'){
+      body.width=Number($('image-width').value);body.height=Number($('image-height').value);
+      return body;
+    }
+    body.init_images=[imageSource.data];
+    body.width=Number($('image-width').value);body.height=Number($('image-height').value);
+    if(mode==='edit'){body.denoising_strength=Number($('image-strength').value);return body}
+    body.denoising_strength=Number($('image-fill-strength').value);
+    const preset=$('image-preset').value;
+    body.outpaint=preset?{preset}:outpaintMargins();
+    return body;
+  };
+
+  function readImageFile(file){
+    if(!file)return Promise.reject(new Error('No file chosen.'));
+    if(!/^image\/(png|jpeg|webp)$/.test(file.type))return Promise.reject(new Error('Use a PNG, JPEG or WEBP image.'));
+    return new Promise((res,rej)=>{
+      const fr=new FileReader();
+      fr.onerror=()=>rej(new Error('Could not read the file.'));
+      fr.onload=()=>{const img=new Image();img.onload=()=>res({data:fr.result,w:img.naturalWidth,h:img.naturalHeight,name:file.name});img.onerror=()=>rej(new Error('That file is not a decodable image.'));img.src=fr.result};
+      fr.readAsDataURL(file);
+    });
+  }
+  window.imageSourcePicked=async function(){
+    const f=$('image-source').files&&$('image-source').files[0];
+    try{setImageSource(await readImageFile(f))}catch(e){imageNote(e.message)}
+  };
+  function setImageSource(src){
+    imageSource=src;
+    $('image-source-preview').hidden=false;
+    $('image-source-img').src=src.data;
+    $('image-source-meta').textContent=src.name+' — '+src.w+'×'+src.h;
+    if(imageMode()!=='generate'){$('image-width').value=src.w;$('image-height').value=src.h}
+    imageModeUpdate();
+  }
+  (function imageDropZone(){
+    const dz=$('image-drop');
+    dz.addEventListener('click',()=>$('image-source').click());
+    dz.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();$('image-source').click()}});
+    dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag')});
+    dz.addEventListener('dragleave',()=>dz.classList.remove('drag'));
+    dz.addEventListener('drop',async e=>{
+      e.preventDefault();dz.classList.remove('drag');
+      const f=e.dataTransfer&&e.dataTransfer.files&&e.dataTransfer.files[0];
+      try{setImageSource(await readImageFile(f))}catch(err){imageNote(err.message)}
+    });
+  })();
+
   window.generateImage=async function(){
     if(imageCtl)return;
     const out=$('image-output'),go=$('image-generate'),stop=$('image-cancel');
-    out.className='image-result';out.textContent='Generating…';
-    const body={prompt:$('image-prompt').value,negative_prompt:$('image-negative').value,width:Number($('image-width').value),height:Number($('image-height').value),steps:Number($('image-steps').value),seed:Number($('image-seed').value)};
-    if($('image-model').value)body.model=$('image-model').value;
+    const mode=imageMode();
+    if(mode!=='generate'&&!imageSource.data){imageNote('Choose a source image first.');return}
+    out.className='image-result';out.textContent=mode==='generate'?'Generating…':(mode==='edit'?'Editing…':'Outpainting…');
+    const body=imageRequestBody(mode);
+    const path=mode==='generate'?'/sdapi/v1/txt2img':'/sdapi/v1/img2img';
     const h=histStart('image');
     const ctl=imageCtl=new AbortController();
     let timedOut=false;
     const timer=setTimeout(()=>{timedOut=true;ctl.abort()},180000);
     go.disabled=true;stop.disabled=false;
     try{
-      const r=await fetch('/sdapi/v1/txt2img',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctl.signal});
+      const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctl.signal});
       const text=await r.text();
       if(!r.ok){const wait=r.headers.get('Retry-After');throw new Error('HTTP '+r.status+': '+(text.trim()||r.statusText)+(wait?' (retry in '+wait+' s)':''))}
       let d;try{d=JSON.parse(text)}catch(e){throw new Error('The response was not JSON.')}
       // Blob URLs, not data URLs, so up to 20 history entries hold bytes rather than base64 strings.
       const urls=(d.images||[]).map(x=>URL.createObjectURL(new Blob([Uint8Array.from(atob(x),c=>c.charCodeAt(0))],{type:'image/png'})));
-      out.innerHTML=urls.length?urls.map(u=>'<img alt="Generated image" src="'+esc(u)+'">').join(''):'<span class="muted">No images returned.</span>';
+      imageResult=urls[0]||null;
+      const srcHtml=(mode!=='generate'&&imageSource.data)?'<figure><img alt="Source" src="'+esc(imageSource.data)+'"><figcaption class="subtle">Source '+imageSource.w+'×'+imageSource.h+'</figcaption></figure>':'';
+      const resHtml=urls.length?urls.map(u=>'<figure><img alt="Result" src="'+esc(u)+'"><figcaption class="subtle">'+(mode==='generate'?'Generated':(mode==='edit'?'Edited':'Outpainted'))+'</figcaption></figure>').join(''):'<span class="muted">No images returned.</span>';
+      out.innerHTML=srcHtml+resHtml;
+      out.className='image-result image-pair';
+      $('image-result-actions').hidden=!imageResult;
       histEnd(h,'ok',{urls});
     }catch(e){
       out.className='image-result error';
       out.textContent=ctl.signal.aborted?(timedOut?'Timed out after 3 minutes with no answer.':'Cancelled.'):e.message;
       histEnd(h,ctl.signal.aborted&&!timedOut?'cancelled':'error');
     }finally{clearTimeout(timer);imageCtl=null;go.disabled=false;stop.disabled=true}
+  };
+
+  window.downloadImageResult=function(){
+    if(!imageResult)return;
+    const a=document.createElement('a');a.href=imageResult;a.download='model-router-image.png';document.body.appendChild(a);a.click();a.remove();
+  };
+  window.useImageResultAsSource=function(){
+    if(!imageResult)return;
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;
+      c.getContext('2d').drawImage(img,0,0);
+      setImageSource({data:c.toDataURL('image/png'),w:c.width,h:c.height,name:'previous result'});
+      if(imageMode()==='generate'){$('image-mode').value='edit';imageModeUpdate()}
+    };
+    img.src=imageResult;
   };
 
   // shortcut: shows the first 8 values only and no copy button, add a full-vector download if operators ask.

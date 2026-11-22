@@ -154,7 +154,7 @@ var APITypes = []string{
 
 // Capabilities are the optional capability flags a stanza may declare. The
 // video flags describe the optional video playground fields the model accepts.
-var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning", "duration", "resolution", "seed"}
+var Capabilities = []string{"vision", "audio_in", "audio_out", "tools", "reasoning", "duration", "resolution", "seed", "img2img", "inpaint"}
 
 // ImagePipeline is a stanza's image request pipeline. The YAML value is either
 // a preset name (sd-server or ideogram4, see SPEC.md) or a map; a preset is
@@ -943,6 +943,9 @@ func Parse(raw []byte) (*Config, error) {
 			}
 			if (c == "duration" || c == "resolution" || c == "seed") && s.APIType != APITypeVideo {
 				return nil, fmt.Errorf("stanza %q: capability %q is only valid with api_type: video", s.ModelID, c)
+			}
+			if (c == "img2img" || c == "inpaint") && s.APIType != APITypeImage {
+				return nil, fmt.Errorf("stanza %q: capability %q is only valid with api_type: image", s.ModelID, c)
 			}
 		}
 		if s.Job != nil {
