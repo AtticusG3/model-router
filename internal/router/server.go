@@ -515,6 +515,9 @@ func handleModels(r *Router) http.HandlerFunc {
 			if ms.CloneMode != "" {
 				rec["clone_mode"] = ms.CloneMode
 			}
+			if ms.PathDefault {
+				rec["path_default"] = true
+			}
 			meta := map[string]any{"modelrouter": map[string]any{"type": "model", "origin": ms.Origin}}
 			rec["meta"] = meta
 			rec["status"] = map[string]any{"value": ms.State}

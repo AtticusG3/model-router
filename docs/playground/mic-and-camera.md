@@ -1,4 +1,4 @@
-[Project README](../README.md) › Use the mic and camera in the Playground
+[Project README](../../README.md) › Use the mic and camera in the Playground
 
 # Use the mic and camera in the Playground
 
@@ -121,13 +121,13 @@ flowchart TD
 
 ## See also
 
-- [README: Config](../README.md#config): the `capabilities` flags, including `video_in`.
-- [SPEC.md](../SPEC.md): `clone_mode` and the voice library routes.
-- [Voice cloning backends](research/voice-cloning-backends.md): which backends take `ref_audio` and which take `speaker_ref_b64`.
-- [Speech-to-text backends](research/stt-backends.md): what whisper.cpp accepts.
+- [README: Config](../../README.md#config): the `capabilities` flags, including `video_in`.
+- [SPEC.md](../../SPEC.md): `clone_mode` and the voice library routes.
+- [Voice cloning backends](../research/voice-cloning-backends.md): which backends take `ref_audio` and which take `speaker_ref_b64`.
+- [Speech-to-text backends](../research/stt-backends.md): what whisper.cpp accepts.
 
 ## Linked from
 
 <!-- backlinks:start -->
-- [model-router](../README.md)
+- [Docs home](../../README.md)
 <!-- backlinks:end -->

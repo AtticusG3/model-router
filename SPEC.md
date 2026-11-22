@@ -242,9 +242,33 @@ stanza.
 `video_in` means the chat backend takes `video_url` content parts itself; the
 Playground sends a vision model without it sampled frames instead. Video
 models add `duration`, `resolution` and `seed` when they accept those request
-fields; one of those flags on another `api_type` is a load error. It is
-published in `/v1/models` and `/_router/status`. A vision chat model (started
+fields; image models add `img2img` (accepts `/sdapi/v1/img2img` with a source
+image) and `inpaint` (accepts a mask, so the Playground offers Outpaint). A
+flag on the wrong `api_type` is a load error. Every flag is published in
+`/v1/models` and `/_router/status`; a catalog row also carries `path_default`
+when its stanza is the one a request with no model name lands on, so the
+Playground gates Edit and Outpaint on that stanza. The Image tab how-to is
+[docs/playground/image-editing.md](playground/image-editing.md). A vision chat model (started
 with an `--mmproj`) stays `api_type: chat` and adds `capabilities: [vision]`.
+
+### Outpaint
+
+`POST /sdapi/v1/img2img` accepts an extra `outpaint` object on any
+`api_type: image` stanza, with or without an `image_pipeline`:
+
+```json
+{"init_images": ["<base64>"], "prompt": "empty beach at dusk",
+ "denoising_strength": 0.95, "outpaint": {"preset": "16:9"}}
+```
+
+The router decodes `init_images[0]`, pads it with mid grey (`128,128,128`),
+builds a same-size mask (white = fill, black = keep), sets `width`/`height` to
+the padded canvas, attaches `mask` and removes `outpaint` before the backend
+sees the request. `preset` takes `1.5x`, `2x` or a ratio such as `16:9`; explicit
+`top`/`bottom`/`left`/`right` pixels are the alternative and are mutually
+exclusive with `preset`. Caps: 4096 px per side, 8192 px on the result. The
+maths is in `internal/router/outpaint.go`; it runs before the img2img body
+checks, so a curl client and the Playground take the same path.
 
 `image_pipeline` (only on `api_type: image`) runs the image request handling on
 the node that owns the stanza, for requests from local clients and for requests

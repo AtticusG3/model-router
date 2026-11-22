@@ -1977,7 +1977,10 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			}
 			defer release()
 		}
-		if s.ImagePipeline != nil {
+		// An img2img body may carry an `outpaint` field, and that rewrite must
+		// reach every image stanza, not only the ones with an image_pipeline
+		// (#200). Other requests keep the plain proxy path.
+		if s.ImagePipeline != nil || (s.APIType == config.APITypeImage && req.URL.Path == "/sdapi/v1/img2img") {
 			r.proxyImage(w, req, Target{Local: key}, m, m.proxy(), key, r.node, s)
 			return nil
 		}
@@ -2336,6 +2339,9 @@ type ModelStatus struct {
 	Info *ModelInfo `json:"info,omitempty"`
 	// Peers lists every configured peer that serves this id, in config order.
 	Peers []PeerModelStatus `json:"peers,omitempty"`
+	// PathDefault marks the stanza a request lands on when it names no model,
+	// so the UI can gate its mode controls on that stanza's capabilities (#200).
+	PathDefault bool `json:"path_default,omitempty"`
 }
 
 // PeerModelStatus is one peer's copy of a catalog model.
@@ -2436,6 +2442,7 @@ func (r *Router) catalogStatuses() []ModelStatus {
 			ID: id, Name: s.Name, Type: "model", Origin: "local",
 			State: string(st), Freshness: freshness, VramMB: s.VramMB, APIType: s.APIType,
 			Capabilities: s.Capabilities, CloneMode: s.CloneMode, GPUs: gpus, Family: fam, Info: info,
+			PathDefault: s.Match.PathDefault,
 		})
 		seen[id] = true
 		// A filter-set id is a catalog row of its own, sharing the stanza's state.
