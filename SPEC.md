@@ -93,6 +93,31 @@ One file per node (`-config`, default `/opt/ai/config/model-router.yaml`).
 (default hostname). `-check` validates and prints the derived catalog,
 including extra-instance ports, then exits.
 
+### Per-node overlay (`-overlay`)
+
+Tracked configs carry **placeholder addresses** — the LAN /24 as `10.99.0.x`,
+tailnet hosts as `203.0.113.x`, last octet preserved. The real per-node values
+(peer `base_url`s, `discovery.subnets`/`exclude`, `security.trusted_proxies` and
+`security.api_keys`) live in an untracked overlay:
+
+```
+<config dir>/local/<node>.yaml      default; <node> is -node or the hostname
+-overlay <path>                     explicit file
+```
+
+Merge semantics: deep merge over the parsed YAML document; maps merge key by
+key, lists and scalars in the overlay replace the base value. `peers` is a list,
+so an overlay that names peers replaces the whole list. A missing overlay is not
+an error (a fresh checkout runs on placeholders alone); an overlay that exists
+but fails to parse or validate **is** an error and the load is refused — never a
+silent fallback to the tracked file. The same merge runs on every reload
+(SIGHUP, file watch, `POST /_router/reload`), so editing either file reloads
+correctly. `-check` prints `overlay: <path>` when one is merged.
+
+Rationale for load-time rather than deploy-time: the live stanza flow (patch
+`/opt/ai/config/model-router.yaml`, restart) is unchanged, no new install step
+exists, and a config copied from `configs/` can never carry a real address.
+
 ```yaml
 listen: 0.0.0.0:18080
 start_port: 5800          # base for auto-allocated ports

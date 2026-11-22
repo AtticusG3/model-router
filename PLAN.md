@@ -259,6 +259,15 @@ units in `deploy/`. The swap-over keeps llama-swap as a rollback (unit
 `llama-swap.service` is only stopped after the router passes a health check on the
 same port).
 
+**Addresses (#195):** tracked `configs/*.yaml` carry placeholders only — the LAN
+/24 as `10.99.0.x`, tailnet hosts as `203.0.113.x`, last octet preserved. Real
+values (`peers[].base_url`, `discovery.subnets`/`exclude`,
+`security.trusted_proxies`/`api_keys`) live in the untracked
+`/opt/ai/config/local/<node>.yaml`, merged over the tracked file at load time
+(`-overlay`, default `<config dir>/local/<node>.yaml`). Install therefore copies
+the placeholder config and leaves the overlay in place; `deploy/overlay-split.py`
+builds both from a live config and `--check`s them.
+
 Order of rollout (least disruptive first): **nomad** (single local model;
 Chat lab probes mesh peers) → **gareths-homelab** (nginx in front, easy
 rollback) → **digger** (image node) → **nugget** (V100, kevyn unit) →
