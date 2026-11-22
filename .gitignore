@@ -10,3 +10,6 @@
 
 # Python bytecode
 __pycache__/
+
+# Per-node address overlay (#195): real addresses live here, never in git
+configs/local/

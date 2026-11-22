@@ -25,6 +25,7 @@ import (
 func main() {
 	var (
 		configPath = flag.String("config", "/opt/ai/config/model-router.yaml", "path to the model-router YAML config")
+		overlay    = flag.String("overlay", "", "untracked per-node overlay merged over --config (default: <config dir>/local/<node>.yaml; missing = none)")
 		listen     = flag.String("listen", "", "override the listen address (default: config value)")
 		node       = flag.String("node", "", "override the node name (default: hostname)")
 		verbose    = flag.Bool("verbose", false, "verbose logging")
@@ -34,14 +35,28 @@ func main() {
 
 	logger := router.NewLogger(os.Stdout, *verbose)
 
-	cfg, err := config.Load(*configPath)
+	nodeName := *node
+	if nodeName == "" {
+		nodeName, _ = os.Hostname()
+	}
+	overlayPath := *overlay
+	if overlayPath == "" {
+		overlayPath = config.OverlayPath(*configPath, nodeName)
+	}
+	cfg, err := config.LoadWithOverlay(*configPath, overlayPath)
 	if err != nil {
 		logger.Errorf("config: %v", err)
 		os.Exit(1)
 	}
+	if overlayApplied(overlayPath) {
+		logger.Infof("config overlay merged: %s", overlayPath)
+	}
 
 	if *check {
 		fmt.Printf("config OK: %s\n", *configPath)
+		if overlayApplied(overlayPath) {
+			fmt.Printf("  overlay: %s\n", overlayPath)
+		}
 		fmt.Printf("  listen=%s start_port=%d stanzas=%d pools=%d peers=%d preload=%v\n",
 			cfg.Listen, cfg.StartPort, len(cfg.Stanzas), len(cfg.Pools), len(cfg.Peers), cfg.Preload)
 		for _, s := range cfg.Stanzas {
@@ -65,10 +80,6 @@ func main() {
 	}
 	if *listen != "" {
 		cfg.Listen = *listen
-	}
-	nodeName := *node
-	if nodeName == "" {
-		nodeName, _ = os.Hostname()
 	}
 
 	r := router.New(cfg, logger, nodeName)
@@ -100,7 +111,7 @@ func main() {
 	go router.IdleTTLReaper(ctx, r, 30*time.Second)
 
 	// Reload gate: file changes and SIGHUP validate the config, then the router applies it.
-	reloader := config.NewReloader(*configPath, cfg, r.Apply, logger)
+	reloader := config.NewReloaderWithOverlay(*configPath, overlayPath, cfg, r.Apply, logger)
 	r.SetReloader(reloader)
 	go reloader.Watch(ctx, 2*time.Second)
 
@@ -179,4 +190,14 @@ func runPreload(preload func()) <-chan struct{} {
 		preload()
 	}()
 	return done
+}
+
+// overlayApplied reports whether an overlay file is present. A missing overlay
+// is normal (a fresh checkout runs on the tracked file alone).
+func overlayApplied(path string) bool {
+	if path == "" {
+		return false
+	}
+	st, err := os.Stat(path)
+	return err == nil && !st.IsDir()
 }

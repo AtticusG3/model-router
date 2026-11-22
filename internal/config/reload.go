@@ -20,9 +20,10 @@ type Logger interface {
 // and only a valid result reaches the apply hook. An invalid file, or an
 // apply that fails, leaves the running config alone and is recorded for the UI.
 type Reloader struct {
-	path  string
-	apply func(*Config) error
-	log   Logger
+	path    string
+	overlay string // untracked per-node overlay merged over path (#195)
+	apply   func(*Config) error
+	log     Logger
 
 	baseline fileStamp // the file as loaded; the watch starts here, not whenever the goroutine first runs
 
@@ -37,7 +38,13 @@ type Reloader struct {
 // NewReloader returns a reloader for path. current is the running config;
 // apply receives each newly validated config; an error means it was not taken.
 func NewReloader(path string, current *Config, apply func(*Config) error, log Logger) *Reloader {
-	r := &Reloader{path: path, current: current, apply: apply, log: log}
+	return NewReloaderWithOverlay(path, "", current, apply, log)
+}
+
+// NewReloaderWithOverlay is NewReloader with an untracked overlay merged over
+// the tracked file on every reload. An empty overlay keeps the plain behaviour.
+func NewReloaderWithOverlay(path, overlay string, current *Config, apply func(*Config) error, log Logger) *Reloader {
+	r := &Reloader{path: path, overlay: overlay, current: current, apply: apply, log: log}
 	r.baseline, _ = r.statOK()
 	return r
 }
@@ -48,7 +55,7 @@ func NewReloader(path string, current *Config, apply func(*Config) error, log Lo
 func (r *Reloader) Reload() error {
 	r.run.Lock()
 	defer r.run.Unlock()
-	cfg, err := Load(r.path)
+	cfg, err := LoadWithOverlay(r.path, r.overlay)
 	if err == nil {
 		err = r.apply(cfg)
 	}
