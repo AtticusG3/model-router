@@ -391,7 +391,7 @@ stanzas:
     port: 5959
 
   - model_id: z-image-juggernaut-fast
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Juggernaut Z Fast"
     command: >
       /opt/ai/bin/sd-server
@@ -517,7 +517,7 @@ stanzas:
     port: 5964
 
   - model_id: z-image
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Z Image Base"
     command: >
       /opt/ai/bin/sd-server
@@ -545,7 +545,7 @@ stanzas:
     port: 5965
 
   - model_id: z-image-redcraft
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "RedCraft z-image-turbo"
     command: >
       /opt/ai/bin/sd-server

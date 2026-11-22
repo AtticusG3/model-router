@@ -64,7 +64,8 @@ peers:
     base_url: http://10.99.0.61:18080
     models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
              qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
-             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
+             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4,
+             whisper-large-v3-turbo, qwen3-tts-1.7b, voice-cascade, kitten-tts-2]
   - name: digger
     kind: router
     base_url: http://10.99.0.36:8082
@@ -73,7 +74,7 @@ peers:
   - name: gareths-homelab
     kind: router
     base_url: http://203.0.113.44:8081
-    models: [qwen2.5-1.5b-instruct, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
+    models: [qwen2.5-1.5b-instruct, qwen3.6-35b-a3b,
              krea-2-turbo, z-anime-turbo, ideogram4]
   - name: nugget
     kind: router

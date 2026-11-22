@@ -85,6 +85,40 @@ systemctl start llama-swap.service
 # (untouched). The router's config + binary remain installed for the next try.
 ```
 
+## Upgrade a running node (binary swap)
+
+Use this on a node that already runs model-router (v0.2.0 went out this way on
+22 Nov 2026 to buster, gareths-homelab and nomad). The live config stays in
+place; only new keys are merged in.
+
+```bash
+# On the box or any build host (never in a node's working checkout):
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/model-router ./cmd/model-router
+scp build/model-router <node>:/tmp/model-router-new
+
+# On the node, as root. TS keeps each backup unique.
+TS=$(date +%Y%m%d-%H%M%S)
+cp -p /opt/ai/bin/model-router /opt/ai/bin/model-router.bak-$TS
+cp -p /opt/ai/config/model-router.yaml /opt/ai/config/model-router.yaml.bak-$TS
+
+# Optional: stamp img2img / inpaint capabilities on image stanzas (#200).
+# Run on a copy, diff it, then install it. A second run changes nothing.
+cp /opt/ai/config/model-router.yaml /tmp/mr.yaml
+python3 deploy/stamp-image-caps.py /tmp/mr.yaml
+diff -u /opt/ai/config/model-router.yaml /tmp/mr.yaml
+
+# Check the NEW binary against the NEW config before switching anything.
+/tmp/model-router-new -check -config /tmp/mr.yaml [-node <node>]
+install -m 0644 /tmp/mr.yaml /opt/ai/config/model-router.yaml
+install -m 0755 /tmp/model-router-new /opt/ai/bin/model-router
+systemctl restart model-router.service   # restarts every backend it owns
+curl -s http://127.0.0.1:<port>/health
+```
+
+If `-check` or `/health` fails, put both `.bak-$TS` files back and restart.
+A config-only change does not need a restart: `POST /_router/reload` (or
+SIGHUP) reloads it in place.
+
 ## Per-node specifics
 
 | Node | Router port | Verify against | Notes |

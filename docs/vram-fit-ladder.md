@@ -154,13 +154,13 @@ Legacy pool/proxy names are aliases only.
 | `qwen3-embedding-4b` | Qwen3 Embedding 4B (rag-proxy) | buster, nugget |
 | `jina-reranker-v3.5` | Jina Reranker v3.5 (rag-proxy) | buster, nugget |
 | `qwen3.8-27b` | Qwen3.8 27B UD-Q5_K_XL | buster, nugget, digger |
-| `ornith-1.0-35b-heretic` | Ornith 1.0 35B Heretic (APEX Quality on 32GB, Compact on 24GB/16GB) | buster, nugget, digger, gareth |
+| `ornith-1.0-35b-heretic` | Ornith 1.0 35B Heretic (APEX Quality on 32GB, Compact on 24GB/16GB) | buster, nugget, digger |
 | `ornith-1.5-35b-a3b-bigbang` | Ornith 1.5 35B A3B BigBang (Q5 grafted MTP on 32GB, Q4 no-MTP on 24GB) | buster, nugget, digger |
 | `qwen3.5-9b` | Qwen 3.5 9B Abliterated | nomad |
 | `qwen3.6-35b-a3b` | Qwen 3.6 35B A3B heretic (APEX Quality on 32GB, Compact on 16GB) | buster, nugget, gareth |
 | `krea-2-turbo` | Krea 2 Turbo | buster, nugget, digger, gareth |
 | `z-anime-turbo` | Z-Anime Turbo (alias `z-anime`) | buster, nugget, digger, gareth |
-| `ideogram4` | Ideogram 4 | buster, nugget, digger, gareth |
+| `ideogram4` | Ideogram 4 | buster, nugget, digger |
 
 Image-only extras on digger/gareth (`sdxl-lightning`, `z-image`, `flux2-klein`, …) keep their local ids. Do not prefix with a hostname or `-waldron` as the identity.
 

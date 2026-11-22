@@ -194,29 +194,6 @@ stanzas:
     unlisted: false
     port: 5823
 
-  - model_id: ideogram4
-    capabilities: [img2img]
-    name: "Ideogram 4"
-    command: >
-      /opt/ai/bin/sd-server
-      --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/ideogram4/ideogram4-Q8_0.gguf
-      --uncond-diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/ideogram4/ideogram4_uncond-Q8_0.gguf
-      --llm /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/ideogram4/Qwen3-VL-8B-Instruct-Q4_K_M.gguf
-      --vae /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/ideogram4/flux2-vae.safetensors
-      --mmap --max-vram 12 --rng cuda --vae-tiling --fa --offload-to-cpu
-      --seed -1
-      -W 1024 -H 1024
-      -l 0.0.0.0 --listen-port {port}
-    vram_mb: 14000
-    device: 0
-    spin_up_seconds: 60
-    api_type: image
-    match: {path_prefix: /sdapi/v1}
-    health_check: /sdapi/v1/sd-models
-    idle_ttl_seconds: 300
-    unlisted: false
-    port: 5827
-
   - model_id: sdxl-lightning
     capabilities: [img2img]
     name: "Waldron SDXL Lightning (Juggernaut XI)"
@@ -260,7 +237,7 @@ stanzas:
     port: 5824
 
   - model_id: z-image-juggernaut-fast
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Waldron Juggernaut Z Fast (4-step GGUF)"
     aliases: [juggernaut-z-waldron]
     command: >
@@ -287,7 +264,7 @@ stanzas:
     port: 5825
 
   - model_id: z-image
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Waldron Z Image base (Q8 GGUF)"
     aliases: [z-image-waldron]
     command: >
@@ -443,47 +420,14 @@ stanzas:
     unlisted: false
     port: 5808
 
-  - model_id: deepseek-v4.1-flash-ista-das-coder
-    name: "DeepSeek V4.1 Flash ISTA-DAS Coder (Strata dsv41, 131k, IQ2_XXS)"
-    aliases: [ista-das-coder, dsv41-coder, deepseek-coder]
-    command: >
-      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/.venv/bin/python
-      /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/serve/server.py
-      --engine strata
-      --config /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/strata-deepseek-v4.1-flash-ista-das-coder.json
-      --port {port}
-    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID"]
-    vram_mb: 14200
-    device: 0
-    spin_up_seconds: 600
-    api_type: chat
-    match: {body_field: model}
-    health_check: /health
-    idle_ttl_seconds: 900
-    hold_seconds: 60
-    slots: 1
-    unlisted: false
-    port: 5940
-
 peers:
   - name: buster
     kind: router
     base_url: http://203.0.113.77:18080
-    models: [qwen38-flash-next, agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
-             qwen3.8-27b, ornith-1.0-35b-heretic, qwen3.6-35b-a3b,
-             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
-  - name: digger
-    kind: router
-    base_url: http://203.0.113.71:8082
-    models: [qwen3-0.6b-instruct, qwen3.8-27b, ornith-1.0-35b-heretic,
-             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
+    models: [qwen38-flash-next, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
+             krea-2-turbo, krea-character-creator, krea2-ostris-edit, z-anime-turbo, ideogram4,
+             qwen-image-2.1, flux3-klein, fibo-2.0-edit-turbo]
   - name: nomad
     kind: router
     base_url: http://203.0.113.127:8081
     models: [qwen3.5-9b]
-  - name: nugget
-    kind: router
-    base_url: http://203.0.113.126:8081
-    models: [agents-a1, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
-             ornith-1.0-35b-heretic, qwen3.8-27b, qwen3.6-35b-a3b,
-             ornith-1.5-35b-a3b-bigbang, krea-2-turbo, z-anime-turbo, ideogram4]
