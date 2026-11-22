@@ -1,6 +1,12 @@
-# Issue tracker: GitHub
+[Docs home](../README.md) › Agent setup › Issue tracker: Gitea
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+# Issue tracker: Gitea
+
+> **Type:** Reference · **Audience:** agents and maintainers · **Last reviewed:** 2026-11-22
+
+Issues and specs for this repo live as Gitea issues in `kevyn/model-router`. Issue and PR numbers (for example #185) refer to that repo.
+
+The commands below are written for the `gh` CLI and apply only to the older GitHub mirror (`AtticusG3/model-router`), if it is still in use. On Gitea, use the web UI or the `tea` CLI equivalents (`tea issues`, `tea comment`, `tea pulls`).
 
 ## Conventions
 
@@ -44,3 +50,14 @@ Used by `/wayfinder`. The **map** is a single issue with **child** issues as tic
 - **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
 - **Claim**: `gh issue edit <n> --add-assignee @me`, the session's first write.
 - **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Domain docs](domain.md): how agents read GLOSSARY and ADRs.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

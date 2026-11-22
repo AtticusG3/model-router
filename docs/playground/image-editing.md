@@ -109,6 +109,7 @@ Explicit margins work the same way: `"outpaint": {"top": 128, "bottom": 128, "le
 ## Linked from
 
 <!-- backlinks:start -->
-- [README](../../README.md): Image tab entry.
-- [SPEC](../../SPEC.md): image pipeline and capability flags.
+- [Model Router: SPEC](../../SPEC.md)
+- [model-router](../../README.md)
+- [Playground guides](README.md)
 <!-- backlinks:end -->

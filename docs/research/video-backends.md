@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Local video generation backends
+
 # Local video generation backends
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20. Part of #64, issue #83. Feeds the async job
 design in #69.
@@ -173,15 +177,15 @@ and the expected VRAM for a 720p-class clip. Licence is code / weights.
 | ComfyUI (native Wan, LTX, Hunyuan, Mochi, CogVideoX nodes; GGUF via ComfyUI-GGUF) | https://github.com/Comfy-Org/ComfyUI | GPL-3.0 / per model | v0.43.0, 2026-10-27 | own: `POST /prompt`, `GET /history/{id}`, `GET /view`, `/ws` | async queue | websocket progress; file on disk via `/view` | yes; widest 24 GB coverage (LTX-2.3 GGUF Q6_K for 24 GB, Wan 2.2 14B ~14-16 GB at Q8) | only with a cu126 torch venv, and not for every model (sd.cpp issue #2370) `(verify)` | **fallback**, GPU 0 only |
 | vLLM-Omni (Wan 2.2, LTX-2, LTX-2.5) | https://github.com/vllm-project/vllm-omni | Apache-2.0 / per model | 0.32.0 on PyPI `(verify)` date | OpenAI-style `/v1/videos` create, retrieve, list, content, delete; plus `/v1/videos/sync` | async (and a sync route) | content endpoint | Wan 2.2 TI2V-5B fits; 14B and LTX-2 at bf16 do not without offload `(verify)` | **no** (needs compute capability 7.5+) | skip for now; it is the reference shape for the front door |
 | SGLang Diffusion (Wan 2.1/2.2, HunyuanVideo) | https://github.com/sgl-project/sglang | Apache-2.0 / per model | active `(verify)` | OpenAI-style `/v1/videos` subset (create JSON or multipart, list, retrieve, content) | async | content endpoint (MP4) | yes, small Wan models; 14B needs offload `(verify)` | not confirmed `(verify)` | skip: same niche as vLLM-Omni, no sm_70 evidence |
-| Wan 2.2 official (`generate.py`) and Diffusers pipelines | https://github.com/Wan-Video/Wan2.2 | Apache-2.0 / Apache-2.0 | repo updated 2026-09-21; no GitHub releases | scripts; no HTTP server | — | — | TI2V-5B "at least 24 GB" with `--offload_model --convert_model_dtype --t5_cpu`; one 4090 run OOMed at the VAE decode | fp16 with cu126 torch `(verify)` | skip as a server; run Wan through `sd-server` |
-| LTX-2 official (`ltx-pipelines`, trainer) | https://github.com/Lightricks/LTX-2 | Apache-2.0 code (from v1.6.0) / LTX-2 Community Licence (2.3), LTX-2.x Community Licence (2.5) | v1.6.0 `(verify)` date | Python package; no HTTP server found | — | — | official: 32 GB at bf16, 24 GB with sequential offload | bf16-first `(verify)` | skip as a server; run LTX through `sd-server` |
-| HunyuanVideo 1.5 official | https://github.com/Tencent-Hunyuan/HunyuanVideo-1.5 | Tencent Hunyuan Community Licence | 2025-11-20 release, active | scripts and Diffusers; no server | — | — | 14 GB minimum with offload (official) | `(verify)` | skip as a server; run it through `sd-server` |
-| MiniMax-H3 official | https://github.com/MiniMax-AI/MiniMax-H3 | MiniMax H3 Community Licence (excludes US, EU, UK, South Korea) | weights 2026-08-02 | scripts | — | — | Q4_K_M via `sd-server` (other node) | via `sd-server` (PR #2234) | run through `sd-server` |
-| FramePack (HunyuanVideo-based I2V, F1) | https://github.com/lllyasviel/FramePack | Apache-2.0 | F1 2025-05-03; P1 preview 2025-06-26 | Gradio demo only | — | — | 6 GB minimum, constant with length | **no**: needs fp16 and bf16, RTX 30xx and up | skip: image to video only, no audio, no API; ComfyUI wrapper exists |
-| SkyReels V2 / V3 | https://github.com/SkyworkAI/SkyReels-V2, https://github.com/SkyworkAI/SkyReels-V3 | `(verify)` | V3 weights 2026-01-29 | scripts | — | — | 14B bf16, GGUF exists; needs offload | `(verify)` | skip; reach it through ComfyUI if reference-to-video or avatar is needed |
-| WanGP (Wan2GP) | https://github.com/deepbeepmeep/WanGP | `(verify)` | v20.00, 2026-11-12 | Gradio app, headless batch from a saved queue, Python API | own queue | — | yes, very low VRAM (H3 15 s 1080p in 11 GB, per its notes) | `(verify)` | skip: no HTTP job API; a good place to borrow low-VRAM settings |
+| Wan 2.2 official (`generate.py`) and Diffusers pipelines | https://github.com/Wan-Video/Wan2.2 | Apache-2.0 / Apache-2.0 | repo updated 2026-09-21; no GitHub releases | scripts; no HTTP server | n/a | n/a | TI2V-5B "at least 24 GB" with `--offload_model --convert_model_dtype --t5_cpu`; one 4090 run OOMed at the VAE decode | fp16 with cu126 torch `(verify)` | skip as a server; run Wan through `sd-server` |
+| LTX-2 official (`ltx-pipelines`, trainer) | https://github.com/Lightricks/LTX-2 | Apache-2.0 code (from v1.6.0) / LTX-2 Community Licence (2.3), LTX-2.x Community Licence (2.5) | v1.6.0 `(verify)` date | Python package; no HTTP server found | n/a | n/a | official: 32 GB at bf16, 24 GB with sequential offload | bf16-first `(verify)` | skip as a server; run LTX through `sd-server` |
+| HunyuanVideo 1.5 official | https://github.com/Tencent-Hunyuan/HunyuanVideo-1.5 | Tencent Hunyuan Community Licence | 2025-11-20 release, active | scripts and Diffusers; no server | n/a | n/a | 14 GB minimum with offload (official) | `(verify)` | skip as a server; run it through `sd-server` |
+| MiniMax-H3 official | https://github.com/MiniMax-AI/MiniMax-H3 | MiniMax H3 Community Licence (excludes US, EU, UK, South Korea) | weights 2026-08-02 | scripts | n/a | n/a | Q4_K_M via `sd-server` (other node) | via `sd-server` (PR #2234) | run through `sd-server` |
+| FramePack (HunyuanVideo-based I2V, F1) | https://github.com/lllyasviel/FramePack | Apache-2.0 | F1 2025-05-03; P1 preview 2025-06-26 | Gradio demo only | n/a | n/a | 6 GB minimum, constant with length | **no**: needs fp16 and bf16, RTX 30xx and up | skip: image to video only, no audio, no API; ComfyUI wrapper exists |
+| SkyReels V2 / V3 | https://github.com/SkyworkAI/SkyReels-V2, https://github.com/SkyworkAI/SkyReels-V3 | `(verify)` | V3 weights 2026-01-29 | scripts | n/a | n/a | 14B bf16, GGUF exists; needs offload | `(verify)` | skip; reach it through ComfyUI if reference-to-video or avatar is needed |
+| WanGP (Wan2GP) | https://github.com/deepbeepmeep/WanGP | `(verify)` | v20.00, 2026-11-12 | Gradio app, headless batch from a saved queue, Python API | own queue | n/a | yes, very low VRAM (H3 15 s 1080p in 11 GB, per its notes) | `(verify)` | skip: no HTTP job API; a good place to borrow low-VRAM settings |
 | LocalAI `/video` | https://github.com/mudler/LocalAI | MIT / per model | active | own `POST /video` JSON; backends include `stablediffusion` and `vllm-omni` | sync | file in the response | as its backend | CUDA 12 image only (per the realtime note) | skip: a second router inside a stanza |
-| Mochi 1, CogVideoX 1.5 | https://github.com/genmoai/mochi `(verify)`, https://github.com/zai-org/CogVideo `(verify)` | Apache-2.0; CogVideoX-5B under its own licence | no release since 2024 | scripts | — | — | Mochi ~20 GB at fp8; CogVideoX-5B fits 24 GB | `(verify)` | skip: superseded; ComfyUI if ever needed |
+| Mochi 1, CogVideoX 1.5 | https://github.com/genmoai/mochi `(verify)`, https://github.com/zai-org/CogVideo `(verify)` | Apache-2.0; CogVideoX-5B under its own licence | no release since 2024 | scripts | n/a | n/a | Mochi ~20 GB at fp8; CogVideoX-5B fits 24 GB | `(verify)` | skip: superseded; ComfyUI if ever needed |
 | stable-diffusion.cpp-restapi (third party) | https://github.com/fszontagh/stable-diffusion.cpp-restapi | `(verify)` | `(verify)` | own `POST /txt2vid`, `GET /queue/{id}`, `/ws` | async, **persistent** queue | websocket | as sd.cpp | as sd.cpp | skip: not upstream; noted because it is the only one with a persistent queue |
 
 More than six candidates exist. Only two kinds of backend fit this host and
@@ -201,12 +205,12 @@ search extracts, so the shapes below are `(verify)` against the installed build
 | Method and path | Purpose | Request | Response |
 | --- | --- | --- | --- |
 | `POST /sdcpp/v1/vid_gen` | queue one video job | `application/json` (below) | `202` with the job record: `id` (`job_` + a ULID-like string), `status: "queued"`, `poll_url` |
-| `GET /sdcpp/v1/jobs/{id}` | status, progress and result | — | job record (below) |
-| `POST /sdcpp/v1/jobs/{id}/cancel` | cancel | — | job record; a client project reports `cancel_queued: true`, `cancel_generating: false`, so a running job finishes `(verify)` |
-| `GET /sdcpp/v1/capabilities` | features, samplers, schedulers, the loaded model, recipe defaults | — | JSON |
+| `GET /sdcpp/v1/jobs/{id}` | status, progress and result | n/a | job record (below) |
+| `POST /sdcpp/v1/jobs/{id}/cancel` | cancel | n/a | job record; a client project reports `cancel_queued: true`, `cancel_generating: false`, so a running job finishes `(verify)` |
+| `GET /sdcpp/v1/capabilities` | features, samplers, schedulers, the loaded model, recipe defaults | n/a | JSON |
 | `POST /sdcpp/v1/img_gen`, `POST /sdcpp/v1/upscale` | stills and upscaling | JSON | job record; not needed for video |
-| `/sdapi/v1/*`, `/v1/images/*` | A1111 and OpenAI image routes (sync) | — | stills only; not video |
-| health | readiness | — | `GET /sdapi/v1/sd-models` answers `200` once the model is loaded (the other node's stanzas use it) |
+| `/sdapi/v1/*`, `/v1/images/*` | A1111 and OpenAI image routes (sync) | n/a | stills only; not video |
+| health | readiness | n/a | `GET /sdapi/v1/sd-models` answers `200` once the model is loaded (the other node's stanzas use it) |
 
 There is no model switch the router needs: one process serves one model, and
 the router unloads by killing the process group. Recent builds refuse to load
@@ -849,9 +853,21 @@ card.
   the output non-seekable and refuses `+faststart`.
 - A job holds the card. Asking for another GPU0 model mid-job returns
   `503 no GPU can take <model> now and no peer served it` instead of evicting
-  the video model — no eviction, no lost job.
+  the video model: no eviction, no lost job.
 
 **Not tried on a V100.** Both 32 GB cards are occupied by `qwen38-flash-next`
 (the router's own chat model); a video load there evicts it for ~7 minutes and
 would need `device: "1|2"`, `CUDA_VISIBLE_DEVICES={gpu}`, `vram_mb: 30000`.
 Recorded as a follow-up rather than measured.
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [Local music and sound-effect generation backends](music-sfx-backends.md)
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

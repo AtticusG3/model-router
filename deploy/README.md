@@ -1,5 +1,7 @@
 # sd-router-shim
 
+> **Last reviewed:** 2026-11-22
+
 Wrapper between model-router and sd-server, installed as the stanza command so
 the router sees one healthy endpoint. This copy is the source of truth; the
 installed binary is replaced by copying this file.

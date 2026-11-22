@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Agent setup › Domain Docs
+
 # Domain Docs
+
+> **Type:** Reference · **Audience:** agents and maintainers · **Last reviewed:** 2026-11-22
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
@@ -49,3 +53,16 @@ If the concept you need isn't in the glossary yet, that's a signal: either you'r
 If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
 
 > _Contradicts ADR-0007 (event-sourced orders), but worth reopening because…_
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Domain docs](domain.md): how agents read GLOSSARY and ADRs.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [Issue tracker: Gitea](issue-tracker.md)
+- [model-router docs](../README.md)
+- [Triage Labels](triage-labels.md)
+<!-- backlinks:end -->

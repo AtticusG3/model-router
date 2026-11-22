@@ -209,7 +209,7 @@ the live `/opt/ai/config/model-router.yaml` first and then into
 `configs/<node>.yaml` (with placeholder addresses), because stanzas are the same
 on every node and carry no real addresses.
 
-Refreshing from live — use the splitter, never a bare `cp`:
+Refreshing from live: use the splitter, never a bare `cp`:
 
 ```bash
 # writes configs/local/<node>.yaml (real values) and configs/<node>.yaml (scrubbed)

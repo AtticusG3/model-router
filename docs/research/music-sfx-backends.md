@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Local music and sound-effect generation backends
+
 # Local music and sound-effect generation backends
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20. Part of #64, issue #87. Keeps the job API shape
 from #83 and the async job layer from #69.
@@ -188,9 +192,9 @@ where they exist.
 | Method and path | Purpose | Request | Response |
 | --- | --- | --- | --- |
 | `POST /v1/audio/generations` | create a job | JSON, or `multipart/form-data` when a file is attached | `200` or `202` with a job record |
-| `GET /v1/audio/generations/{id}` | status | — | job record |
-| `GET /v1/audio/generations/{id}/content` | the audio | — | audio bytes, `Content-Type` from the format (`audio/mpeg`, `audio/flac`, `audio/wav`, `audio/ogg`) |
-| `DELETE /v1/audio/generations/{id}` | cancel or forget | — | job record, or `409` when a running job cannot be stopped |
+| `GET /v1/audio/generations/{id}` | status | n/a | job record |
+| `GET /v1/audio/generations/{id}/content` | the audio | n/a | audio bytes, `Content-Type` from the format (`audio/mpeg`, `audio/flac`, `audio/wav`, `audio/ogg`) |
+| `DELETE /v1/audio/generations/{id}` | cancel or forget | n/a | job record, or `409` when a running job cannot be stopped |
 
 Create fields (all optional except `prompt` or `video`):
 
@@ -228,13 +232,13 @@ extracts, so the shapes below are `(verify)` against the installed version
 | --- | --- | --- | --- |
 | `POST /release_task` | queue a generation | `application/json`, `multipart/form-data` or `application/x-www-form-urlencoded` (below) | wrapper with `data.task_id` |
 | `POST /query_result` | batch status and results | `{"task_id_list": ["<id>", ...]}`. The name matters: a wrong key such as `task_ids` silently returns an empty list (wrapper README) | wrapper with `data[]`: `task_id`, `status` (`0` running, `1` succeeded, `2` failed), `result` (a **JSON string** to parse again) |
-| `GET /v1/audio?path=...` | download one file | — | the audio file |
-| `GET /health` | liveness | — | `200` and a status body |
-| `GET /v1/models` | DiT models on the server | — | list |
+| `GET /v1/audio?path=...` | download one file | n/a | the audio file |
+| `GET /health` | liveness | n/a | `200` and a status body |
+| `GET /v1/models` | DiT models on the server | n/a | list |
 | `POST /v1/init` | load or switch a DiT (slot 1-3) and optionally the LM | `{model, slot, init_llm, lm_model_path}` | wrapper |
-| `GET /v1/stats` | load and average job time | — | wrapper |
+| `GET /v1/stats` | load and average job time | n/a | wrapper |
 | `POST /format_input`, `POST /create_random_sample` | LM helpers (enrich a caption or lyrics, make a random sample) | JSON | wrapper |
-| `GET /docs` | FastAPI's generated docs | — | HTML |
+| `GET /docs` | FastAPI's generated docs | n/a | HTML |
 
 **Create fields** (snake_case or camelCase are both accepted; aliases noted):
 `prompt` (the caption), `lyrics`, `audio_duration` (alias `duration`,
@@ -823,7 +827,7 @@ the private port 5942 in the same process group, `api_type: audio_gen`,
   running. Dropping the hold and keeping `idle_ttl_seconds: 300` makes the
   handoff work: a music job issued after the video model's TTL returned an id
   and a completed 15 s clip, with the router reclaiming the idle video model to
-  make room. The hold exists for realtime sessions, not for job models — a job
+  make room. The hold exists for realtime sessions, not for job models: a job
   already holds its model through occupancy.
 
 **What the deployment corrected in this note:**
@@ -834,7 +838,7 @@ the private port 5942 in the same process group, `api_type: audio_gen`,
   replaces the 0.6B's weaker prompt/lyrics metadata.
 - **The locked torch build is broken on this host.** `uv sync` pins
   `torch 2.10.0+cu128`, and with it *every* bf16 GEMM fails with
-  `CUBLAS_STATUS_INVALID_VALUE` — a bare `4096³` bfloat16 matmul reproduces it,
+  `CUBLAS_STATUS_INVALID_VALUE`: a bare `4096³` bfloat16 matmul reproduces it,
   so it is the wheel, not the model. `torch 2.11.0+cu130` (and a matching
   `torchvision 0.26.0+cu130`, or the CUDA-version check refuses to import)
   generates normally. cu130 has **no sm_70**, so this venv cannot serve a V100;
@@ -844,7 +848,7 @@ the private port 5942 in the same process group, `api_type: audio_gen`,
   `ACESTEP_CHECKPOINTS_DIR`.
 - **The router rejects `job:` on anything that is not `api_type: video`.** An
   `audio_gen` stanza is tracked by the generic job collection as long as its
-  backend speaks the OpenAI job shape, which is what the shim provides — no
+  backend speaks the OpenAI job shape, which is what the shim provides, so no
   adapter key.
 - **A quoted `bash -lc '…'` in a YAML folded command reaches the backend as a
   broken shell word** (`unexpected EOF while looking for matching '`). The
@@ -871,3 +875,14 @@ Peak VRAM **17.3 GB** with the 1.7B LM (13.4 GB with the 0.6B), against a
 4.9 GB host baseline; the stanza books 17 GB of the 24 GB card and cannot be
 resident beside the video stanza. Durations accepted 10-600 s; 30 s and
 180 s verified end to end through `:18080`.
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

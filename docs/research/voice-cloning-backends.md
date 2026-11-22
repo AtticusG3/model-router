@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Voice cloning and a voice library across router nodes
+
 # Voice cloning and a voice library across router nodes
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20. Part of #64, issue #77.
 
@@ -116,9 +120,9 @@ release or model drop found.
 | Chatterbox Multilingual v3 (devnen Chatterbox-TTS-Server) | https://github.com/resemble-ai/chatterbox, https://github.com/devnen/Chatterbox-TTS-Server | MIT / MIT | v3 weights 2026-06-10; upstream **retired Aug 2026** | OpenAI `/v1/audio/speech` (`voice` = a file name) + `/upload_reference` | sync | `(verify)` | yes | likely, fp32 `(verify)` | skip: upstream archived; voices are files in one server's folder |
 | Fish Speech / S2-Pro | https://github.com/fishaudio/fish-speech | Fish Audio Community Licence / **Fish Audio Research Licence (non-commercial)** | S2-Pro Mar 2026; licence change Oct 2026 | own `POST /v1/tts` (msgpack) + `/v1/references/{add,list,update,delete}` | sync | `(verify)` | 4.4B; size `(verify)` | `(verify)` | skip: non-commercial weights, not OpenAI-shaped |
 | Higgs Audio v2 / v3 | https://github.com/boson-ai/higgs-audio, recipe https://github.com/vllm-project/vllm-omni/blob/main/recipes/BosonAI/Higgs-Audio-V3-TTS.md | v2 community licence from its base model; **v3 research and non-commercial** `(verify)` | v3 on vLLM-Omni (date `(verify)`) | as vLLM-Omni (v3); `ref_audio` + optional `ref_text` | sync | as vLLM-Omni | v2 ~9-14 GB; v3 recipe targets an 80 GB card | no | skip: large, and v3 terms |
-| F5-TTS | https://github.com/SWivid/F5-TTS | MIT / **CC-BY-NC-4.0** | v1 Base weights 2025-03-12 | Python and CLI only (`ref_audio`, `ref_text`) | — | — | yes | `(verify)` | skip: non-commercial weights, no server |
+| F5-TTS | https://github.com/SWivid/F5-TTS | MIT / **CC-BY-NC-4.0** | v1 Base weights 2025-03-12 | Python and CLI only (`ref_audio`, `ref_text`) | n/a | n/a | yes | `(verify)` | skip: non-commercial weights, no server |
 | XTTS-v2 (coqui-tts fork; xtts-api-server) | https://github.com/idiap/coqui-ai-TTS, https://github.com/daswer123/xtts-api-server | MPL-2.0 / **CPML, non-commercial incl. output** | `coqui-tts` 0.27.x `(verify)`; xtts-api-server inactive | own; speakers folder of WAVs plus cached latents | sync | own streaming mode | yes | likely `(verify)` | skip: output-restricting licence, unmaintained server |
-| OpenVoice V2 | https://github.com/myshell-ai/OpenVoice | MIT / MIT (since Apr 2024) | V2 Apr 2024 | Python API and Gradio demo; no server | — | — | yes, small | likely `(verify)` | skip: no server; tone-colour conversion on a separate base speaker |
+| OpenVoice V2 | https://github.com/myshell-ai/OpenVoice | MIT / MIT (since Apr 2024) | V2 Apr 2024 | Python API and Gradio demo; no server | n/a | n/a | yes, small | likely `(verify)` | skip: no server; tone-colour conversion on a separate base speaker |
 | SoVITS project (RVC-Boss) | https://github.com/RVC-Boss | MIT `(verify)` | v2Pro / v4 (date `(verify)`) | own `api_v2.py`: `/tts` with `ref_audio_path` (a **server-side path**), `/set_*_weights` | sync | chunked (v1/v2/v2Pro) | yes | `(verify)` | skip: voice switching swaps global weights per process, and its weight-loading routes are unauthenticated |
 | ZONOS3-Mini | https://github.com/Zyphra/ZONOS3-Mini | MIT / Apache-2.0 | 2026-11-09 to 11-12 | own servers, OpenAI `/v1/audio/speech`; saved voices as `speaker_embedding_id`, `GET /v2/speakers` `(verify)` | sync | yes | small (100M active) `(verify)` | `(verify)` | watch: permissive and portable, but about ten days old |
 
@@ -236,7 +240,7 @@ curl -X POST http://127.0.0.1:{port}/v1/audio/voices \
 | CosyVoice3 | no | yes: `inference_instruct2` with a cached `zero_shot_spk_id` | Python API; HTTP support `(verify)` |
 | Higgs Audio v3 | `(verify)` | tokens inside the text | non-commercial `(verify)` |
 | ZONOS3-Mini | `(verify)` | "voice control" by activation steering `(verify)` | new |
-| F5-TTS, XTTS-v2, OpenVoice V2, SoVITS, Chatterbox | no | no text control (Chatterbox has an exaggeration knob `(verify)`) | — |
+| F5-TTS, XTTS-v2, OpenVoice V2, SoVITS, Chatterbox | no | no text control (Chatterbox has an exaggeration knob `(verify)`) | n/a |
 
 So the primary clones but cannot be directed. If E4 needs "same voice, angrier",
 the permissive answer is a **VoxCPM2 stanza on the same runtime**. It reads the
@@ -698,3 +702,14 @@ This repo
 - `internal/router/matcher.go`, `internal/router/filters.go`,
   `internal/config/config.go`
 - the GPU host's node config under `configs/` (card occupancy, ports)
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

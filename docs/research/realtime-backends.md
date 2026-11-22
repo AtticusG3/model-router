@@ -1,4 +1,8 @@
+[Docs home](../README.md) › Research › Local realtime and speech-to-speech backends
+
 # Local realtime and speech-to-speech backends
+
+> **Type:** Explanation · **Audience:** maintainers choosing a backend · **Last reviewed:** 2026-11-22
 
 Date of reading: 2026-11-20. Part of #64, issue #80.
 
@@ -163,7 +167,7 @@ Realtime GA event names over websocket `/v1/realtime`.
 | Name | Repo | Licence | Last release / commit | API shape | Sync / async | Streaming | 3090 (sm_86) | V100 (sm_70) | Verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | speech-to-speech (cascade: Silero VAD → faster-whisper/Parakeet → any OpenAI LLM → Kokoro/Qwen3-TTS) | https://github.com/huggingface/speech-to-speech | Apache-2.0 / per model | README updated ~2026-10-24; package 1.1.0 `(verify)` | GA websocket `/v1/realtime` (core subset) plus WebRTC | async session | PCM16 deltas both ways | yes; ~4 GB with faster-whisper + Kokoro `(verify)` | yes with cu126 torch and CT2 `(verify)` | **primary** |
-| llama.cpp `llama-server` + LFM3-Audio-2B | https://github.com/ggml-org/llama.cpp | MIT / LFM Open License v1.0 | `/v1/realtime` PR #30636 (2026-10-20), conversation #31269, tools #31287; v0.8.0 | GA shapes; conversation and `intent=transcription`; experimental | async session | yes | yes; ~3-4 GB `(verify)` | yes (ggml `70-virtual`; host already runs it on the V100s) | **fallback** |
+| llama.cpp `llama-server` + LFM3-Audio-2B | https://github.com/ggml-org/llama.cpp | MIT / `LFM Open License v1.0` | `/v1/realtime` PR #30636 (2026-10-20), conversation #31269, tools #31287; v0.8.0 | GA shapes; conversation and `intent=transcription`; experimental | async session | yes | yes; ~3-4 GB `(verify)` | yes (ggml `70-virtual`; host already runs it on the V100s) | **fallback** |
 | LocalAI realtime pipeline | https://github.com/mudler/LocalAI | MIT / per model | v4.12.1 image; 5.0.0 docs 2026-11-18 | GA websocket `/v1/realtime?model=`, WebRTC `POST /v1/realtime/calls` | async session | yes | yes | yes, CUDA 12 image only (issue #9948) | strongest feature set (VAD, tools, cancel, truncate), but a whole multi-model server with its own LLM inside; open barge-in bugs #12445, #12493 |
 | SGLang-Omni (Qwen3-Omni turn-based; MiniCPM-o 4.5, PersonaPlex, NemotronLabs VoiceChat full-duplex) | https://github.com/sgl-project/sglang-omni | Apache-2.0 `(verify)` / per model | v0.2.0, 2026-10 | GA websocket `/v1/realtime` with `--enable-realtime`; `/v1/realtime/capabilities` | async session | yes, full-duplex for some models | Qwen3-Omni 30B does not fit; MiniCPM-o 4.5 ~19 GB fp16 or 11 GB INT4 `(verify)` | no confirmed sm_70 support `(verify)` | best full-duplex path, but no model fits beside the trio on 24 GB; revisit if a card is freed |
 | vLLM-Omni realtime (Qwen2.5/3-Omni; duplex MiniCPM-o, Qwen3-Omni, Nemotron VoiceChat) | https://github.com/vllm-project/vllm-omni | Apache-2.0 / per model | active; RFCs #6592, #7223 for a GA profile | `/v1/realtime` "qwen3-legacy" profile (`response.audio.delta`); `?duplex=1` extensions; tools (PR #3344) | async session | yes | Qwen2.5-Omni-3B probably fits `(verify)`; Qwen3-Omni 30B needs ~79 GB | **no** (cc 7.5 or higher) | skip until the GA profile lands; SDK clients do not work unchanged |
@@ -171,15 +175,15 @@ Realtime GA event names over websocket `/v1/realtime`.
 | Kyutai Moshi (full-duplex 7B) | https://github.com/kyutai-labs/moshi | MIT and Apache-2.0 / CC-BY-4.0 | `moshi` crate 0.6.4 | own websocket (Opus in Ogg `(verify)`) | async session | full-duplex, Mimi 24 kHz, 80 ms frames | yes; ~24 GB in PyTorch, less with candle q8 | no: bf16 by default, no fp16 path found `(verify)` | skip: own protocol, no tools, no OpenAI client works |
 | speaches realtime (faster-whisper + Kokoro, LLM via `CHAT_COMPLETION_BASE_URL`) | https://github.com/speaches-ai/speaches | MIT / per model | v0.9.0-rc.3, 2025-12-27 | websocket and WebRTC `/v1/realtime` | async session | yes | yes | yes (CT2, ONNX) | skip: URL `model` names the LLM, which collides with the router's use of the same field; no cancel or truncate; stale |
 | vLLM `/v1/realtime` (Voxtral Mini 4B Realtime) | https://github.com/vllm-project/vllm | Apache-2.0 / Apache-2.0 | 2026 | own transcription events (`transcription.delta`), PCM16 **16 kHz**, model **required in `session.update`** | async session | text out only | yes | no (official vLLM needs cc 8.0+, per the STT note) | not speech-to-speech; a possible STT stage only |
-| LiveKit Agents | https://github.com/livekit/agents | Apache-2.0 `(verify)` | active | worker that joins WebRTC rooms on a LiveKit server | — | WebRTC | n/a | n/a | not a backend: dials out to a media server. Can use the router as its STT, LLM and TTS |
-| Pipecat | https://github.com/pipecat-ai/pipecat | BSD-2-Clause `(verify)` | active | framework; SmallWebRTC, websocket and telephony transports; no OpenAI Realtime server | — | yes | n/a | n/a | not a backend; a client of `/v1/realtime` |
-| Vocalis | https://github.com/Lex-au/Vocalis | Apache-2.0 | — | own websocket (React app) | — | yes | — | — | an app, a client of the router's LLM and TTS |
-| RealtimeVoiceChat | https://github.com/KoljaB/RealtimeVoiceChat | Apache-2.0 (from PR #57, 2026-11-10; MIT before) | 2026-11-10 | own websocket | — | yes | — | — | demo app, own protocol |
-| Wyoming (Home Assistant voice) | https://github.com/OHF-Voice/wyoming | MIT `(verify)` | — | JSONL events over raw TCP | turn-based | PCM chunks | — | — | not HTTP; the router cannot carry it |
-| FastRTC | https://github.com/gradio-app/fastrtc | Apache-2.0 or MIT `(verify)` | — | library; own websocket JSON or WebRTC | — | yes | — | — | build-your-own handler, not a server |
-| Step-Audio 2 mini, Kimi-Audio, GLM-4-Voice | https://github.com/stepfun-ai/Step-Audio2, https://github.com/MoonshotAI/Kimi-Audio, https://github.com/THUDM/GLM-4-Voice | Apache-2.0; MIT; Apache-2.0 code `(verify)` | 2024-2025 | inference scripts and demos, no realtime server | — | — | ~24 GB each `(verify)` | bf16 | skip: no server |
-| LLaMA-Omni2 | https://github.com/ictnlp/LLaMA-Omni2 | Apache-2.0 / **research only** | 2025 | demo server | — | — | yes | `(verify)` | skip: non-commercial weights |
-| Ultravox | https://github.com/fixie-ai/ultravox | MIT / MIT plus base LLM terms | — | vLLM OpenAI chat; audio in, **text out** | sync | text | yes | as vLLM | not speech-to-speech; STT+LLM half only |
+| LiveKit Agents | https://github.com/livekit/agents | Apache-2.0 `(verify)` | active | worker that joins WebRTC rooms on a LiveKit server | n/a | WebRTC | n/a | n/a | not a backend: dials out to a media server. Can use the router as its STT, LLM and TTS |
+| Pipecat | https://github.com/pipecat-ai/pipecat | BSD-2-Clause `(verify)` | active | framework; SmallWebRTC, websocket and telephony transports; no OpenAI Realtime server | n/a | yes | n/a | n/a | not a backend; a client of `/v1/realtime` |
+| Vocalis | https://github.com/Lex-au/Vocalis | Apache-2.0 | n/a | own websocket (React app) | n/a | yes | n/a | n/a | an app, a client of the router's LLM and TTS |
+| RealtimeVoiceChat | https://github.com/KoljaB/RealtimeVoiceChat | Apache-2.0 (from PR #57, 2026-11-10; MIT before) | 2026-11-10 | own websocket | n/a | yes | n/a | n/a | demo app, own protocol |
+| Wyoming (Home Assistant voice) | https://github.com/OHF-Voice/wyoming | MIT `(verify)` | n/a | JSONL events over raw TCP | turn-based | PCM chunks | n/a | n/a | not HTTP; the router cannot carry it |
+| FastRTC | https://github.com/gradio-app/fastrtc | Apache-2.0 or MIT `(verify)` | n/a | library; own websocket JSON or WebRTC | n/a | yes | n/a | n/a | build-your-own handler, not a server |
+| Step-Audio 2 mini, Kimi-Audio, GLM-4-Voice | https://github.com/stepfun-ai/Step-Audio2, https://github.com/MoonshotAI/Kimi-Audio, https://github.com/THUDM/GLM-4-Voice | Apache-2.0; MIT; Apache-2.0 code `(verify)` | 2024-2025 | inference scripts and demos, no realtime server | n/a | n/a | ~24 GB each `(verify)` | bf16 | skip: no server |
+| LLaMA-Omni2 | https://github.com/ictnlp/LLaMA-Omni2 | Apache-2.0 / **research only** | 2025 | demo server | n/a | n/a | yes | `(verify)` | skip: non-commercial weights |
+| Ultravox | https://github.com/fixie-ai/ultravox | MIT / MIT plus base LLM terms | n/a | vLLM OpenAI chat; audio in, **text out** | sync | text | yes | as vLLM | not speech-to-speech; STT+LLM half only |
 
 More than six candidates exist. Only four serve the GA protocol as a server
 process. Of those four, only the first two fit one router stanza and run on the
@@ -651,7 +655,7 @@ Internal use only, but these are the terms to know.
 
 - **`speech-to-speech`**: Apache-2.0. **faster-whisper**: MIT. **Kokoro-82M**
   weights: Apache-2.0. **Silero VAD**: MIT `(verify)`. Whisper weights: MIT.
-- **llama.cpp**: MIT. **LFM3-Audio-2B weights: LFM Open License v1.0.** It is
+- **llama.cpp**: MIT. **LFM3-Audio-2B weights: `LFM Open License v1.0`.** It is
   not Apache-2.0. Commercial use is free only for organisations under USD 10M
   annual revenue, counted across the whole corporate group. Above that, a paid
   licence is needed. Fine for a homelab. Flag it if the fallback ever serves a
@@ -752,7 +756,7 @@ curl -s http://127.0.0.1:18080/metrics | grep model_router_inflight_requests
 3. **Should the router cap session length** (new `max_session_seconds` key, a
    router change), or is an abandoned session holding GPU 0 acceptable for a
    homelab?
-4. **Is the LFM Open License acceptable** for the fallback? It is free under the
+4. **Is the `LFM Open License` acceptable** for the fallback? It is free under the
    USD 10M revenue cap.
 5. **Should the Playground's Realtime tab move to GA fields** (`output_modalities`,
    `session.type: "realtime"`) and gain audio capture? That is a UI change for a
@@ -891,3 +895,15 @@ This repo
   `internal/router/ui/app.js`, `cmd/model-router/main.go`,
   `internal/config/config.go`
 - the GPU host's node config under `configs/` (card occupancy)
+
+## See also
+
+- [Docs index](../README.md): every docs page, by reader.
+- [Main README](../../README.md): the router features this research feeds.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [Local video generation backends](video-backends.md)
+- [model-router docs](../README.md)
+<!-- backlinks:end -->

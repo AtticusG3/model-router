@@ -1,4 +1,6 @@
-# Model Router — v0.1 Implementation Plan
+# Model Router: v0.1 Implementation Plan
+
+> **Last reviewed:** 2026-11-22
 
 This plan is the result of probing the fleet (buster, digger, gareths-homelab, nomad;
 nugget offline) and comparing reality against the original v0.1 sketch. It records
@@ -19,22 +21,22 @@ they disagree, `SPEC.md` and the code win.
 | **digger** | 10.99.0.36 (root) | RTX PRO 4000 Blackwell 24 GB | 31 Gi | 73 GB (models on /srv data disks) | v (sd config), `0.0.0.0:8082` | 8082 | Image node: ~19 sd.cpp stanzas (Krea2 x5, LTX-2.3, MiniMax-H3, SDXL, Flux2, SD3.5, Z-Image…) + `sdcpp-webui.service` |
 | **gareths-homelab** | 203.0.113.44 (root, Tailscale) | RTX 5060 Ti 16 GB | 78 Gi | 58 GB `/` (models on data disks: 251G llama + 54G sd) | v, `127.0.0.1:18080`, nginx `:8081`(LLM)/`:8082`(image)→18080 | 18080 (internal) | LLM + image: llm-* (Laguna, Qwen3.6-35B, Gemma4-26B, Bonsai-27B, daily-driver, coding-model, intent-router, ornith, qwen36-fast/reap…) + sd (sdxl-lightning, photo-edit, z-anime, juggernaut-z, z-image, flux2-klein) + **openrouter peers** |
 | **nomad** | 10.99.0.202 (kevyn) | RTX A2000 Laptop 8 GB | 14 Gi | 19 GB | v, `0.0.0.0:8081` | 8081 | Single model: `qwen3.5-9b` (unlisted), TurboQuant llama-server |
-| **nugget** | 10.99.0.62 | — | — | — | **offline (no route)** | 8081 | Was a big node: grug-27b/35b, muse-glimmer-30b, qwen3.6-35b, qwopus-35b-coder, agents-a1, gemma-4-12b/26b, jina-reranker, qwen3-embedding-4b… |
+| **nugget** | 10.99.0.62 | n/a | n/a | n/a | **offline (no route)** | 8081 | Was a big node: grug-27b/35b, muse-glimmer-30b, qwen3.6-35b, qwopus-35b-coder, agents-a1, gemma-4-12b/26b, jina-reranker, qwen3-embedding-4b… |
 
 ### Current llama-swap behaviour observed
 - **Model extraction is body/query-only.** llama-swap reads `model` from the JSON
   body, multipart form, or `?model=` query. There is **no path-prefix routing and no
-  default-model fallback** — a request without a resolvable `model` returns
+  default-model fallback**. A request without a resolvable `model` returns
   `404 no model id could be identified`. So today, every sd.cpp request on digger
   must carry `model` in the body. This is the single biggest behavioural gap the
-  SPEC's `match.path_prefix` must solve (and it must be done carefully — see §3).
+  SPEC's `match.path_prefix` must solve (and it must be done carefully; see §3).
 - `/v1/models` lists local models, **selectors** (`meta.llamaswap.type=selector`),
   and **peers** (`type=peer`, id `peer/model`). Clients (rag-proxy) depend on this.
 - Selectors use `strategy: spillover` with `targets` (local ids and `peer/model`
-  ids). buster also uses llama-swap's `matrix` DSL (vars/sets/evict_costs) — that is
+  ids). buster also uses llama-swap's `matrix` DSL (vars/sets/evict_costs). That is
   an eviction-policy feature the SPEC defers; v0.1 does not port it.
 - Peers are static `proxy: http://ip:port` + `models:` lists. Nomad/digger point at
-  buster `:8081` which is **rag-proxy** (python), not llama-swap directly — rag-proxy
+  buster `:8081` which is **rag-proxy** (python), not llama-swap directly. rag-proxy
   forwards to `:18080`. The router will let peers talk directly to the router port.
 
 ### Backend binaries in use
@@ -50,11 +52,11 @@ they disagree, `SPEC.md` and the code win.
 
 ## 2. Pitfalls & gaps in SPEC vs. fleet
 
-1. **Multi-GPU placement (buster) — SPEC misses it.** `vram_mb` is a single number but
+1. **Multi-GPU placement (buster): SPEC misses it.** `vram_mb` is a single number but
    buster has 2 GPUs and every stanza pins `--split-mode none --device CUDA0|CUDA1`.
    Admission control must be **per-GPU** and telemetry must report **per-GPU free VRAM**.
    → Add `device` to the stanza; admission ledger keyed by GPU index.
-   (SPEC's open question is about tensor-split across two V100s — not needed yet; this
+   (SPEC's open question is about tensor-split across two V100s, not needed yet; this
    is per-GPU placement, which is required *now*.)
 2. **Pools/selectors are required, SPEC omits them.** rag-proxy references
    `EMBED_MODEL=embed-pool`, `INTENT_MODEL=intent-model`, and routes chat to
@@ -83,17 +85,17 @@ they disagree, `SPEC.md` and the code win.
    *router* port directly for control (`load()`), not through rag-proxy. peers.yaml
    will point at router ports (buster:18080, nomad:8081, digger:8082, gareth:8081 via
    nginx). gareth's nginx needs SSE-safe proxy settings (already partially present).
-10. **OpenRouter peers (gareth).** gareth's config lists `openrouter/...` peers —
+10. **OpenRouter peers (gareth).** gareth's config lists `openrouter/...` peers:
     plain OpenAI-compatible upstreams with no control endpoint. peers.yaml must
     support `kind: openai` (proxy-only) vs `kind: router` (has control API).
 11. **Nugget offline.** Offline peers must be excluded via telemetry staleness (SPEC
     covers this) and requests must fall through with a clear 503. Also: buster's
-    selectors reference `nugget/...` targets that will never resolve — the pool
+    selectors reference `nugget/...` targets that will never resolve. The pool
     resolver must skip unreachable peers, not fail the whole selector.
 12. **VRAM numbers are estimates.** `vram_mb` reserves worst-case; actual usage differs
     (agents-a1 is a 22 GB file with `-ngl 30`). Treat `vram_mb` as the reservation and
     log actual nvidia-smi deltas for later calibration. Buster's 4060 is nearly full
-    today (956 MB free) — admission must handle "no room" gracefully.
+    today (956 MB free). Admission must handle "no room" gracefully.
 13. **Streaming/SSE.** Reverse proxy must flush immediately and set
     `X-Accel-Buffering: no`; long image-gen and slow spin-ups (colibri) need long
     timeouts and must not be killed by a client disconnect mid-spin.
@@ -204,7 +206,7 @@ Implemented and verified locally (two-router smoke test on spare ports with fake
 backends; real llama-swap untouched):
 
 - ✅ Matcher: body/query model → pool → peer-qualified → path_prefix with
-  path_default fallback (llama-swap has no path routing at all — 404s).
+  path_default fallback (llama-swap has no path routing at all; it 404s).
 - ✅ Admission ledger: per-GPU reservation, device pinning, auto-pick, release on
   unload/failed spin-up; serialized (no split-brain).
 - ✅ Supervisor: spawn (process-group aware), health poll to spin-up deadline,
@@ -250,7 +252,7 @@ Remaining v0.1 gaps to accept before rollout (also in deploy/swap-over.md):
 - Staged only: swap procedure in deploy/swap-over.md is the executable plan.
   Nugget now has `configs/nugget.yaml` + `deploy/model-router.nugget.service`.
 
-## 5. Deployment (staged — NOT executed this pass)
+## 5. Deployment (staged, NOT executed this pass)
 
 Per node, write config to `/opt/ai/config/model-router.yaml` and
 `/opt/ai/config/peers.yaml`, copy the binary to `/opt/ai/bin/model-router`, install a
@@ -259,7 +261,7 @@ units in `deploy/`. The swap-over keeps llama-swap as a rollback (unit
 `llama-swap.service` is only stopped after the router passes a health check on the
 same port).
 
-**Addresses (#195):** tracked `configs/*.yaml` carry placeholders only — the LAN
+**Addresses (#195):** tracked `configs/*.yaml` carry placeholders only: the LAN
 /24 as `10.99.0.x`, tailnet hosts as `203.0.113.x`, last octet preserved. Real
 values (`peers[].base_url`, `discovery.subnets`/`exclude`,
 `security.trusted_proxies`/`api_keys`) live in the untracked

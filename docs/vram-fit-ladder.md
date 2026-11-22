@@ -1,4 +1,8 @@
+[Docs home](README.md) › VRAM fit ladder
+
 # VRAM fit ladder
+
+> **Type:** Reference · **Audience:** operators writing stanzas · **Last reviewed:** 2026-11-22
 
 How to write a stanza for a given weight file so the fleet shares one
 `model_id` per model (different quants of the same weight family are the
@@ -72,7 +76,7 @@ without multiplying ctx. Never cut per-slot ctx to buy a slot.
 2. **MoE only** (`qwen3.6-35b-a3b`, `ornith-1.5-35b-a3b-bigbang`): the slot goal is **two** full 256k
    slots (`--ctx-size 524288 --parallel 2`). Drop MTP, then mmproj, only
    if that unlocks those two 256k slots. Prefer one 256k slot with extras
-   over two 128k slots. If two 256k slots fit, **stop** — do not probe a
+   over two 128k slots. If two 256k slots fit, **stop**, do not probe a
    third. A third 256k slot (`--ctx-size 786432 --parallel 3`) is
    opportunistic only: take it only if it loads with extras still on and
    without cutting per-slot ctx. Do not drop ctx for a third slot.
@@ -104,7 +108,7 @@ second slot by cutting below 128k.
    (backtrack), then retry slots (above).
 3. **MoE only:** offload **expert** tensors to CPU/RAM with `--n-cpu-moe`.
    Dense attention/non-expert layers stay on the GPU. Do **not** put the
-   non-MoE layers on CPU — that is the wrong direction (experts are the
+   non-MoE layers on CPU, that is the wrong direction (experts are the
    bulky part).
 4. **Dense only:** look for RPC / tensor-split across GPUs or nodes
    (`llama-server --rpc`, or a future router split stanza). Do not fake
@@ -118,7 +122,7 @@ apply the MoE / dense slot rules above (multiply `--ctx-size` by n).
 - Cut per-slot ctx below 131072 to keep MTP, mmproj, or an extra slot.
 - Raise `--parallel` without multiplying `--ctx-size` (that shrinks every slot).
 - Chase a third slot, or a second slot on a dense model, by dropping ctx or extras.
-- Quantize cache past turbo4/q4_0 in order to keep 256k; cut ctx first.
+- Quantize cache past turbo4/q4_0 to keep 256k; cut ctx first.
 - Use Q4_K_S / IQ4_XS as a "fit trick" for a Q4_K_M-class dense model.
 - Give two nodes different `model_id`s for the same finetune.
 - Leave `vram_mb` at a parallel-1 measurement after raising `--parallel`.
@@ -214,3 +218,14 @@ a second 256k cache, so it stays one slot.
 | nomad | RTX A2000 8GB | `qwen3.5-9b` | 1×49k turbo4, mmproj (small-card exception) | 6879 | 7400 |
 
 Image stanzas keep conservative `vram_mb` (offload-to-cpu / `--max-vram`); they were not part of the llama.cpp ladder.
+
+## See also
+
+- [Docs index](README.md): every docs page, by reader.
+- [Main README](../README.md): config keys and the `device` rules.
+
+## Linked from
+
+<!-- backlinks:start -->
+- [model-router docs](README.md)
+<!-- backlinks:end -->

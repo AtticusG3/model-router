@@ -4,8 +4,27 @@ Backend-agnostic model router for the homelab fleet (replaces llama-swap
 fleet-wide). One static binary runs on every node; per-node behaviour comes
 entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (fleet survey), and
 `docs/vram-fit-ladder.md` (shared `model_id`s and how to fit a weight on a GPU).
+The full docs map is [docs/README.md](docs/README.md).
+
+> **Last reviewed:** 2026-11-22
 
 ## What it does
+
+```mermaid
+flowchart LR
+  C([Client or<br/>operator UI]):::start --> R[model-router<br/>on this node]:::process
+  R --> A{Admission:<br/>local GPU room?}:::decision
+  A -- Yes --> B[Spawn or reuse<br/>local backend]:::process
+  A -- No, or not local --> P[Peer router<br/>POST /_router/load]:::process
+  P --> PB[Peer's backend]:::process
+  R <-. telemetry pull .-> P
+  B --> D([Streamed reply]):::done
+  PB --> D
+  classDef start fill:#37474f,stroke:#263238,color:#ffffff
+  classDef process fill:#0d47a1,stroke:#082f6b,color:#ffffff
+  classDef decision fill:#f9a825,stroke:#c17900,color:#000000
+  classDef done fill:#1b5e20,stroke:#0f3d13,color:#ffffff
+```
 
 - Serves OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/embeddings`,
   `/v1/rerank`, `/v1/images/generations`, `/v1/models`, …) and sd.cpp routes
@@ -53,7 +72,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/model-router ./cmd/mo
 
 `configs/buster.yaml` is a **byte-identical mirror of the live production config**
 at `/opt/ai/config/model-router.yaml`. Production is the authority; this copy exists
-so the repo shows what the box actually runs. Do not hand-edit it — edit
+so the repo shows what the box actually runs. Do not hand-edit it; edit
 `/opt/ai/config/model-router.yaml` (or here and then install it), and re-sync:
 
 ```bash
@@ -188,7 +207,7 @@ The **Peers** cell has one chip per configured peer that serves the id:
 or `stale` (its telemetry is too old to trust); hover a chip for when it was
 last seen. Remote rows are mesh routed: the router picks a peer when a request
 names that `model_id`. To probe that path (e.g. on Nomad, `agents-a1` then
-`qwen3.8-27b`), choose the id in the **Playground** Chat tab and send — that is a normal
+`qwen3.8-27b`), choose the id in the **Playground** Chat tab and send. That is a normal
 `/v1/chat/completions` request, so the node `POST`s `/_router/load` on a
 fresh peer and streams the reply. The Image tab is the same for `api_type:
 image` (or Path default for the configured sd.cpp route).
@@ -224,7 +243,7 @@ buffers it and the page falls back to polling, only this node's requests show. C
 body, 8 MB total) and reset on restart. A longer JSON body or SSE stream is
 clipped inside so it still parses: the longest strings are shortened, base64
 images become `[image 0: png 1.3 MB]`, the middle of a long stream becomes one
-`: [clipped N events, …]` comment, and the dialog lists the clipped fields.
+`: [clipped N events, …]` comment, and the dialogue lists the clipped fields.
 Other bodies are cut at 256 KB and marked truncated. Image responses also keep a downscaled
 thumbnail (long edge 160 px, JPEG), counted in that 8 MB. A media response
 (`audio/*`, `video/*`, `application/octet-stream`) keeps only its content type,
@@ -260,7 +279,7 @@ tracked config at load time:
 `model-router` looks for `<config dir>/local/<node>.yaml` by default, where
 `<node>` is `-node` or the hostname; `-overlay <path>` names one explicitly, and
 `-overlay ""` is not needed because the default is the convention. A missing
-overlay is normal — a fresh checkout runs on the tracked file alone. Maps merge
+overlay is normal: a fresh checkout runs on the tracked file alone. Maps merge
 recursively and the overlay wins; lists (such as `peers`) and scalars replace the
 base value. An overlay that exists but does not parse or validate is an error,
 never a silent fallback. `-check` prints `overlay: <path>` when one was merged.
@@ -377,12 +396,11 @@ async job API: `openai` (default, the backend speaks `/v1/videos`) or `sdcpp`
 on the node that owns the stanza, for local clients and for requests proxied
 in from peers. A preset name selects the steps, or a map names them:
 
-- `sd-server` — the sd-server checks: warm the LoRA cache when the backend
+- `sd-server`: the sd-server checks, which warm the LoRA cache when the backend
   becomes ready and before a request that names a LoRA, and retry once when
   sd-server still answers `invalid lora path`.
-- `ideogram4` — `sd-server` plus ideogram4-format caption enhancement.
-- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`
-  — the map form; `caption` is a format name (unknown names fail load), the
+- `ideogram4`: `sd-server` plus ideogram4-format caption enhancement.
+- `image_pipeline: {caption: "" | ideogram4, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
   enhancer model and timeout feed the caption step, and `retry_blocked` resends
   a blocked `txt2img` request with a new random seed up to N times (default 0;
   above 5 fails load).
@@ -410,7 +428,7 @@ capture keeps the client's original request body; a pipeline step can attach
 notes (such as a rewritten prompt) shown with it.
 
 A request with no `model` falls back by path: `match.path_prefix` first, then
-the `api_type` that path serves — `/v1/audio/speech` and `/v1/audio/voices` → `speech`,
+the `api_type` that path serves: `/v1/audio/speech` and `/v1/audio/voices` → `speech`,
 `/v1/audio/transcriptions` and `/v1/audio/translations` → `transcription`,
 `/v1/realtime` → `realtime`, `/v1/videos` → `video`,
 `/v1/audio/generations` → `audio_gen`, `/v1/images/*` and `/sdapi/v1/*` →
@@ -515,7 +533,7 @@ test/run-smoke.sh start             # two-router + fake-backend smoke test
 test/run-smoke.sh stop
 ```
 
-The smoke test runs on spare ports (18099/18100) with fake backends — it never
+The smoke test runs on spare ports (18099/18100) with fake backends. It never
 touches real models, GPUs, or the running llama-swap.
 
 ## Layout
@@ -523,12 +541,14 @@ touches real models, GPUs, or the running llama-swap.
 ```
 SPEC.md                  goals & architecture
 PLAN.md                  fleet survey, pitfalls, fitted design, deploy plan
-docs/vram-fit-ladder.md  shared model_ids, VRAM ladder, Qwen chat template
+GLOSSARY.md              domain terms
+CHANGELOG.md             release notes
+docs/                    docs index, VRAM ladder, ADRs, backend research
 cmd/model-router/        the router binary
 cmd/fake-model/          test backend (OpenAI + sdapi + audio/voice/realtime/video-job surface)
 internal/config/         config loading/validation
 internal/router/         matcher, admission, supervisor, telemetry, pools, proxy, server
 configs/                 per-node YAML + qwen-fixed-chat-template.jinja
-deploy/                  systemd units + swap-over procedure
+deploy/                  systemd units, swap-over procedure, sd-server shim + tests
 test/                    smoke-test configs + launcher
 ```
