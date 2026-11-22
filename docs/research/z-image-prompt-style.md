@@ -176,6 +176,7 @@ See [`SPEC.md`](../../SPEC.md) for the shared skip rules, budget and headers.
 
 <!-- backlinks:start -->
 - [FLUX.2 Klein prompt style](flux2-klein-prompt-style.md)
+- [FLUX.3 Klein prompt style](flux3-klein-prompt-style.md)
 - [Krea 2 prompt style](krea2-prompt-style.md)
 - [Model Router: SPEC](../../SPEC.md)
 - [model-router docs](../README.md)

@@ -310,7 +310,8 @@ func TestValidCatalogFilesParse(t *testing.T) {
 
 // TestTrackedCaptionStanzasUseTheProfile pins the tracked stanzas each family
 // ticket enabled to their caption with an enhancer, and the Krea 2 variants
-// the #207 research left off to no caption.
+// the #207 research left off to no caption. flux2-klein (#209) and flux3-klein
+// (#210) are each in the two tracked configs that carry them.
 func TestTrackedCaptionStanzasUseTheProfile(t *testing.T) {
 	files, _ := filepath.Glob("../../configs/*.yaml")
 	cases := []struct {
@@ -322,6 +323,7 @@ func TestTrackedCaptionStanzasUseTheProfile(t *testing.T) {
 		{"krea-character-creator", "", 0},
 		{"krea2-ostris-edit", "", 0},
 		{"flux2-klein", "flux2-klein", 2},
+		{"flux3-klein", "flux3-klein", 2},
 	}
 	for _, tc := range cases {
 		enabled := 0
@@ -935,7 +937,7 @@ stanzas:
 func TestImagePipelineValidation(t *testing.T) {
 	cases := []struct{ name, stanza, want string }{
 		{"unknown preset", "api_type: image\n    image_pipeline: stable-diffusion", `unknown image_pipeline preset "stable-diffusion"`},
-		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime, krea2, flux2-klein`},
+		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime, krea2, flux2-klein, flux3-klein`},
 		{"z-image is no preset", "api_type: image\n    image_pipeline: z-image", `unknown image_pipeline preset "z-image"`},
 		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
 		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},
