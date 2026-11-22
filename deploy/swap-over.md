@@ -1,17 +1,38 @@
-# Fleet swap-over: llama-swap → model-router (v0.1)
+# Fleet swap-over and binary upgrades
 
 > **Last reviewed:** 2026-11-22
 
-STAGED: nothing here has been executed. Every step below is the procedure to
-run per node, in order. Each node's old llama-swap stays installed as rollback
-(`systemctl stop llama-swap.service` is only executed after the router passes
-its health checks on the same port).
+Two procedures live here: the first swap on a node that still runs llama-swap,
+and the binary and config upgrade on a node that already runs the router.
+
+## Fleet state on 2026-11-22
+
+| Node | Router | llama-swap | Config on disk |
+|---|---|---|---|
+| buster | 🟢 active, `:18080` | disabled, kept as rollback | real addresses inline, no overlay |
+| gareths-homelab | 🟢 active, `:18080` behind nginx `:8081`/`:8082` | disabled, kept as rollback | real addresses inline, no overlay |
+| nomad | 🟢 active, `:8081` | disabled, kept as rollback | real addresses inline, no overlay |
+| digger | 🟢 active, `:8082` | disabled, kept as rollback | real addresses inline, no overlay |
+| nugget | ⚪ offline (no ping reply, 2026-11-22) | unit present | not readable |
+
+All four reachable nodes run the same build: sha256 `a1ae2a6610ce…`, commit
+`0b1a93a` (v0.3.0). Check any node with `go version -m /opt/ai/bin/model-router`.
+`/opt/ai/config/local/` does not exist on any of them, so the placeholder
+overlay path (#195) is supported by the binary but not used in production yet.
+See [Config and binary move together](#config-and-binary-move-together) before
+you copy any tracked file onto a node.
+
+## First swap (node still runs llama-swap)
+
+Every step below is the procedure to run per node, in order. Each node's old
+llama-swap stays installed as rollback (`systemctl stop llama-swap.service` is
+only executed after the router passes its health checks on the same port).
 
 Rollout order (least disruptive first):
 
 1. **nomad** (single local model, 8 GB; use `/ui/` Chat lab to probe mesh peers)
 2. **gareths-homelab** (nginx fronts the router; trivial rollback)
-3. **digger** (image node; sdcpp-webui runs alongside, untouched)
+3. **digger** (small node; sdcpp-webui runs alongside, untouched)
 4. **nugget** (V100; unit is `deploy/model-router.nugget.service`)
 5. **buster** (LAST: rag-proxy, Open WebUI, Hermes depend on :18080)
 
@@ -26,6 +47,12 @@ ss -tlnp | grep -E ':(18080|8081|8082)\b'   # per-node port from the table below
 
 # 1. Install the binary + configs.
 install -m 0755 build/model-router /opt/ai/bin/model-router
+
+# NOTICE: configs/<node>.yaml carries placeholder addresses. Installing it on a
+# node that has no overlay replaces every real peer URL with 10.99.0.x and the
+# node stops reaching the mesh. Install the tracked file only when step 1b's
+# overlay exists on that node. Otherwise keep the node's real-address
+# /opt/ai/config/model-router.yaml and apply the stanza changes to it.
 install -m 0644 configs/<node>.yaml /opt/ai/config/model-router.yaml
 install -m 0644 configs/qwen-fixed-chat-template.jinja /opt/ai/config/qwen-fixed-chat-template.jinja
 
@@ -85,49 +112,110 @@ systemctl start llama-swap.service
 # (untouched). The router's config + binary remain installed for the next try.
 ```
 
-## Upgrade a running node (binary swap)
+## Config and binary move together
 
-Use this on a node that already runs model-router (v0.2.0 went out this way on
-22 Nov 2026 to buster, gareths-homelab and nomad). The live config stays in
-place; only new keys are merged in.
+A config key is only understood by a build that has its parser. Installing a
+config from a newer commit on an older binary fails at load and names the
+stanza and the values it does accept:
+
+```
+[router:error] config: stanza "krea-2-turbo": image_pipeline caption "krea2" is not valid; use one of ideogram4
+```
+
+That is the real message from 2026-11-22: the morning build knew only
+`ideogram4`, and `configs/buster.yaml` from master had grown the `krea2` caption
+(#217). The same file passes `-check` on v0.3.0.
+
+1. Never install a tracked config on a node whose binary predates the commit
+   that added its newest key.
+2. Run `-check` with the **new** binary against the **new** config, on the
+   node, before either file is installed.
+3. Ship the pair in one change. A binary-only swap is safe. A config-only swap
+   is safe only when the config uses no key the installed binary lacks.
+4. The binary has no `-version` flag, but the build embeds its commit. Read it
+   with `go version -m /opt/ai/bin/model-router` and look for the `mod` line:
+
+   ```
+   mod	model-router	v0.0.0-20261122065042-0b1a93af22a9
+   ```
+
+   That is commit `0b1a93a` (v0.3.0). Quote it in the PR or ticket; mtime and
+   sha256 are weaker evidence.
+
+## Upgrade a running node (binary and config)
+
+Use this on a node that already runs the router. v0.3.0 went out this way on
+22 Nov 2026 to buster, gareths-homelab, nomad and digger.
+
+```mermaid
+flowchart TD
+  A([Commit to deploy]):::start --> B[Build with CGO_ENABLED=0<br/>on a build host]:::process
+  B --> C[Copy binary and config<br/>to /tmp on the node]:::process
+  C --> D{New binary -check<br/>accepts new config?}:::decision
+  D -- No --> E([Fix config or build;<br/>nothing installed]):::stop
+  D -- Yes --> F[Back up both files<br/>with one timestamp]:::process
+  F --> G[Install both,<br/>restart the unit]:::process
+  G --> H{/health 200 and<br/>/v1/models lists stanzas?}:::decision
+  H -- No --> I([Restore .bak-TS,<br/>restart]):::stop
+  H -- Yes --> J([Later config-only changes<br/>reload in place]):::done
+  classDef start fill:#37474f,stroke:#263238,color:#ffffff
+  classDef process fill:#0d47a1,stroke:#082f6b,color:#ffffff
+  classDef decision fill:#f9a825,stroke:#c17900,color:#000000
+  classDef done fill:#1b5e20,stroke:#0f3d13,color:#ffffff
+  classDef stop fill:#b71c1c,stroke:#7f0000,color:#ffffff
+```
 
 ```bash
-# On the box or any build host (never in a node's working checkout):
+# On a build host, from the commit to deploy (never in a node's working checkout):
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o build/model-router ./cmd/model-router
+cp configs/<node>.yaml /tmp/mr.yaml
+python3 deploy/stamp-image-caps.py /tmp/mr.yaml    # optional (#200); a second run changes nothing
 scp build/model-router <node>:/tmp/model-router-new
+scp /tmp/mr.yaml <node>:/tmp/mr.yaml               # placeholders only; see the NOTICE above
 
-# On the node, as root. TS keeps each backup unique.
+# On the node, as root. One timestamp keeps the pair together.
 TS=$(date +%Y%m%d-%H%M%S)
 cp -p /opt/ai/bin/model-router /opt/ai/bin/model-router.bak-$TS
 cp -p /opt/ai/config/model-router.yaml /opt/ai/config/model-router.yaml.bak-$TS
 
-# Optional: stamp img2img / inpaint capabilities on image stanzas (#200).
-# Run on a copy, diff it, then install it. A second run changes nothing.
-cp /opt/ai/config/model-router.yaml /tmp/mr.yaml
-python3 deploy/stamp-image-caps.py /tmp/mr.yaml
-diff -u /opt/ai/config/model-router.yaml /tmp/mr.yaml
+# Gate: the NEW binary validates the NEW config. Nothing is installed if this fails.
+/tmp/model-router-new -check -config /tmp/mr.yaml -node <node>
 
-# Check the NEW binary against the NEW config before switching anything.
-/tmp/model-router-new -check -config /tmp/mr.yaml [-node <node>]
 install -m 0644 /tmp/mr.yaml /opt/ai/config/model-router.yaml
 install -m 0755 /tmp/model-router-new /opt/ai/bin/model-router
 systemctl restart model-router.service   # restarts every backend it owns
 curl -s http://127.0.0.1:<port>/health
+curl -s http://127.0.0.1:<port>/v1/models | jq -r '.data[].id' | head
 ```
 
 If `-check` or `/health` fails, put both `.bak-$TS` files back and restart.
 A config-only change does not need a restart: `POST /_router/reload` (or
 SIGHUP) reloads it in place.
 
+## Check a tracked config against a live node
+
+The tracked files carry placeholders, so a plain `diff` is noise. Normalise the
+addresses first, then read what is left:
+
+```bash
+norm() { sed -E 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/IP/g'; }
+diff -u <(norm < configs/buster.yaml) <(norm < /opt/ai/config/model-router.yaml)
+```
+
+An empty diff is the goal. A non-empty one is either a repo-only key that a
+later PR added (`catalog:`, `hf_repo:`, a `capabilities` form) or a live-only
+change nobody mirrored. Decide which before deploying: production is
+authoritative for what runs, the tracked file is what the next deploy installs.
+
 ## Per-node specifics
 
-| Node | Router port | Verify against | Notes |
-|------|-------------|----------------|-------|
-| nomad | :8081 | local `qwen3.5-9b`; Chat lab `agents-a1` then `qwen3.8-27b` (mesh) | unlisted local stanza; catalog Load/Unload is local-only; remote ids are Mesh routed via Chat lab |
-| nugget | :8081 | `agents-a1` chat (preload), `qwen3-0.6b-instruct` | Swap as user kevyn; unit is `deploy/model-router.nugget.service` (memlock + TurboQuant lib path). Single V100. |
-| gareths-homelab | 127.0.0.1:18080 (nginx :8081/:8082) | `qwen2.5-1.5b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | nginx blocks already proxy both ports → 18080; confirm `proxy_buffering off` for SSE |
-| digger | :8082 | `qwen3-0.6b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | image stanzas with `"model": "<id>"` in body; no body model → krea-2-turbo (path_default) |
-| buster | :18080 | `agents-a1`, `qwen3-0.6b-instruct` (alias intent-router), /v1/embeddings | rag-proxy keeps pointing at 127.0.0.1:18080; NO rag-proxy change needed. Reranker/sparse/turbovec (:18095/:18096/:18097) untouched |
+| Node | Router port | State | Verify against | Notes |
+|------|-------------|-------|----------------|-------|
+| buster | :18080 | 🟢 v0.3.0 | `qwen38-flash-next`, `qwen3-0.6b-instruct` (alias `intent-router`), `/v1/embeddings` | RTX 3090 + 2×V100. rag-proxy keeps pointing at 127.0.0.1:18080; NO rag-proxy change needed. Reranker/sparse/turbovec (:18095/:18096/:18097) untouched. |
+| nomad | :8081 | 🟢 v0.3.0 | local `qwen3.5-9b`; Chat lab `qwen38-flash-next` then a mesh id | unlisted local stanza; catalog Load/Unload is local-only; remote ids route through the Chat lab |
+| nugget | :8081 | ⚪ offline | `agents-a1` chat (preload), `qwen3-0.6b-instruct` | Swap as user kevyn; unit is `deploy/model-router.nugget.service` (memlock + TurboQuant lib path). Single V100. |
+| gareths-homelab | 127.0.0.1:18080 (nginx :8081/:8082) | 🟢 v0.3.0 | `qwen2.5-1.5b-instruct` (preload), `krea-2-turbo` via /sdapi/v1/txt2img | RTX 5060 Ti 16GB. nginx blocks already proxy both ports → 18080; confirm `proxy_buffering off` for SSE |
+| digger | :8082 | 🟢 v0.3.0 | `qwen3-0.6b-instruct`, `qwen3-vl-8b` | RTX 4060 8GB since 2026-11-22 (was a 24GB RTX PRO 4000). Config pruned to two stanzas; the image stanzas moved off this node. |
 
 ## Known v0.1 limitations (accept before swapping)
 
@@ -142,8 +230,8 @@ SIGHUP) reloads it in place.
 3. **Peer wiring goes directly to router ports** (buster :18080, not the old
    :8081 rag-proxy path). Update all peer base_urls at once so no node talks
    to a half-migrated fleet with a stale port.
-4. **nvidia-smi per-GPU resilience:** a single sick GPU (like the 4060's
-   current "Unable to determine device handle") no longer blinds the whole
+4. **nvidia-smi per-GPU resilience:** a single GPU that drops off the PCIe bus
+   (buster's X99 board has done this more than once) no longer blinds the whole
    poller; healthy GPUs still report. But a stanza pinned to the sick GPU
    cannot be admitted (fail-closed) until the driver recovers.
 5. **Client disconnect during spin-up:** the request goroutine waits out the

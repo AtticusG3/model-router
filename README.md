@@ -259,10 +259,13 @@ after deploying a new binary.
 Per-node YAML with `stanzas` (SPEC schema + `device`, `aliases`, `env`,
 `port`), optional `pools` (compat spillover ids such as `coding-pool`; not
 listed), `peers` (`kind: router` for fleet nodes, `kind: openai` for
-proxy-only upstreams like openrouter), `preload`, `telemetry` tuning and
-`discovery`. Staged fleet configs are in `configs/` (plus
+proxy-only upstreams like openrouter), `preload`, `catalog`, `telemetry`
+tuning and `discovery`. Tracked fleet configs are in `configs/` (plus
 `qwen-fixed-chat-template.jinja` for Qwen 3.5/3.6/3.8 llama-server
-stanzas). The swap procedure is in `deploy/swap-over.md`.
+stanzas); they carry placeholder addresses, so read the next section before
+copying one onto a node. The deploy procedure, the tracked-vs-live diff and the
+rule that a config ships with a binary that can parse it are in
+`deploy/swap-over.md`.
 
 ### Addresses, placeholders and the per-node overlay
 
@@ -283,6 +286,13 @@ overlay is normal: a fresh checkout runs on the tracked file alone. Maps merge
 recursively and the overlay wins; lists (such as `peers`) and scalars replace the
 base value. An overlay that exists but does not parse or validate is an error,
 never a silent fallback. `-check` prints `overlay: <path>` when one was merged.
+
+On 2026-11-22 no node uses an overlay: buster, gareths-homelab, nomad and digger
+each run a real-address `/opt/ai/config/model-router.yaml`, and the tracked copy
+is a mirror to compare against, not the file they run. Compare them with the
+normalised diff in [swap-over](deploy/swap-over.md#check-a-tracked-config-against-a-live-node):
+the addresses differ by design, anything else is drift. Production is
+authoritative for what runs; the tracked file is what the next deploy installs.
 
 `deploy/overlay-split.py` builds the pair from a live config (it writes
 `configs/local/<node>.yaml` and rewrites `configs/<node>.yaml` with

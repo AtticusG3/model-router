@@ -144,25 +144,61 @@ apply the MoE / dense slot rules above (multiply `--ctx-size` by n).
 
 ## Fleet `model_id` catalog
 
-Legacy pool/proxy names are aliases only.
+Legacy pool/proxy names are aliases only. This is what each node's live config
+listed on 2026-11-22, read from `/opt/ai/config/model-router.yaml` on the node.
+Regenerate it rather than editing from memory:
 
-| `model_id` | Family (quants may differ) | Nodes |
-|---|---|---|
-| `agents-a1` | Agents-A1 Uncensored MTP Quality | buster, nugget |
-| `qwen3-0.6b-instruct` | Qwen3 0.6B Instruct (rag-proxy intent) | buster, digger, nugget |
-| `qwen2.5-1.5b-instruct` | Qwen2.5 1.5B Instruct (rag-proxy intent) | gareth |
-| `qwen3-embedding-4b` | Qwen3 Embedding 4B (rag-proxy) | buster, nugget |
-| `jina-reranker-v3.5` | Jina Reranker v3.5 (rag-proxy) | buster, nugget |
-| `qwen3.8-27b` | Qwen3.8 27B UD-Q5_K_XL | buster, nugget, digger |
-| `ornith-1.0-35b-heretic` | Ornith 1.0 35B Heretic (APEX Quality on 32GB, Compact on 24GB/16GB) | buster, nugget, digger |
-| `ornith-1.5-35b-a3b-bigbang` | Ornith 1.5 35B A3B BigBang (Q5 grafted MTP on 32GB, Q4 no-MTP on 24GB) | buster, nugget, digger |
-| `qwen3.5-9b` | Qwen 3.5 9B Abliterated | nomad |
-| `qwen3.6-35b-a3b` | Qwen 3.6 35B A3B heretic (APEX Quality on 32GB, Compact on 16GB) | buster, nugget, gareth |
-| `krea-2-turbo` | Krea 2 Turbo | buster, nugget, digger, gareth |
-| `z-anime-turbo` | Z-Anime Turbo (alias `z-anime`) | buster, nugget, digger, gareth |
-| `ideogram4` | Ideogram 4 | buster, nugget, digger |
+```bash
+for n in buster gareths-homelab nomad digger; do
+  echo "== $n"; ssh "$n" "grep -E '^\s+- model_id:' /opt/ai/config/model-router.yaml | sed -E 's/.*model_id: //'"
+done
+```
 
-Image-only extras on digger/gareth (`sdxl-lightning`, `z-image`, `flux2-klein`, …) keep their local ids. Do not prefix with a hostname or `-waldron` as the identity.
+nugget is offline (no ping reply, 2026-11-22), so its column is missing; its
+installed config still carries the V100 LLM stanzas.
+
+| `model_id` | Nodes |
+|---|---|
+| `ace-step-music` | buster |
+| `agents-a1-mini` | gareths-homelab |
+| `anime-whisper-faster` | gareths-homelab |
+| `fibo-2.0-edit-turbo` | buster, gareths-homelab |
+| `flux2-klein` | gareths-homelab |
+| `flux3-klein` | buster, gareths-homelab |
+| `ideogram4` | buster |
+| `jina-reranker-v3.5` | buster |
+| `kitten-tts-2` | buster |
+| `krea-2-turbo` | buster, gareths-homelab |
+| `krea-character-creator` | buster |
+| `krea2-ostris-edit` | buster |
+| `ltx-2.5-video` | buster |
+| `qwen-image-2.1` | buster |
+| `qwen2.5-1.5b-instruct` | gareths-homelab |
+| `qwen3-0.6b-instruct` | buster, digger |
+| `qwen3-embedding-4b` | buster |
+| `qwen3-tts-1.7b` | buster |
+| `qwen3-vl-8b` | digger |
+| `qwen3.5-9b` | nomad |
+| `qwen3.6-35b-a3b` | gareths-homelab |
+| `qwen3.6-35b-a3b-genesis-hermes` | gareths-homelab |
+| `qwen3.6-35b-a3b-nvfp4` | gareths-homelab |
+| `qwen3.8-flash-next-iq2_xs` | gareths-homelab |
+| `qwen38-flash-next` | buster |
+| `sdxl-juggernaut-xi` | gareths-homelab |
+| `sdxl-lightning` | gareths-homelab |
+| `voice-cascade` | buster |
+| `whisper-large-v3-turbo` | buster |
+| `z-anime-turbo` | buster, gareths-homelab |
+| `z-image` | gareths-homelab |
+| `z-image-juggernaut-fast` | gareths-homelab |
+
+Ids that used to be fleet-wide (`agents-a1`, `qwen3.8-27b`,
+`ornith-1.0-35b-heretic`, `ornith-1.5-35b-a3b-bigbang`) are not listed by any
+reachable node on 2026-11-22. Buster's LLM stanzas were replaced by
+`qwen38-flash-next`; digger was pruned to two stanzas when its card changed.
+
+Image-only extras on gareth (`sdxl-lightning`, `sdxl-juggernaut-xi`, `z-image`, …)
+keep their local ids. Do not prefix with a hostname or `-waldron` as the identity.
 
 ## Qwen chat template (3.5 / 3.6 / 3.8)
 
@@ -190,6 +226,14 @@ not rewalked. Dense 2×256k probes that loaded are recorded as unused:
 the ladder does not chase a second dense slot. Gareth MoE 2×256k loaded
 at `/health` without a real KV bump (~+30 MiB); leftover VRAM cannot pay
 a second 256k cache, so it stays one slot.
+
+> **Hardware note (2026-11-22):** these numbers were measured on 2026-08-21.
+> buster is now an RTX 3090 24GB plus 2×V100 32GB; its 8GB 4060 was removed on
+> 2026-08-19. digger now runs an 8GB RTX 4060 where the 24GB RTX PRO 4000 was,
+> and was pruned to two small stanzas. The buster specialist rows and every
+> digger row were measured on cards those nodes no longer have, so treat them as
+> history and re-walk before use. The V100 rows on buster and nugget name the
+> cards still installed.
 
 | Node | GPU | `model_id` | Winning ladder | used | `vram_mb` |
 |---|---|---|---|---:|---:|

@@ -712,4 +712,5 @@ This repo
 
 <!-- backlinks:start -->
 - [model-router docs](../README.md)
+- [Use the mic and camera in the Playground](../playground/mic-and-camera.md)
 <!-- backlinks:end -->
