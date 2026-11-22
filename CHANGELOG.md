@@ -12,6 +12,7 @@ The repo has no release tags yet. `0.1.0` is back-filled from the merges on `mas
 
 - `image_pipeline.caption: z-image`: txt2img prompts for Z-Image stanzas are expanded into detailed prose by the enhancer model, falling back to the original prompt verbatim. Enabled on the tracked Z-Image base and Juggernaut Z Fast stanzas (#205).
 - `image_pipeline.caption: z-anime`: txt2img prompts for Z-Anime stanzas, including booru-style tag lists, are rewritten into front-loaded descriptive prose, falling back to the original prompt verbatim. Enabled on the tracked `z-anime-turbo` stanzas (#206).
+- `image_pipeline.caption: krea2`: txt2img prompts for Krea 2 Turbo are expanded into one natural-language paragraph following the vendor's expansion rules, falling back to the original prompt verbatim. Enabled on the tracked `krea-2-turbo` stanzas; the character creator, Ostris edit and Krea 2 fine-tune stanzas stay unenhanced (#207).
 
 ### Fixed
 

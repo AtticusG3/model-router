@@ -308,27 +308,39 @@ func TestValidCatalogFilesParse(t *testing.T) {
 	}
 }
 
-// TestTrackedZAnimeStanzasUseTheProfile pins the three tracked z-anime-turbo
-// stanzas enabled in #206 to caption: z-anime with an enhancer.
-func TestTrackedZAnimeStanzasUseTheProfile(t *testing.T) {
+// TestTrackedCaptionStanzasUseTheProfile pins the tracked stanzas each family
+// ticket enabled to their caption with an enhancer, and the Krea 2 variants
+// the #207 research left off to no caption.
+func TestTrackedCaptionStanzasUseTheProfile(t *testing.T) {
 	files, _ := filepath.Glob("../../configs/*.yaml")
-	enabled := 0
-	for _, f := range files {
-		cfg, err := Load(f)
-		if err != nil {
-			continue // overlays and partial files are covered elsewhere
-		}
-		s := cfg.Stanza("z-anime-turbo")
-		if s == nil || s.ImagePipeline == nil || s.ImagePipeline.Caption == "" {
-			continue
-		}
-		if s.ImagePipeline.Caption != "z-anime" || s.ImagePipeline.Enhancer == nil {
-			t.Errorf("%s: z-anime-turbo pipeline = %+v", f, s.ImagePipeline)
-		}
-		enabled++
+	cases := []struct {
+		model, caption string
+		want           int
+	}{
+		{"z-anime-turbo", "z-anime", 3},
+		{"krea-2-turbo", "krea2", 3},
+		{"krea-character-creator", "", 0},
+		{"krea2-ostris-edit", "", 0},
 	}
-	if enabled != 3 {
-		t.Fatalf("%d tracked z-anime-turbo stanzas have a caption, want 3", enabled)
+	for _, tc := range cases {
+		enabled := 0
+		for _, f := range files {
+			cfg, err := Load(f)
+			if err != nil {
+				continue // overlays and partial files are covered elsewhere
+			}
+			s := cfg.Stanza(tc.model)
+			if s == nil || s.ImagePipeline == nil || s.ImagePipeline.Caption == "" {
+				continue
+			}
+			if s.ImagePipeline.Caption != tc.caption || s.ImagePipeline.Enhancer == nil {
+				t.Errorf("%s: %s pipeline = %+v", f, tc.model, s.ImagePipeline)
+			}
+			enabled++
+		}
+		if enabled != tc.want {
+			t.Errorf("%d tracked %s stanzas have a caption, want %d", enabled, tc.model, tc.want)
+		}
 	}
 }
 
@@ -922,7 +934,7 @@ stanzas:
 func TestImagePipelineValidation(t *testing.T) {
 	cases := []struct{ name, stanza, want string }{
 		{"unknown preset", "api_type: image\n    image_pipeline: stable-diffusion", `unknown image_pipeline preset "stable-diffusion"`},
-		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime`},
+		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime, krea2`},
 		{"z-image is no preset", "api_type: image\n    image_pipeline: z-image", `unknown image_pipeline preset "z-image"`},
 		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
 		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},

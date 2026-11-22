@@ -190,7 +190,7 @@ var imagePipelinePresets = []string{"sd-server", "ideogram4"}
 // ImageCaptionFormats are the names image_pipeline.caption accepts, besides
 // the empty string (no caption step). Each one has a prompt profile in the
 // router.
-var ImageCaptionFormats = []string{"ideogram4", "z-image", "z-anime"}
+var ImageCaptionFormats = []string{"ideogram4", "z-image", "z-anime", "krea2"}
 
 // UnmarshalYAML accepts a preset name or a map.
 func (p *ImagePipeline) UnmarshalYAML(value *yaml.Node) error {

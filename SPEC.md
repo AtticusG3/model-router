@@ -282,14 +282,14 @@ proxied in from peers. It is a preset name or a map:
 image_pipeline: sd-server   # the sd-server checks
 image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
 image_pipeline:
-  caption: "" | ideogram4 | z-image | z-anime   # caption format; "" = no caption step
+  caption: "" | ideogram4 | z-image | z-anime | krea2   # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
   retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
 `caption` names a prompt profile (`internal/router/imageprompt_*.go`), so a
 model family adds a file and an allow-list entry; an unknown name is a load
-error. `z-image` and `z-anime` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
+error. `z-image`, `z-anime` and `krea2` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
 so a peer spill prefers copies that run the same pipeline. The enhancer names
 the model and timeout the caption step uses. `sd-server` and `ideogram4` are
 the presets; an unknown preset, or `image_pipeline` on a stanza that is not
@@ -350,6 +350,20 @@ sentence; quality, score and rating tags are dropped. Skip rules, reply check,
 headers and the verbatim fallback (`X-SD-Shim-Prompt-Source: original`) are
 the same as `z-image`. img2img is left alone. The research is in
 [`docs/research/z-anime-prompt-style.md`](docs/research/z-anime-prompt-style.md).
+
+`caption: krea2` is the same prose step with its own system prompt, for Krea 2
+Turbo, which wants natural-language prose. Following the vendor's expansion
+rules, the enhancer writes one paragraph (about 50 to 150 words, never more
+than 250) with the subject and action first and each subject's attributes kept
+beside it, then setting, framing for the canvas, lighting, palette and one
+style or medium. It keeps every subject, colour and spatial relationship, adds
+no objects or text that were not asked for, only polishes a prompt that is
+already detailed, and copies on-image text exactly inside English double
+quotes. Skip rules, reply check, headers and the verbatim fallback
+(`X-SD-Shim-Prompt-Source: original`) are the same as `z-image`. img2img is
+left alone. It is enabled only on `krea-2-turbo`; the character creator and
+Ostris edit stanzas stay unenhanced. The research is in
+[`docs/research/krea2-prompt-style.md`](docs/research/krea2-prompt-style.md).
 
 A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
 --listen-port {port}` and `health_check: /v1/models` (sd-server has no

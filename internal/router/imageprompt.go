@@ -24,6 +24,7 @@ var promptProfiles = map[string]*promptProfile{
 	"ideogram4": &ideogram4Profile,
 	"z-image":   &zImageProfile,
 	"z-anime":   &zAnimeProfile,
+	"krea2":     &krea2Profile,
 }
 
 // canvasRequest is the enhancer's user message: the canvas size, so the
