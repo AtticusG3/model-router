@@ -76,4 +76,6 @@ if __name__ == "__main__":
         n = stamp(p)
         total += n
         print(f"{p}: {n} stanza(s) stamped")
-    sys.exit(0 if total >= 0 else 1)
+    # The tool is idempotent: a second run stamps nothing, which is success, not
+    # failure. There is no error a non-zero exit could signal here.
+    sys.exit(0)
