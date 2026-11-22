@@ -558,7 +558,7 @@ stanzas:
       --threads 14
       -l 127.0.0.1 --listen-port {port}
     env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "GGML_CUDA_PDL=0"]
-    vram_mb: 22000
+    vram_mb: 19000
     device: 0
     spin_up_seconds: 120
     api_type: video
@@ -567,8 +567,7 @@ stanzas:
       adapter: sdcpp
     match: {path_default: true}
     health_check: /sdapi/v1/sd-models
-    idle_ttl_seconds: 900
-    hold_seconds: 900
+    idle_ttl_seconds: 300
     slots: 1
     unlisted: false
     port: 5938
@@ -587,15 +586,14 @@ stanzas:
     command: >
       /usr/bin/env PORT={port} /home/kevyn/projects/model-router/deploy/acestep-shim/run.sh
     env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "HF_HOME=/opt/ai/hf/acestep"]
-    vram_mb: 13000
+    vram_mb: 17000
     device: 0
     spin_up_seconds: 120
     api_type: audio_gen
     capabilities: [audio_out]
     match: {path_default: true}
     health_check: /health
-    idle_ttl_seconds: 900
-    hold_seconds: 900
+    idle_ttl_seconds: 300
     slots: 1
     unlisted: false
     port: 5941

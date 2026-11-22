@@ -812,13 +812,26 @@ This repo
 
 `ace-step-music` is live: GPU0, port 5941 (shim) with ACE-Step's REST server on
 the private port 5942 in the same process group, `api_type: audio_gen`,
-`match: {path_default: true}`, `capabilities: [audio_out]`, `vram_mb: 13000`,
-`hold_seconds: 900`, `idle_ttl_seconds: 900`, `spin_up_seconds: 120`.
+`match: {path_default: true}`, `capabilities: [audio_out]`, `vram_mb: 17000`,
+`idle_ttl_seconds: 300`, `spin_up_seconds: 120`, **no `hold_seconds`**.
+
+- **`hold_seconds` blocked every handoff.** Both heavy backends share GPU0
+  (video books 19 GB, music 17 GB, plus the 3.6 GB embed model), so only one can
+  be resident. With `hold_seconds: 900` a stanza stays un-evictable for 15
+  minutes after its last request and the other backend gets
+  `503 no GPU can take … now and no peer served it` even though nothing is
+  running. Dropping the hold and keeping `idle_ttl_seconds: 300` makes the
+  handoff work: a music job issued after the video model's TTL returned an id
+  and a completed 15 s clip, with the router reclaiming the idle video model to
+  make room. The hold exists for realtime sessions, not for job models — a job
+  already holds its model through occupancy.
 
 **What the deployment corrected in this note:**
 
-- **`ACE-Step/acestep-5Hz-lm-1.7B` does not exist** (HF 404). The published LMs
-  are 0.6B and 4B. The 0.6B is what runs here.
+- **`ACE-Step/acestep-5Hz-lm-1.7B` exists; the HF API answered 404 transiently**
+  and a retry downloaded the full 3.5 GB. The 1.7B is what runs here: it costs
+  ~3.9 GB more VRAM (13.4 -> 17.3 GB) and ~14 s more on a cold 15 s job, and
+  replaces the 0.6B's weaker prompt/lyrics metadata.
 - **The locked torch build is broken on this host.** `uv sync` pins
   `torch 2.10.0+cu128`, and with it *every* bf16 GEMM fails with
   `CUBLAS_STATUS_INVALID_VALUE` — a bare `4096³` bfloat16 matmul reproduces it,
@@ -846,12 +859,15 @@ the server finishes what it started.
 
 **Measured, 3090, 48 kHz stereo out:**
 
-| request | wall | ratio | file |
-|---|---|---|---|
-| 15 s (cold, model load on first job) | 60 s | 4.0x | 2.7 MB |
-| 30 s | 61 s | 2.0x | 5.8 MB |
-| 180 s (3 min) | 182 s | 1.0x | 34.6 MB |
+| request | LM | wall | ratio | file |
+|---|---|---|---|---|
+| 15 s (cold: model + LM load on first job) | 0.6B | 60 s | 4.0x | 2.7 MB |
+| 30 s | 0.6B | 61 s | 2.0x | 5.8 MB |
+| 180 s (3 min) | 0.6B | 182 s | 1.0x | 34.6 MB |
+| 15 s (cold) | 1.7B | 74 s | 4.9x | 2.7 MB |
+| 30 s (warm) | 1.7B | 12 s | 0.4x | 5.8 MB |
 
-Peak VRAM **13.4 GB** with the 0.6B LM, against a 4.9 GB host baseline, so the
-stanza books 13 GB of the 24 GB card. Durations accepted 10-600 s; 30 s and
+Peak VRAM **17.3 GB** with the 1.7B LM (13.4 GB with the 0.6B), against a
+4.9 GB host baseline; the stanza books 17 GB of the 24 GB card and cannot be
+resident beside the video stanza. Durations accepted 10-600 s; 30 s and
 180 s verified end to end through `:18080`.
