@@ -282,14 +282,14 @@ proxied in from peers. It is a preset name or a map:
 image_pipeline: sd-server   # the sd-server checks
 image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
 image_pipeline:
-  caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein | qwen-image-2.1   # caption format; "" = no caption step
+  caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein | qwen-image-2.1 | fibo-2.0   # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
   retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
 `caption` names a prompt profile (`internal/router/imageprompt_*.go`), so a
 model family adds a file and an allow-list entry; an unknown name is a load
-error. `z-image`, `z-anime`, `krea2`, `flux2-klein`, `flux3-klein` and `qwen-image-2.1` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
+error. `z-image`, `z-anime`, `krea2`, `flux2-klein`, `flux3-klein`, `qwen-image-2.1` and `fibo-2.0` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
 so a peer spill prefers copies that run the same pipeline. The enhancer names
 the model and timeout the caption step uses. `sd-server` and `ideogram4` are
 the presets; an unknown preset, or `image_pipeline` on a stanza that is not
@@ -378,6 +378,27 @@ or negative prompt. Skip rules, reply check, headers and the verbatim fallback
 which carries Klein's edit instructions, is left alone. The research is in
 [`docs/research/flux2-klein-prompt-style.md`](docs/research/flux2-klein-prompt-style.md).
 
+`caption: fibo-2.0` is structured, like `ideogram4`, but in Bria's VGL caption
+format, which Fibo 2.0 is trained on. The enhancer turns a plain txt2img prompt
+into one VGL JSON object: `short_description`, `objects`,
+`background_setting`, `lighting`, `aesthetics`,
+`photographic_characteristics`, `style_medium`, `text_render`, `context` and
+`artistic_style`, in that order. The reply must carry a non-empty
+`short_description`, `background_setting` and `style_medium`, `lighting` and
+`aesthetics` objects, a `description` on every `objects` entry and a `text` on
+every `text_render` entry, and must keep every double-quoted span of the
+prompt word for word in some string value. Only text the prompt asks to show
+goes in `text_render`; a quoted name or style reference is not drawn. Keys outside the schema, empty top-level values
+and `aesthetic_score` / `preference_score` are dropped, and the caption is
+sent as compact JSON. Skip rules (including a prompt that is already a JSON
+object), budget and headers are the same as `ideogram4`. On any failure the
+original prompt goes out verbatim (`X-SD-Shim-Prompt-Source: original`); it is
+never wrapped in the ideogram4 template. img2img and inpaint are left alone:
+an edit caption describes the source image, which the text-only enhancer never
+sees, and sd-server wraps a plain edit instruction itself. It is enabled on
+the tracked `fibo-2.0-edit-turbo` stanzas, where it only acts on Generate
+(txt2img) requests. The research is in
+[`docs/research/fibo-2.0-prompt-style.md`](docs/research/fibo-2.0-prompt-style.md).
 `caption: flux3-klein` is the same prose step with its own system prompt, for
 FLUX.3 Image Klein. The vendor says Klein is trained on the captions its prompt
 upsampler writes and should not get a prompt as typed, so the enhancer follows

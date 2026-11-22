@@ -75,6 +75,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Research | [Z-Anime prompt style](research/z-anime-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [Krea 2 prompt style](research/krea2-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
+| Research | [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟡 needs review (says GitHub; issues are also on Gitea) | 2026-11-22 |
@@ -89,6 +90,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [Z-Anime prompt style](research/z-anime-prompt-style.md): the research behind the `z-anime` caption profile.
 - [Krea 2 prompt style](research/krea2-prompt-style.md): the research behind the `krea2` caption profile.
 - [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md): the research behind the `flux2-klein` caption profile.
+- [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md): the research behind the `fibo-2.0` caption profile.
 - [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md): the research behind the `flux3-klein` caption profile.
 - [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md): the research behind the `qwen-image-2.1` caption profile.
 
@@ -97,6 +99,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 <!-- backlinks:start -->
 - [A failed load tries the next router peer](adr/0003-a-failed-load-tries-the-next-router-peer.md)
 - [Domain Docs](agents/domain.md)
+- [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md)
 - [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md)
 - [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md)
 - [Headroom is MB the node will not book](adr/0002-headroom-is-mb-the-node-will-not-book.md)

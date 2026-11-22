@@ -401,7 +401,7 @@ in from peers. A preset name selects the steps, or a map names them:
   becomes ready and before a request that names a LoRA, and retry once when
   sd-server still answers `invalid lora path`.
 - `ideogram4`: `sd-server` plus ideogram4-format caption enhancement.
-- `image_pipeline: {caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein | qwen-image-2.1, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
+- `image_pipeline: {caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein | qwen-image-2.1 | fibo-2.0, enhancer: {model, timeout_seconds}, retry_blocked: N}`: the map form; `caption` is a format name (unknown names fail load), the
   enhancer model and timeout feed the caption step, and `retry_blocked` resends
   a blocked `txt2img` request with a new random seed up to N times (default 0;
   above 5 fails load).
@@ -429,7 +429,9 @@ flux2-klein` does the same for FLUX.2 Klein, which does no prompt upsampling
 of its own. `caption: flux3-klein` writes the long scene caption FLUX.3 Image
 Klein is trained on, following the vendor's upsampler rules. `caption:
 qwen-image-2.1` does the same for Qwen-Image 2.1, following the vendor's
-text-to-image rewriter and keeping on-image text exact.
+text-to-image rewriter and keeping on-image text exact. `caption: fibo-2.0`
+turns a txt2img prompt into a Fibo 2.0 VGL JSON caption instead, also falling
+back to the original prompt verbatim; edits are left alone.
 
 A bare sd-server stanza needs no shim: run it with `sd-server --listen-ip
 127.0.0.1 --listen-port {port}` with `health_check: /v1/models` (sd-server has

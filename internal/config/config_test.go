@@ -321,6 +321,7 @@ func TestTrackedCaptionStanzasUseTheProfile(t *testing.T) {
 	}{
 		{"z-anime-turbo", "z-anime", 3},
 		{"krea-2-turbo", "krea2", 3},
+		{"fibo-2.0-edit-turbo", "fibo-2.0", 2},
 		{"krea-character-creator", "", 0},
 		{"krea2-ostris-edit", "", 0},
 		{"flux2-klein", "flux2-klein", 2},
@@ -940,7 +941,7 @@ stanzas:
 func TestImagePipelineValidation(t *testing.T) {
 	cases := []struct{ name, stanza, want string }{
 		{"unknown preset", "api_type: image\n    image_pipeline: stable-diffusion", `unknown image_pipeline preset "stable-diffusion"`},
-		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime, krea2, flux2-klein, flux3-klein, qwen-image-2.1`},
+		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime, krea2, flux2-klein, flux3-klein, qwen-image-2.1, fibo-2.0`},
 		{"z-image is no preset", "api_type: image\n    image_pipeline: z-image", `unknown image_pipeline preset "z-image"`},
 		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
 		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},

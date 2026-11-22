@@ -28,6 +28,7 @@ var promptProfiles = map[string]*promptProfile{
 	"flux2-klein":    &flux2KleinProfile,
 	"flux3-klein":    &flux3KleinProfile,
 	"qwen-image-2.1": &qwenImage21Profile,
+	"fibo-2.0":       &fibo2Profile,
 }
 
 // canvasRequest is the enhancer's user message: the canvas size, so the

@@ -208,6 +208,7 @@ See [`SPEC.md`](../../SPEC.md) for the shared skip rules, budget and headers.
 ## Linked from
 
 <!-- backlinks:start -->
+- [Fibo 2.0 prompt style](fibo-2.0-prompt-style.md)
 - [FLUX.2 Klein prompt style](flux2-klein-prompt-style.md)
 - [Model Router: SPEC](../../SPEC.md)
 - [model-router docs](../README.md)
