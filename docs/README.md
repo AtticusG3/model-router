@@ -74,6 +74,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Research | [Z-Image prompt style](research/z-image-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [Z-Anime prompt style](research/z-anime-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [Krea 2 prompt style](research/krea2-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
+| Research | [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟡 needs review (says GitHub; issues are also on Gitea) | 2026-11-22 |
 | Agent setup | [Triage labels](agents/triage-labels.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Domain docs](agents/domain.md) | Reference | 🟢 current | 2026-11-22 |
@@ -85,12 +86,14 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [Z-Image prompt style](research/z-image-prompt-style.md): the research behind the `z-image` caption profile.
 - [Z-Anime prompt style](research/z-anime-prompt-style.md): the research behind the `z-anime` caption profile.
 - [Krea 2 prompt style](research/krea2-prompt-style.md): the research behind the `krea2` caption profile.
+- [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md): the research behind the `flux2-klein` caption profile.
 
 ## Linked from
 
 <!-- backlinks:start -->
 - [A failed load tries the next router peer](adr/0003-a-failed-load-tries-the-next-router-peer.md)
 - [Domain Docs](agents/domain.md)
+- [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md)
 - [Headroom is MB the node will not book](adr/0002-headroom-is-mb-the-node-will-not-book.md)
 - [Issue tracker: Gitea](agents/issue-tracker.md)
 - [Krea 2 prompt style](research/krea2-prompt-style.md)

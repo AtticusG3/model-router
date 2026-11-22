@@ -282,14 +282,14 @@ proxied in from peers. It is a preset name or a map:
 image_pipeline: sd-server   # the sd-server checks
 image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
 image_pipeline:
-  caption: "" | ideogram4 | z-image | z-anime | krea2   # caption format; "" = no caption step
+  caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein   # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
   retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
 `caption` names a prompt profile (`internal/router/imageprompt_*.go`), so a
 model family adds a file and an allow-list entry; an unknown name is a load
-error. `z-image`, `z-anime` and `krea2` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
+error. `z-image`, `z-anime`, `krea2` and `flux2-klein` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
 so a peer spill prefers copies that run the same pipeline. The enhancer names
 the model and timeout the caption step uses. `sd-server` and `ideogram4` are
 the presets; an unknown preset, or `image_pipeline` on a stanza that is not
@@ -364,6 +364,19 @@ quotes. Skip rules, reply check, headers and the verbatim fallback
 left alone. It is enabled only on `krea-2-turbo`; the character creator and
 Ostris edit stanzas stay unenhanced. The research is in
 [`docs/research/krea2-prompt-style.md`](docs/research/krea2-prompt-style.md).
+
+`caption: flux2-klein` is the same prose step with its own system prompt, for
+FLUX.2 Klein, which does no prompt upsampling of its own and wants
+novelist-style prose. The enhancer writes one English paragraph (about 40 to
+120 words) with the subject and action first, then setting, details and
+framing for the canvas, the lighting (source, direction, quality, colour
+temperature) and a closing "Style: ... Mood: ..." sentence. It copies on-image
+text exactly inside English double quotes, keeps hex colour codes tied to
+their object, phrases exclusions positively, and adds no weights, quality tags
+or negative prompt. Skip rules, reply check, headers and the verbatim fallback
+(`X-SD-Shim-Prompt-Source: original`) are the same as `z-image`. img2img,
+which carries Klein's edit instructions, is left alone. The research is in
+[`docs/research/flux2-klein-prompt-style.md`](docs/research/flux2-klein-prompt-style.md).
 
 A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
 --listen-port {port}` and `health_check: /v1/models` (sd-server has no
