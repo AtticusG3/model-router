@@ -14,6 +14,7 @@ The operator Playground at `/ui/` has one tab per backend type. These pages cove
 ## See also
 
 - [Router config reference](../../SPEC.md): stanzas, capabilities and the request pipeline.
+- [Z-Image reference-token PE patch for sd-server](../../third_party/stable-diffusion.cpp/README.md): patch and deploy notes for #203.
 - [README](../../README.md): setup and every HTTP route.
 
 ## Linked from

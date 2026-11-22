@@ -550,6 +550,7 @@ cmd/fake-model/          test backend (OpenAI + sdapi + audio/voice/realtime/vid
 internal/config/         config loading/validation
 internal/router/         matcher, admission, supervisor, telemetry, pools, proxy, server
 configs/                 per-node YAML + qwen-fixed-chat-template.jinja
-deploy/                  systemd units, swap-over procedure, sd-server shim + tests
+deploy/                  systemd units, swap-over procedure, sd-server shim + tests, Z-Image patch build script
+third_party/             vendor patches (sd-server Z-Image PE, #203)
 test/                    smoke-test configs + launcher
 ```

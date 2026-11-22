@@ -1,0 +1,59 @@
+diff --git a/src/model/common/rope.hpp b/src/model/common/rope.hpp
+index b6f3111..db79a5d 100644
+--- a/src/model/common/rope.hpp
++++ b/src/model/common/rope.hpp
+@@ -882,7 +882,6 @@ namespace Rope {
+                                                                       const std::vector<ggml_tensor*>& ref_latents,
+                                                                       RefIndexMode ref_index_mode,
+                                                                       PositionLayout* layout = nullptr) {
+-        SD_UNUSED(ref_index_mode);
+         int padded_context_len = context_len + bound_mod(context_len, seq_multi_of);
+         auto txt_ids           = std::vector<std::vector<float>>(bs * padded_context_len, std::vector<float>(3, 0.0f));
+         for (int i = 0; i < bs * padded_context_len; i++) {
+@@ -896,6 +895,34 @@ namespace Rope {
+         int index        = padded_context_len + 1;
+         auto img_ids     = gen_flux_img_ids(h, w, patch_size, bs, axes_dim_num, index, 0, 0, false, layout);
+ 
++        // Z-Image edit: reference and target share spatial RoPE and are
++        // separated by one step on the temporal axis (Z-Image paper, s4.1).
++        // Target IDs stay as they are so txt2img positions do not change.
++        // Append refs before padding so the pad covers the combined length,
++        // matching forward_core.
++        int ref_index = index + 1;
++        if (ref_index_mode == RefIndexMode::DECREASE && !ref_latents.empty()) {
++            ref_index = index + static_cast<int>(ref_latents.size());
++        }
++        for (ggml_tensor* ref : ref_latents) {
++            auto ref_ids = gen_flux_img_ids(static_cast<int>(ref->ne[1]),
++                                            static_cast<int>(ref->ne[0]),
++                                            patch_size,
++                                            bs,
++                                            axes_dim_num,
++                                            ref_index,
++                                            0,
++                                            0,
++                                            false,
++                                            layout);
++            img_ids = concat_ids(img_ids, ref_ids, bs);
++            if (ref_index_mode == RefIndexMode::INCREASE) {
++                ref_index++;
++            } else if (ref_index_mode == RefIndexMode::DECREASE) {
++                ref_index--;
++            }
++        }
++
+         int img_pad_len = bound_mod(static_cast<int>(img_ids.size() / bs), seq_multi_of);
+         if (layout) {
+             layout->append_tokens(img_pad_len);
+@@ -905,10 +932,7 @@ namespace Rope {
+             img_ids = concat_ids(img_ids, img_pad_ids, bs);
+         }
+ 
+-        auto ids = concat_ids(txt_ids, img_ids, bs);
+-
+-        // ignore ref_latents for now
+-        return ids;
++        return concat_ids(txt_ids, img_ids, bs);
+     }
+ 
+     // LLaDA-Image shares Lumina2/z_image's axes layout, but assigns position (0,0,0) to the
