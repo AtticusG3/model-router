@@ -308,6 +308,30 @@ func TestValidCatalogFilesParse(t *testing.T) {
 	}
 }
 
+// TestTrackedZAnimeStanzasUseTheProfile pins the three tracked z-anime-turbo
+// stanzas enabled in #206 to caption: z-anime with an enhancer.
+func TestTrackedZAnimeStanzasUseTheProfile(t *testing.T) {
+	files, _ := filepath.Glob("../../configs/*.yaml")
+	enabled := 0
+	for _, f := range files {
+		cfg, err := Load(f)
+		if err != nil {
+			continue // overlays and partial files are covered elsewhere
+		}
+		s := cfg.Stanza("z-anime-turbo")
+		if s == nil || s.ImagePipeline == nil || s.ImagePipeline.Caption == "" {
+			continue
+		}
+		if s.ImagePipeline.Caption != "z-anime" || s.ImagePipeline.Enhancer == nil {
+			t.Errorf("%s: z-anime-turbo pipeline = %+v", f, s.ImagePipeline)
+		}
+		enabled++
+	}
+	if enabled != 3 {
+		t.Fatalf("%d tracked z-anime-turbo stanzas have a caption, want 3", enabled)
+	}
+}
+
 func TestParseRejectsInvalidCatalog(t *testing.T) {
 	tests := []struct {
 		name string
@@ -867,6 +891,12 @@ stanzas:
       caption: ideogram4
       enhancer: {model: enhancer-a, timeout_seconds: 20}
       retry_blocked: 2
+  - model_id: sd-zimage
+    command: "sd-server --listen-port {port}"
+    api_type: image
+    image_pipeline:
+      caption: z-image
+      enhancer: {model: enhancer-a, timeout_seconds: 45}
 `))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
@@ -884,12 +914,16 @@ stanzas:
 		custom.Enhancer == nil || custom.Enhancer.Model != "enhancer-a" || custom.Enhancer.TimeoutSeconds != 20 {
 		t.Fatalf("map form = %+v", custom)
 	}
+	if z := cfg.Stanza("sd-zimage").ImagePipeline; z == nil || z.Caption != "z-image" || z.Enhancer == nil || z.Enhancer.TimeoutSeconds != 45 {
+		t.Fatalf("z-image caption = %+v", z)
+	}
 }
 
 func TestImagePipelineValidation(t *testing.T) {
 	cases := []struct{ name, stanza, want string }{
 		{"unknown preset", "api_type: image\n    image_pipeline: stable-diffusion", `unknown image_pipeline preset "stable-diffusion"`},
-		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid`},
+		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime`},
+		{"z-image is no preset", "api_type: image\n    image_pipeline: z-image", `unknown image_pipeline preset "z-image"`},
 		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
 		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},
 		{"high retry", "api_type: image\n    image_pipeline: {retry_blocked: 50}", "retry_blocked must be at most 5"},

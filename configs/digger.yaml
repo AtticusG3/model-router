@@ -379,6 +379,9 @@ stanzas:
     device: 0
     spin_up_seconds: 60
     api_type: image
+    image_pipeline:
+      caption: z-anime
+      enhancer: {model: qwen38-flash-next, timeout_seconds: 45}
     match: {path_prefix: /sdapi/v1}
     health_check: /sdapi/v1/sd-models
     idle_ttl_seconds: 300
@@ -404,6 +407,9 @@ stanzas:
     device: 0
     spin_up_seconds: 60
     api_type: image
+    image_pipeline:
+      caption: z-image
+      enhancer: {model: qwen38-flash-next, timeout_seconds: 45}
     match: {path_prefix: /sdapi/v1}
     health_check: /sdapi/v1/sd-models
     idle_ttl_seconds: 300
@@ -524,6 +530,9 @@ stanzas:
     device: 0
     spin_up_seconds: 60
     api_type: image
+    image_pipeline:
+      caption: z-image
+      enhancer: {model: qwen38-flash-next, timeout_seconds: 45}
     match: {path_prefix: /sdapi/v1}
     health_check: /sdapi/v1/sd-models
     idle_ttl_seconds: 300

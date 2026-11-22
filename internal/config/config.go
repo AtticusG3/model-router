@@ -187,9 +187,10 @@ type ImageEnhancer struct {
 // caption enhancement.
 var imagePipelinePresets = []string{"sd-server", "ideogram4"}
 
-// imageCaptionFormats are the names image_pipeline.caption accepts, besides
-// the empty string (no caption step).
-var imageCaptionFormats = []string{"ideogram4"}
+// ImageCaptionFormats are the names image_pipeline.caption accepts, besides
+// the empty string (no caption step). Each one has a prompt profile in the
+// router.
+var ImageCaptionFormats = []string{"ideogram4", "z-image", "z-anime"}
 
 // UnmarshalYAML accepts a preset name or a map.
 func (p *ImagePipeline) UnmarshalYAML(value *yaml.Node) error {
@@ -970,9 +971,9 @@ func Parse(raw []byte) (*Config, error) {
 				return nil, fmt.Errorf("stanza %q: image_pipeline is only valid with api_type: image", s.ModelID)
 			}
 			p := s.ImagePipeline
-			if p.Caption != "" && !slices.Contains(imageCaptionFormats, p.Caption) {
+			if p.Caption != "" && !slices.Contains(ImageCaptionFormats, p.Caption) {
 				return nil, fmt.Errorf("stanza %q: image_pipeline caption %q is not valid; use one of %s",
-					s.ModelID, p.Caption, strings.Join(imageCaptionFormats, ", "))
+					s.ModelID, p.Caption, strings.Join(ImageCaptionFormats, ", "))
 			}
 			if p.RetryBlocked < 0 {
 				return nil, fmt.Errorf("stanza %q: image_pipeline retry_blocked must not be negative", s.ModelID)

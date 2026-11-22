@@ -107,6 +107,13 @@ type captionRig struct {
 // the default model; load starts enhancer-a first.
 func newCaptionRig(t *testing.T, fe *fakeEnhancer, enhancer string, load bool, peers ...string) *captionRig {
 	t.Helper()
+	return newCaptionRigFor(t, "ideogram4", fe, enhancer, load, peers...)
+}
+
+// newCaptionRigFor is newCaptionRig with the image stanza's caption set to
+// caption.
+func newCaptionRigFor(t *testing.T, caption string, fe *fakeEnhancer, enhancer string, load bool, peers ...string) *captionRig {
+	t.Helper()
 	c := &captionRig{}
 	reply := func(w http.ResponseWriter, req *http.Request) {
 		var in struct {
@@ -140,7 +147,7 @@ stanzas:
     api_type: image
     health_check: /v1/models
     image_pipeline:
-      caption: ideogram4%s
+      caption: %s%s
     match: {path_prefix: /sdapi/v1, path_default: true}
     spin_up_seconds: 5
     port: %d
@@ -150,7 +157,7 @@ stanzas:
     spin_up_seconds: 5
     port: %d
 %s
-`, enhancer, img.Listener.Addr().(*net.TCPAddr).Port, chat.Listener.Addr().(*net.TCPAddr).Port, strings.Join(peers, "\n"))))
+`, caption, enhancer, img.Listener.Addr().(*net.TCPAddr).Port, chat.Listener.Addr().(*net.TCPAddr).Port, strings.Join(peers, "\n"))))
 	if err != nil {
 		t.Fatalf("config: %v", err)
 	}
