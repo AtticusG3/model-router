@@ -11,6 +11,7 @@ The repo has no release tags yet. `0.1.0` is back-filled from the merges on `mas
 ### Added
 
 - `image_pipeline.caption: z-image`: txt2img prompts for Z-Image stanzas are expanded into detailed prose by the enhancer model, falling back to the original prompt verbatim. Enabled on the tracked Z-Image base and Juggernaut Z Fast stanzas (#205).
+- `image_pipeline.caption: z-anime`: txt2img prompts for Z-Anime stanzas, including booru-style tag lists, are rewritten into front-loaded descriptive prose, falling back to the original prompt verbatim. Enabled on the tracked `z-anime-turbo` stanzas (#206).
 
 ### Changed
 

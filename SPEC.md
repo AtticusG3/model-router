@@ -280,14 +280,14 @@ proxied in from peers. It is a preset name or a map:
 image_pipeline: sd-server   # the sd-server checks
 image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
 image_pipeline:
-  caption: "" | ideogram4 | z-image   # caption format; "" = no caption step
+  caption: "" | ideogram4 | z-image | z-anime   # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
   retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
 `caption` names a prompt profile (`internal/router/imageprompt_*.go`), so a
 model family adds a file and an allow-list entry; an unknown name is a load
-error. `z-image` has no bare preset name; use the map form. The serving node advertises the format in its telemetry,
+error. `z-image` and `z-anime` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
 so a peer spill prefers copies that run the same pipeline. The enhancer names
 the model and timeout the caption step uses. `sd-server` and `ideogram4` are
 the presets; an unknown preset, or `image_pipeline` on a stanza that is not
@@ -338,6 +338,16 @@ with `X-SD-Shim-Prompt-Source: original`; it is never wrapped in the ideogram4
 template. `negative_prompt` and img2img requests are left alone. The research
 behind the profile is in
 [`docs/research/z-image-prompt-style.md`](docs/research/z-image-prompt-style.md).
+
+`caption: z-anime` is the same prose step with its own system prompt, for the
+Z-Anime fine-tune, which wants descriptive sentences rather than tag lists.
+The enhancer turns a short prompt or a booru-style tag list into one paragraph
+(about 60 to 160 words) with the character first, then setting, framing,
+lighting and colour, in illustration terms, closing with one short style
+sentence; quality, score and rating tags are dropped. Skip rules, reply check,
+headers and the verbatim fallback (`X-SD-Shim-Prompt-Source: original`) are
+the same as `z-image`. img2img is left alone. The research is in
+[`docs/research/z-anime-prompt-style.md`](docs/research/z-anime-prompt-style.md).
 
 A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
 --listen-port {port}` and `health_check: /v1/models` (sd-server has no

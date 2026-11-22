@@ -71,6 +71,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Research | [Video backends](research/video-backends.md) | Explanation | 🟢 current (read 2026-11-20) | 2026-11-22 |
 | Research | [Music and sound-effect backends](research/music-sfx-backends.md) | Explanation | 🟢 current (read 2026-11-20) | 2026-11-22 |
 | Research | [Z-Image prompt style](research/z-image-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
+| Research | [Z-Anime prompt style](research/z-anime-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟡 needs review (says GitHub; issues are also on Gitea) | 2026-11-22 |
 | Agent setup | [Triage labels](agents/triage-labels.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Domain docs](agents/domain.md) | Reference | 🟢 current | 2026-11-22 |
@@ -80,6 +81,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [CHANGELOG](../CHANGELOG.md): what changed and when.
 - [Glossary](../GLOSSARY.md): terms and abbreviations.
 - [Z-Image prompt style](research/z-image-prompt-style.md): the research behind the `z-image` caption profile.
+- [Z-Anime prompt style](research/z-anime-prompt-style.md): the research behind the `z-anime` caption profile.
 
 ## Linked from
 
@@ -99,5 +101,6 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [Triage Labels](agents/triage-labels.md)
 - [Voice cloning and a voice library across router nodes](research/voice-cloning-backends.md)
 - [VRAM fit ladder](vram-fit-ladder.md)
+- [Z-Anime prompt style](research/z-anime-prompt-style.md)
 - [Z-Image prompt style](research/z-image-prompt-style.md)
 <!-- backlinks:end -->

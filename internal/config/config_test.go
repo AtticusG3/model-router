@@ -308,6 +308,30 @@ func TestValidCatalogFilesParse(t *testing.T) {
 	}
 }
 
+// TestTrackedZAnimeStanzasUseTheProfile pins the three tracked z-anime-turbo
+// stanzas enabled in #206 to caption: z-anime with an enhancer.
+func TestTrackedZAnimeStanzasUseTheProfile(t *testing.T) {
+	files, _ := filepath.Glob("../../configs/*.yaml")
+	enabled := 0
+	for _, f := range files {
+		cfg, err := Load(f)
+		if err != nil {
+			continue // overlays and partial files are covered elsewhere
+		}
+		s := cfg.Stanza("z-anime-turbo")
+		if s == nil || s.ImagePipeline == nil || s.ImagePipeline.Caption == "" {
+			continue
+		}
+		if s.ImagePipeline.Caption != "z-anime" || s.ImagePipeline.Enhancer == nil {
+			t.Errorf("%s: z-anime-turbo pipeline = %+v", f, s.ImagePipeline)
+		}
+		enabled++
+	}
+	if enabled != 3 {
+		t.Fatalf("%d tracked z-anime-turbo stanzas have a caption, want 3", enabled)
+	}
+}
+
 func TestParseRejectsInvalidCatalog(t *testing.T) {
 	tests := []struct {
 		name string
@@ -898,7 +922,7 @@ stanzas:
 func TestImagePipelineValidation(t *testing.T) {
 	cases := []struct{ name, stanza, want string }{
 		{"unknown preset", "api_type: image\n    image_pipeline: stable-diffusion", `unknown image_pipeline preset "stable-diffusion"`},
-		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image`},
+		{"unknown caption", "api_type: image\n    image_pipeline: {caption: sdxl}", `caption "sdxl" is not valid; use one of ideogram4, z-image, z-anime`},
 		{"z-image is no preset", "api_type: image\n    image_pipeline: z-image", `unknown image_pipeline preset "z-image"`},
 		{"non-image stanza", "image_pipeline: sd-server", "image_pipeline is only valid with api_type: image"},
 		{"negative retry", "api_type: image\n    image_pipeline: {retry_blocked: -1}", "retry_blocked must not be negative"},

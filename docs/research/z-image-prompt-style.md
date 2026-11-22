@@ -177,4 +177,5 @@ See [`SPEC.md`](../../SPEC.md) for the shared skip rules, budget and headers.
 <!-- backlinks:start -->
 - [Model Router: SPEC](../../SPEC.md)
 - [model-router docs](../README.md)
+- [Z-Anime prompt style](z-anime-prompt-style.md)
 <!-- backlinks:end -->
