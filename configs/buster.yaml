@@ -334,7 +334,9 @@ stanzas:
     device: "0|1|2"
     spin_up_seconds: 60
     api_type: image
-    image_pipeline: sd-server
+    image_pipeline:
+      caption: qwen-image-2.1
+      enhancer: {model: qwen38-flash-next, timeout_seconds: 45}
     match: {path_prefix: /sdapi/v1}
     health_check: /v1/models
     idle_ttl_seconds: 300

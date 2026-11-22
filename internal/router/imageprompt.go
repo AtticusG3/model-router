@@ -21,12 +21,13 @@ type promptProfile struct {
 // family adds a file and one line here, plus its name in
 // config.ImageCaptionFormats.
 var promptProfiles = map[string]*promptProfile{
-	"ideogram4":   &ideogram4Profile,
-	"z-image":     &zImageProfile,
-	"z-anime":     &zAnimeProfile,
-	"krea2":       &krea2Profile,
-	"flux2-klein": &flux2KleinProfile,
-	"flux3-klein": &flux3KleinProfile,
+	"ideogram4":      &ideogram4Profile,
+	"z-image":        &zImageProfile,
+	"z-anime":        &zAnimeProfile,
+	"krea2":          &krea2Profile,
+	"flux2-klein":    &flux2KleinProfile,
+	"flux3-klein":    &flux3KleinProfile,
+	"qwen-image-2.1": &qwenImage21Profile,
 }
 
 // canvasRequest is the enhancer's user message: the canvas size, so the

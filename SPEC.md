@@ -282,14 +282,14 @@ proxied in from peers. It is a preset name or a map:
 image_pipeline: sd-server   # the sd-server checks
 image_pipeline: ideogram4   # sd-server plus ideogram4-format caption enhancement
 image_pipeline:
-  caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein   # caption format; "" = no caption step
+  caption: "" | ideogram4 | z-image | z-anime | krea2 | flux2-klein | flux3-klein | qwen-image-2.1   # caption format; "" = no caption step
   enhancer: {model: enhancer-model, timeout_seconds: 30}
   retry_blocked: 0-5         # blocked retries; 0 disables, the default
 ```
 
 `caption` names a prompt profile (`internal/router/imageprompt_*.go`), so a
 model family adds a file and an allow-list entry; an unknown name is a load
-error. `z-image`, `z-anime`, `krea2`, `flux2-klein` and `flux3-klein` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
+error. `z-image`, `z-anime`, `krea2`, `flux2-klein`, `flux3-klein` and `qwen-image-2.1` have no bare preset name; use the map form. The serving node advertises the format in its telemetry,
 so a peer spill prefers copies that run the same pipeline. The enhancer names
 the model and timeout the caption step uses. `sd-server` and `ideogram4` are
 the presets; an unknown preset, or `image_pipeline` on a stanza that is not
@@ -391,6 +391,22 @@ img2img is left alone, because the vendor's edit captions need the reference
 image and the enhancer is text-only. It is separate from the `flux2-klein`
 profile. The research is in
 [`docs/research/flux3-klein-prompt-style.md`](docs/research/flux3-klein-prompt-style.md).
+`caption: qwen-image-2.1` is the same prose step with its own system prompt,
+for Qwen-Image 2.1, following the vendor's text-to-image rewriter. The
+enhancer writes one long English paragraph (about 300 to 500 words) in an
+observing voice, opening with "The image is a <vertical, wide or square>
+<style> <medium> of <subject>, <background and palette>." It lists every
+piece of on-image text in reading order, copied exactly inside English double
+quotes and kept in its own script, keeps the vendor's RGBA opening sentences
+when a request starts with them, and adds no text, aspect ratio, quality
+boosters or negative prompt. Skip rules, headers and the verbatim fallback
+(`X-SD-Shim-Prompt-Source: original`) are the same as `z-image`. The reply
+check is the `z-image` one plus two rules: text inside `“…”` or `「…」` in the
+prompt must also appear word for word, and a prompt that opens with the RGBA
+trigger (one or both sentences) needs a reply that opens with the same
+sentences. img2img and edits are left alone. It is enabled only on
+`qwen-image-2.1`; `qwen-image-edit-2511` stays unenhanced. The research is in
+[`docs/research/qwen-image-2.1-prompt-style.md`](docs/research/qwen-image-2.1-prompt-style.md).
 
 A bare sd-server stanza needs no shim: run it with `--listen-ip 127.0.0.1
 --listen-port {port}` and `health_check: /v1/models` (sd-server has no

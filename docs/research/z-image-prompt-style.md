@@ -180,5 +180,6 @@ See [`SPEC.md`](../../SPEC.md) for the shared skip rules, budget and headers.
 - [Krea 2 prompt style](krea2-prompt-style.md)
 - [Model Router: SPEC](../../SPEC.md)
 - [model-router docs](../README.md)
+- [Qwen-Image 2.1 prompt style](qwen-image-2.1-prompt-style.md)
 - [Z-Anime prompt style](z-anime-prompt-style.md)
 <!-- backlinks:end -->

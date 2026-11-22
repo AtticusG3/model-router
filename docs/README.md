@@ -76,6 +76,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Research | [Krea 2 prompt style](research/krea2-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
+| Research | [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟡 needs review (says GitHub; issues are also on Gitea) | 2026-11-22 |
 | Agent setup | [Triage labels](agents/triage-labels.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Domain docs](agents/domain.md) | Reference | 🟢 current | 2026-11-22 |
@@ -89,6 +90,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [Krea 2 prompt style](research/krea2-prompt-style.md): the research behind the `krea2` caption profile.
 - [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md): the research behind the `flux2-klein` caption profile.
 - [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md): the research behind the `flux3-klein` caption profile.
+- [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md): the research behind the `qwen-image-2.1` caption profile.
 
 ## Linked from
 
@@ -107,6 +109,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [Local video generation backends](research/video-backends.md)
 - [model-router](../README.md)
 - [Open-source model-router landscape](research/oss-model-router-landscape.md)
+- [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md)
 - [Start cooldown is not a crash restart](adr/0001-start-cooldown-is-not-a-crash-restart.md)
 - [Triage Labels](agents/triage-labels.md)
 - [Voice cloning and a voice library across router nodes](research/voice-cloning-backends.md)
