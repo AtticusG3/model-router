@@ -234,7 +234,7 @@ stanzas:
     port: 5824
 
   - model_id: z-image-juggernaut-fast
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Waldron Juggernaut Z Fast (4-step GGUF)"
     aliases: [juggernaut-z-waldron]
     command: >
@@ -261,7 +261,7 @@ stanzas:
     port: 5825
 
   - model_id: z-image
-    capabilities: [img2img]
+    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
     name: "Waldron Z Image base (Q8 GGUF)"
     aliases: [z-image-waldron]
     command: >

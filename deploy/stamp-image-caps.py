@@ -18,6 +18,12 @@ INPAINT = {
     "boogu-image-edit", "fibo-2.0-edit-turbo", "flux3-klein",
 }
 
+# Z-Image family: img2img crashes stock sd-server (edit mode via extra_images).
+# Never stamped until a patched sd-server ships (#203); drop an id to re-enable.
+NO_IMG2IMG = {
+    "z-anime-turbo", "z-image", "z-image-juggernaut-fast", "z-image-redcraft",
+}
+
 START = re.compile(r"^(\s*)-\s*model_id:\s*(\S+)\s*$")
 
 
@@ -50,6 +56,8 @@ def stamp(path):
             continue
         prefix = re.search(r"^\s*path_prefix:\s*(\S+)", body, re.M)
         if prefix and not prefix.group(1).startswith("/sdapi/v1"):
+            continue
+        if model_id in NO_IMG2IMG:
             continue
         want = ["img2img"] + (["inpaint"] if model_id in INPAINT else [])
         cap_line = re.search(r"^(\s*)capabilities:\s*\[(.*?)\]\s*$", body, re.M)
