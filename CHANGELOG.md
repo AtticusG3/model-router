@@ -8,7 +8,13 @@ Tags: `v0.1.0` (back-filled from the merges on `master` up to 2026-11-22, re-poi
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- Deploy docs now describe the fleet they deploy to: the four nodes that run the router, the binary/config pairing rule with its real failure message, the tracked-vs-live diff recipe, and a flowchart for the binary upgrade. The `model_id` catalog and the VRAM ladder's hardware note follow the live configs (#222).
+
+### Added
+
+- `deploy/swap-over.md`: "Config and binary move together" and "Check a tracked config against a live node" (#222).
 
 ## [0.3.0] - 2026-11-22
 

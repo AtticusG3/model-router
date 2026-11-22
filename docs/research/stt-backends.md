@@ -727,4 +727,5 @@ This repo
 - [Local realtime and speech-to-speech backends](realtime-backends.md)
 - [Local text-to-speech backends](tts-backends.md)
 - [model-router docs](../README.md)
+- [Use the mic and camera in the Playground](../playground/mic-and-camera.md)
 <!-- backlinks:end -->

@@ -21,4 +21,5 @@ The operator Playground at `/ui/` has one tab per backend type. These pages cove
 
 <!-- backlinks:start -->
 - [Edit and outpaint an image in the Playground](image-editing.md)
+- [model-router docs](../README.md)
 <!-- backlinks:end -->

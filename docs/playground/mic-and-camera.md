@@ -129,5 +129,7 @@ flowchart TD
 ## Linked from
 
 <!-- backlinks:start -->
-- [Docs home](../../README.md)
+- [model-router](../../README.md)
+- [model-router docs](../README.md)
+- [Playground guides](README.md)
 <!-- backlinks:end -->

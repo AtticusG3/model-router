@@ -53,13 +53,16 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 |---|---|---|---|---|
 | Repo root | [README](../README.md) | Reference | 🟢 current | 2026-11-22 |
 | Repo root | [SPEC](../SPEC.md) | Explanation | 🟢 current | 2026-11-22 |
-| Repo root | [PLAN](../PLAN.md) | Explanation | 🟡 needs review (internal addresses, #184) | 2026-11-22 |
+| Repo root | [PLAN](../PLAN.md) | Explanation | 🟡 needs review (hardware table predates the 2026-11-22 fleet) | 2026-11-22 |
 | Repo root | [Glossary](../GLOSSARY.md) | Reference | 🟢 current | n/a |
 | Repo root | [CHANGELOG](../CHANGELOG.md) | Reference | 🟢 current | 2026-11-22 |
 | Operations | [Deploy README](../deploy/README.md) | How-to | 🟢 current | 2026-11-22 |
 | Operations | [Swap-over procedure](../deploy/swap-over.md) | How-to | 🟢 current | 2026-11-22 |
 | Operations | [Backends](../deploy/backends.md) | Reference | 🟢 current | n/a |
 | Operations | [Z-Image PE patch for sd-server](../third_party/stable-diffusion.cpp/README.md) | How-to | 🟢 current | 2026-11-22 |
+| Playground | [Playground guides](playground/README.md) | Reference | 🟢 current | 2026-11-22 |
+| Playground | [Edit and outpaint an image](playground/image-editing.md) | How-to | 🟢 current | 2026-11-22 |
+| Playground | [Use the mic and camera](playground/mic-and-camera.md) | How-to | 🟢 current | 2026-11-22 |
 | Reference | [VRAM fit ladder](vram-fit-ladder.md) | Reference | 🟢 current | 2026-11-22 |
 | Decisions | [0001 Start cooldown is not a crash restart](adr/0001-start-cooldown-is-not-a-crash-restart.md) | Explanation | 🟢 current | 2026-11-22 |
 | Decisions | [0002 Headroom is MB the node will not book](adr/0002-headroom-is-mb-the-node-will-not-book.md) | Explanation | 🟢 current | 2026-11-22 |
@@ -78,7 +81,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Research | [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
-| Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟡 needs review (says GitHub; issues are also on Gitea) | 2026-11-22 |
+| Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Triage labels](agents/triage-labels.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Domain docs](agents/domain.md) | Reference | 🟢 current | 2026-11-22 |
 
