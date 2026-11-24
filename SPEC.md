@@ -933,14 +933,19 @@ candidates and their licences are in
 
 - **Routing.** By the JSON `model` field (id or alias), else the
   `path_default` decision stanza, else the only one. `peer/model`, slot spill
-  and peer spill work as for any stanza; the peer's model field is rewritten
-  and nothing else.
-- **Request check.** On a local decision stanza, `POST /v1/systemone` must be
+  and peer spill work as for any stanza. A peer hop sets the body's `model`
+  field, which re-encodes the JSON as on every peer hop: key order and
+  escaping can change and numbers pass through float64. Through a pool, a
+  `5xx` from one target (the malformed-reply `502` included) moves on to the
+  next target, as for any pool, and the last failure is a `503`.
+- **Request check.** On every route (stanza, alias, path default, pool,
+  `peer/model` or mesh id), `POST /v1/systemone` must be
   `application/json`, a JSON object with a `state` and a non-empty
   `questions` object whose entries each carry a `type`. Anything else is a
-  `400` naming the model and the fault, sent before the model is loaded. The
-  values (`choice`, `score`, `noul`, options, rubrics) are the backend's to
-  judge. The body reaches the backend byte for byte.
+  `400` naming the model and the fault, sent before any model is loaded here
+  or on a peer. The values (`choice`, `score`, `noul`, options, rubrics) are
+  the backend's to judge. On a local stanza the body reaches the backend byte
+  for byte.
 - **Reply check.** A `2xx` reply must be a JSON object with an `answers`
   object (up to 1 MB); anything else is a `502` naming the model. The router
   drops the client's `Accept-Encoding` so a gzipped reply arrives decoded; a
@@ -948,7 +953,8 @@ candidates and their licences are in
   reaches the client byte for byte, so `probabilities`, `confidence`, `noul`,
   `usage` and any latency field the backend adds survive unchanged. Any other
   status, `402` and `403` included, reaches the client once: no retry and no
-  peer walk.
+  peer walk (a pool's `5xx` aside, see Routing). The reply check runs on the
+  node that serves the stanza.
 - **Other routes.** `/v1/systemone/permute` and `/v1/systemone/separate` route
   to the decision stanza but are not checked.
 - **Activity.** A `2xx` `/v1/systemone` row carries `decision`: `questions`

@@ -352,6 +352,36 @@ func TestDecisionSystemOneShape(t *testing.T) {
 	}
 }
 
+// A bad envelope sent through a pool or to a peer-qualified id is a 400 too,
+// before anything loads: no local spawn, and the peer is never asked to load.
+func TestDecisionBadEnvelopeEveryRoute(t *testing.T) {
+	var peerHits atomic.Int32
+	peer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { peerHits.Add(1) }))
+	defer peer.Close()
+	kev := newKevBackend(http.StatusOK, kevReply)
+	r, h := speechNode(t, "stanzas:"+kevStanza("")+`
+pools:
+  dpool:
+    targets: [kev-9b]
+peers:
+  - name: alpha
+    kind: router
+    base_url: http://127.0.0.1:9
+    models: [kev-9b]`, kev)
+	r.cfg().Peer("alpha").BaseURL = peer.URL
+	var spawned atomic.Int32
+	r.spawn = func(string, []string) (Proc, error) { spawned.Add(1); return newFakeProc(), nil }
+	for _, model := range []string{"dpool", "alpha/kev-9b"} {
+		rec := postDecision(h, `{"model":"`+model+`","questions":{"q":{"type":"noul"}}}`, "application/json")
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), model) || !strings.Contains(rec.Body.String(), "state") {
+			t.Errorf("%s: status %d body %q, want 400 naming %s and state", model, rec.Code, rec.Body.String(), model)
+		}
+	}
+	if spawned.Load() != 0 || kev.hits.Load() != 0 || peerHits.Load() != 0 {
+		t.Fatalf("spawned %d, backend hits %d, peer hits %d; want all 0", spawned.Load(), kev.hits.Load(), peerHits.Load())
+	}
+}
+
 // buildFakeModel compiles cmd/fake-model into a temp dir.
 func buildFakeModel(t *testing.T) string {
 	t.Helper()

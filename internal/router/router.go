@@ -3,6 +3,7 @@ package router
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1437,6 +1438,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	req = withRequestedID(req, ref.Raw)
+	// A bad System One envelope is refused before any route (local, pool or
+	// peer) can cold-start a model or spill.
+	if req.Method == http.MethodPost && req.URL.Path == systemOnePath {
+		if err := checkSystemOneRequest(req, cmp.Or(ref.Raw, ref.Local)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if ref.Pool != "" {
 		r.servePool(w, req, ref.Pool)
 		return
@@ -1465,13 +1474,6 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 	}
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
 	s := r.cfg().Stanza(modelID)
-	// A bad envelope is refused before it can cold-start the model or spill.
-	if isSystemOne(req, s) {
-		if err := checkSystemOneRequest(req, modelID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
 	// One admit budget for the whole local path: a sibling retry after the
 	// first slot wait times out must not start a second full wait.
 	if s != nil && s.APIType == config.APITypeSpeech && isSynthesis(req) {

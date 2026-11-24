@@ -465,17 +465,18 @@ no default is a `400` that names them. Only one stanza per `api_type` may be
 
 An `api_type: decision` stanza serves a decision model (a state and named,
 typed questions in, a probability per option out, no text) on the System One
-API, `POST /v1/systemone`. The sources say llama-server serves Kev-9B that way from a GGUF; that is
-unverified until the smoke test in `deploy/backends.md` runs.
+API, `POST /v1/systemone`. The sources say llama-server serves Kev-9B that
+way from a GGUF; that is unverified until the smoke test in
+`deploy/backends.md` runs.
 `decision_style: systemone` is the default and the only value; anything else,
 or the key on another `api_type`, fails `-check` with the stanza named.
 
 | What the router does | Result |
 |---|---|
-| Body is not a JSON object with `state` and named, typed `questions` | `400` naming the model, before any load |
+| Body is not a JSON object with `state` and named, typed `questions` | `400` naming the model, before any load, on every route (stanza, alias, pool, peer) |
 | Backend answers `2xx` without an `answers` object | `502` naming the model |
 | Backend answers `2xx` with answers | client gets the backend's bytes unchanged |
-| Backend answers `402`, `403` or anything else | passed through once, never retried |
+| Backend answers `402`, `403` or anything else | passed through once, never retried; only a pool tries its next target on a `5xx`, as for any pool |
 
 The Playground **Decision** tab lists decision stanzas only and sends the
 System One body as typed. Activity rows show the question count, each answer
