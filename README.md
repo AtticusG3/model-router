@@ -465,7 +465,8 @@ no default is a `400` that names them. Only one stanza per `api_type` may be
 
 An `api_type: decision` stanza serves a decision model (a state and named,
 typed questions in, a probability per option out, no text) on the System One
-API, `POST /v1/systemone`. llama-server serves Kev-9B that way from a GGUF.
+API, `POST /v1/systemone`. The sources say llama-server serves Kev-9B that way from a GGUF; that is
+unverified until the smoke test in `deploy/backends.md` runs.
 `decision_style: systemone` is the default and the only value; anything else,
 or the key on another `api_type`, fails `-check` with the stanza named.
 

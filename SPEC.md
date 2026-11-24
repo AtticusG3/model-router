@@ -925,7 +925,8 @@ rewrite:
 typed questions in, a probability per option out, no generated text. The
 contract is the System One API, `POST /v1/systemone`, passed through unchanged
 ([ADR 0004](docs/adr/0004-decision-models-pass-system-one-through.md)).
-llama-server serves Kev-9B and d1-Omni-2B on that route from a GGUF; the
+The sources say llama-server serves Kev-9B and d1-Omni-2B on that route from
+a GGUF (unverified until the Kev smoke test runs); the
 candidates and their licences are in
 [docs/research/decision-models.md](docs/research/decision-models.md).
 `configs/kev-9b.example.yaml` is the example stanza.

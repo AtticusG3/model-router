@@ -231,8 +231,9 @@ it puts real addresses back into git, which is what #184/#195 removed. The
 ## 8. Decision models
 
 A decision model answers `POST /v1/systemone` (state plus named, typed
-questions in, probabilities out). Kev-9B runs in stock llama-server from a
-GGUF; it needs a build with llama.cpp PR #29818 (October 2026 or newer). It is
+questions in, probabilities out). The sources say Kev-9B runs in stock
+llama-server from a GGUF with a build that has llama.cpp PR #29818 (October
+2026 or newer); that is unverified until the steps below have run. It is
 a static binary in `/opt/ai/bin`, so there is no venv. Run the smoke test on
 the 24 GB RTX 3090 node: the BF16 file does not fit a 16 GB card.
 

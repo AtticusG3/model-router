@@ -139,17 +139,19 @@ decision models.
 
 | Candidate | llama-server | vLLM / SGLang | Hosted | Fits |
 |---|---|---|---|---|
-| Kev-9B | 🟢 yes, GGUF since PR #29818 (October 2026 builds) | not needed | no | BF16 on the 24 GB RTX 3090 node; Q4_K_M (about 7 GB) on any 12 GB card |
+| Kev-9B | 🟡 claimed, GGUF since PR #29818 (October 2026 builds); smoke test not run (verify) | not needed | no | BF16 on the 24 GB RTX 3090 node; Q4_K_M (about 7 GB) on any 12 GB card |
 | NeoHorse-Jev-4B | 🟡 only its own llama.cpp-based runtime | 🟢 yes | a client library targets one | 4B, any 16 GB card (verify) |
 | Laya | 🟡 listed in PR #29818 (verify) | n/a | no | well under 2 GB |
 | d1-Omni-2B | 🟢 b11960 or newer, partial | n/a | no | 2B, any card |
 | OpenJev | 🔴 unresolved | 🔴 | 🔴 | unknown |
 | Span-02 | n/a | n/a | 🟢 Respan, paid | n/a |
 
-The #225 assumption that none of these are llama-server backends is out of
-date: Kev, d1 and (per the PR) Laya load in stock llama-server, which already
-runs under the router on every node. That is why the design is a passthrough
-([ADR 0004](../adr/0004-decision-models-pass-system-one-through.md)).
+The sources say Kev, d1 and (per the PR) Laya load in stock llama-server,
+which already runs under the router on every node. Until the Kev smoke test
+runs, the #225 assumption that none of them are llama-server backends stands
+(verify). The passthrough design
+([ADR 0004](../adr/0004-decision-models-pass-system-one-through.md)) rests on
+the published System One contract, not on llama-server.
 
 ## What #225 ships and what it leaves
 

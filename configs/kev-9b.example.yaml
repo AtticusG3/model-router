@@ -2,8 +2,9 @@
 # this file. Copy the stanza into a node's config when the rollout ticket runs.
 #
 # Kev-9B is a prefill-only decision model (System One API, POST /v1/systemone).
-# llama-server serves it from a GGUF since upstream llama.cpp PR #29818; no
-# extra flag is needed, the server picks decision mode from the GGUF metadata.
+# The sources say llama-server serves it from a GGUF since upstream llama.cpp
+# PR #29818, picking decision mode from the GGUF metadata with no extra flag.
+# Unverified: the smoke test in deploy/backends.md has not run yet.
 # Weights: the BF16 file from the ggml-org/Kev-9B-GGUF repo, downloaded by hand
 # (the router never downloads at request time). File name and vram_mb are
 # estimates until the smoke test in deploy/backends.md is run (verify).
