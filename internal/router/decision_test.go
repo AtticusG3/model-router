@@ -281,6 +281,26 @@ func TestDecisionGzipReply(t *testing.T) {
 	}
 }
 
+// The Transport decodes only the gzip it asked for. A reply in any other
+// encoding (here br, unasked) cannot be shape-checked, so it passes through
+// untouched rather than becoming a 502.
+func TestDecisionEncodedReplyUnasked(t *testing.T) {
+	const encoded = "\x1b\x00opaque-brotli-bytes"
+	backend := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "br")
+		_, _ = io.WriteString(w, encoded)
+	})
+	_, h := speechNode(t, "stanzas:"+kevStanza(""), backend)
+	req := httptest.NewRequest(http.MethodPost, "/v1/systemone", strings.NewReader(kevRequest))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != encoded {
+		t.Fatalf("status %d, want 200 with the encoded reply passed through", rec.Code)
+	}
+}
+
 // A null confidence is absent, not 0: it must not pin the row's lowest.
 func TestDecisionStatsNullConfidence(t *testing.T) {
 	d := decisionStats([]byte(kevRequest), []byte(`{"answers":{"intent":{"type":"choice","choice":"refund","confidence":0.78},"urgent":{"type":"noul","noul":0.98,"confidence":null}}}`))

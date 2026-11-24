@@ -82,6 +82,11 @@ func checkDecisionReply(model string) func(*http.Response) error {
 		if resp.StatusCode/100 != 2 {
 			return nil
 		}
+		// The Transport decodes only the gzip it asked for; any other encoding
+		// cannot be shape-checked, so it passes through untouched.
+		if enc := resp.Header.Get("Content-Encoding"); enc != "" && enc != "identity" {
+			return nil
+		}
 		raw, err := io.ReadAll(io.LimitReader(resp.Body, maxDecisionReply+1))
 		resp.Body.Close()
 		if err != nil {

@@ -941,7 +941,9 @@ candidates and their licences are in
   values (`choice`, `score`, `noul`, options, rubrics) are the backend's to
   judge. The body reaches the backend byte for byte.
 - **Reply check.** A `2xx` reply must be a JSON object with an `answers`
-  object (up to 1 MB); anything else is a `502` naming the model. A good reply
+  object (up to 1 MB); anything else is a `502` naming the model. The router
+  drops the client's `Accept-Encoding` so a gzipped reply arrives decoded; a
+  reply in any other `Content-Encoding` passes through unchecked. A good reply
   reaches the client byte for byte, so `probabilities`, `confidence`, `noul`,
   `usage` and any latency field the backend adds survive unchanged. Any other
   status, `402` and `403` included, reaches the client once: no retry and no
