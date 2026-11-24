@@ -58,6 +58,10 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 		"window.sendEmbedding", "/v1/embeddings", "api_type==='embedding'",
 		`id="pg-tab-rerank"`, `id="pg-rerank"`, `id="rerank-model"`, `id="rerank-output"`,
 		"window.sendRerank", "/v1/rerank", "api_type==='rerank'",
+		`id="pg-tab-decision"`, `id="pg-decision"`, `id="decision-model"`, `id="decision-output"`,
+		"window.sendDecision", "/v1/systemone", "api_type==='decision'", "No decision models available",
+		"No decision model is available. Add a stanza with api_type: decision.",
+		"m.api_type!=='image'&&m.api_type!=='decision'",
 		`id="pg-tab-speech"`, `id="pg-speech"`, `id="speech-model"`, `id="speech-output"`,
 		"window.sendSpeech", "/v1/audio/speech", "api_type==='speech'",
 		`id="pg-tab-transcription"`, `id="pg-transcription"`, `id="transcribe-model"`, `id="transcribe-output"`,
@@ -81,7 +85,7 @@ func TestEmbeddedUIPlaygroundTabs(t *testing.T) {
 // never reaches browser storage, so a reload clears it. sessionStorage only
 // holds the running video job id.
 func TestEmbeddedUIPlaygroundHistory(t *testing.T) {
-	tabs := []string{"chat", "image", "embeddings", "rerank", "speech", "transcription", "video", "audiogen", "load", "realtime"}
+	tabs := []string{"chat", "image", "embeddings", "rerank", "decision", "speech", "transcription", "video", "audiogen", "load", "realtime"}
 	if n := strings.Count(webUIHTML, `role="tabpanel"`); n != len(tabs) {
 		t.Errorf("found %d Playground tab panels, the history check covers %d", n, len(tabs))
 	}
@@ -325,7 +329,7 @@ func TestEmbeddedUIActivityPathFilter(t *testing.T) {
 			t.Errorf("embedded UI missing %q", want)
 		}
 	}
-	for _, g := range []string{"images", "embed", "completions", "audio", "video", "realtime", "other"} {
+	for _, g := range []string{"images", "embed", "completions", "audio", "video", "realtime", "decision", "other"} {
 		if !strings.Contains(webUIHTML, `data-group="`+g+`" aria-pressed="false"`) {
 			t.Errorf("group %s is missing or on by default", g)
 		}

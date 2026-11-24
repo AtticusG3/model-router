@@ -110,6 +110,9 @@ type ActivityEntry struct {
 	// Media replaces the token stats on an audio, video, realtime or voice
 	// library row; nil on every other row.
 	Media *MediaStats `json:"media,omitempty"`
+	// Decision is set on a successful /v1/systemone row: the question count,
+	// each answer and the lowest confidence. The row keeps its token stats.
+	Decision *DecisionStats `json:"decision,omitempty"`
 	// JobID and JobState are set on an async job's row, written when the job
 	// ends: DurationMs then runs from submit to that end state.
 	JobID    string `json:"job_id,omitempty"`
@@ -1208,7 +1211,7 @@ var generationPathSuffixes = []string{
 	"/images/generations", "/images/edits", "/images/variations",
 	"/audio/speech", "/audio/transcriptions", "/audio/translations",
 	"/audio/speech/batch", "/audio/generations", "/videos",
-	"/txt2img", "/img2img",
+	"/txt2img", "/img2img", "/systemone",
 }
 
 // isVoiceAdmin reports whether a request writes to or deletes from the voice
@@ -1291,6 +1294,9 @@ func (r *Router) recordProxy(req *http.Request, rec *activityWriter, started tim
 	logged := rec.ws != nil || isGenerationRequest(req.Method, req.URL.Path) || isVoiceAdmin(req.Method, req.URL.Path)
 	if logged {
 		entry.Media = mediaStats(req, rec, reqBody, reqBytes, entry.DurationMs)
+		if status < 300 && pathAPIType(req.URL.Path) == config.APITypeDecision {
+			entry.Decision = decisionStats(reqBody, rec.body.Bytes())
+		}
 	}
 	// Metrics see every proxied request, even when the activity ring is
 	// disabled or filters the row out.

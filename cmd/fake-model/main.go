@@ -3,8 +3,8 @@
 // enough of the API surface: /health, /v1/models, /v1/chat/completions
 // (streaming + non-streaming), /v1/embeddings, /v1/rerank, /sdapi/v1/txt2img,
 // /v1/audio/* (speech, transcriptions, translations, voices, generations),
-// /v1/realtime (websocket echo), and the /v1/videos job API (plus the same
-// jobs through sd-server's /sdcpp/v1 shape).
+// /v1/realtime (websocket echo), the /v1/videos job API (plus the same jobs
+// through sd-server's /sdcpp/v1 shape), and /v1/systemone decisions.
 package main
 
 import (
@@ -117,6 +117,55 @@ func (f *fakeModel) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/audio/generations/{id}", f.getJob)
 	mux.HandleFunc("GET /v1/audio/generations/{id}/content", f.jobContent("audio/mpeg"))
 	mux.HandleFunc("DELETE /v1/audio/generations/{id}", f.deleteJob)
+	mux.HandleFunc("POST /v1/systemone", f.systemOne)
+}
+
+// systemOne answers a System One decision request (state plus named, typed
+// questions) the way a decision model does: one answer per question with a
+// probability per option, and no generated tokens. The numbers are fixed so a
+// test can check them; the first option always wins.
+func (f *fakeModel) systemOne(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		State     any `json:"state"`
+		Questions map[string]struct {
+			Type    string   `json:"type"`
+			Options []string `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.State == nil || len(body.Questions) == 0 {
+		http.Error(w, "want a state and named questions", http.StatusBadRequest)
+		return
+	}
+	answers := map[string]any{}
+	for name, q := range body.Questions {
+		switch q.Type {
+		case "choice":
+			if len(q.Options) == 0 {
+				http.Error(w, "choice question "+name+" has no options", http.StatusBadRequest)
+				return
+			}
+			probs := map[string]float64{q.Options[0]: 1}
+			if n := len(q.Options) - 1; n > 0 {
+				probs[q.Options[0]] = 0.7
+				for _, o := range q.Options[1:] {
+					probs[o] = 0.3 / float64(n)
+				}
+			}
+			answers[name] = map[string]any{"type": "choice", "choice": q.Options[0], "confidence": 0.6, "probabilities": probs}
+		case "score":
+			answers[name] = map[string]any{"type": "score", "score": 1.0, "confidence": 0.5,
+				"probabilities": map[string]float64{"0": 0.25, "1": 0.5, "2": 0.25}}
+		case "noul":
+			answers[name] = map[string]any{"type": "noul", "noul": 0.9}
+		default:
+			http.Error(w, "question "+name+" has unknown type "+q.Type, http.StatusBadRequest)
+			return
+		}
+	}
+	writeJSON(w, map[string]any{
+		"model": f.model, "answers": answers,
+		"usage": map[string]int{"input_tokens": 64, "output_tokens": 0},
+	})
 }
 
 func (f *fakeModel) health(w http.ResponseWriter, r *http.Request) {

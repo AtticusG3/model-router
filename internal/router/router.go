@@ -1465,6 +1465,13 @@ func (r *Router) serveLocalTarget(w http.ResponseWriter, req *http.Request, mode
 	}
 	incomingPeer := req.Header.Get("X-Model-Router-Peer") != ""
 	s := r.cfg().Stanza(modelID)
+	// A bad envelope is refused before it can cold-start the model or spill.
+	if isSystemOne(req, s) {
+		if err := checkSystemOneRequest(req, modelID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	// One admit budget for the whole local path: a sibling retry after the
 	// first slot wait times out must not start a second full wait.
 	if s != nil && s.APIType == config.APITypeSpeech && isSynthesis(req) {
@@ -2007,6 +2014,9 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			defer cancel()
 			req = req.WithContext(ctx)
 		}
+		if isSystemOne(req, s) {
+			req = req.WithContext(context.WithValue(req.Context(), decisionReplyKey{}, s.ModelID))
+		}
 	}
 	r.proxyJobAware(w, req, Target{Local: key}, m.proxy(), key, r.node)
 	return nil
@@ -2288,6 +2298,9 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 			}
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		},
+	}
+	if model, ok := req.Context().Value(decisionReplyKey{}).(string); ok {
+		proxy.ModifyResponse = checkDecisionReply(model)
 	}
 	// Tell any fronting proxy (nginx on gareth) not to buffer SSE.
 	w.Header().Set("X-Accel-Buffering", "no")

@@ -107,6 +107,9 @@ const (
 	// APITypeVideo is the async video job api_type.
 	APITypeVideo    = "video"
 	APITypeAudioGen = "audio_gen"
+	// APITypeDecision is a prefill-only decision model: a state and typed
+	// questions in, a probability per option out (ADR 0004).
+	APITypeDecision = "decision"
 
 	// JobAdapterOpenAI proxies the /v1/videos job API unchanged. JobAdapterSDCpp
 	// translates it onto sd-server's /sdcpp/v1 job API.
@@ -139,6 +142,13 @@ const (
 // CloneModes is every value a stanza's clone_mode may take.
 var CloneModes = []string{CloneModeRefAudio, CloneModeSpeakerRefB64}
 
+// DecisionStyleSystemOne is the System One wire shape (POST /v1/systemone),
+// passed through unchanged.
+const DecisionStyleSystemOne = "systemone"
+
+// DecisionStyles is every value a stanza's decision_style may take.
+var DecisionStyles = []string{DecisionStyleSystemOne}
+
 // Job selects the adapter in front of a stanza's own async job API. Empty
 // adapter means openai (the backend already speaks /v1/videos).
 type Job struct {
@@ -150,6 +160,7 @@ type Job struct {
 var APITypes = []string{
 	APITypeChat, APITypeEmbedding, APITypeRerank, APITypeImage,
 	APITypeSpeech, APITypeTranscription, APITypeRealtime, APITypeVideo, APITypeAudioGen,
+	APITypeDecision,
 }
 
 // Capabilities are the optional capability flags a stanza may declare. The
@@ -340,6 +351,9 @@ type Stanza struct {
 	// reference in: ref_audio (data URI plus ref_text) or speaker_ref_b64
 	// (raw base64 plus lang). Empty means ref_audio.
 	CloneMode string `yaml:"clone_mode"`
+	// DecisionStyle is the wire contract a decision backend speaks. Only
+	// api_type: decision may set it; empty means systemone.
+	DecisionStyle string `yaml:"decision_style"`
 
 	// InstancePorts holds the backend port of each instance; [0] is Port.
 	// Derived by Parse from MaxInstances.
@@ -1010,6 +1024,17 @@ func Parse(raw []byte) (*Config, error) {
 			}
 		} else if s.APIType == APITypeSpeech {
 			s.CloneMode = CloneModeRefAudio
+		}
+		if s.DecisionStyle != "" {
+			if s.APIType != APITypeDecision {
+				return nil, fmt.Errorf("stanza %q: decision_style is only valid with api_type: decision", s.ModelID)
+			}
+			if !slices.Contains(DecisionStyles, s.DecisionStyle) {
+				return nil, fmt.Errorf("stanza %q: decision_style %q is not valid; must be one of %s",
+					s.ModelID, s.DecisionStyle, strings.Join(DecisionStyles, ", "))
+			}
+		} else if s.APIType == APITypeDecision {
+			s.DecisionStyle = DecisionStyleSystemOne
 		}
 		for _, rw := range s.PathRewrite {
 			if !strings.HasPrefix(rw.From, "/") || !strings.HasPrefix(rw.To, "/") {
