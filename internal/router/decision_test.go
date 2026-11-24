@@ -313,6 +313,15 @@ func TestDecisionStatsNullConfidence(t *testing.T) {
 	}
 }
 
+// An answer without a type still shows its value: the first of choice, score
+// or noul it carries.
+func TestDecisionStatsUntypedAnswer(t *testing.T) {
+	d := decisionStats(nil, []byte(`{"answers":{"refund":{"choice":"yes","confidence":0.8},"urgent":{"noul":0.98}}}`))
+	if d == nil || d.Outcome != "refund=yes, urgent=0.98" {
+		t.Fatalf("stats %+v, want outcome refund=yes, urgent=0.98", d)
+	}
+}
+
 // A System One body reaches the backend unchanged. A wrong envelope is a 400
 // naming the model and the fault, and the backend never sees it.
 func TestDecisionSystemOneShape(t *testing.T) {

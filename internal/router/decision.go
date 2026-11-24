@@ -133,6 +133,11 @@ func decisionStats(reqBody, respBody []byte) *DecisionStats {
 		a := reply.Answers[name]
 		var typ string
 		_ = json.Unmarshal(a["type"], &typ)
+		for _, k := range []string{"choice", "score", "noul"} { // no usable type: the first value present
+			if a[typ] == nil {
+				typ = k
+			}
+		}
 		parts = append(parts, name+"="+strings.Trim(string(a[typ]), `"`))
 		var c *float64 // a JSON null stays nil: absent, not 0
 		if json.Unmarshal(a["confidence"], &c) == nil && c != nil && (d.Confidence == nil || *c < *d.Confidence) {
