@@ -2263,6 +2263,11 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 				r.URL.Path, r.URL.RawPath = p, ""
 			}
 			r.URL.RawQuery = req.URL.RawQuery
+			// The System One reply check reads the body, so let the Transport
+			// negotiate gzip itself and hand back a decoded reply.
+			if _, ok := req.Context().Value(decisionReplyKey{}).(string); ok {
+				r.Header.Del("Accept-Encoding")
+			}
 			// This router is the browser trust boundary. It vouches only for a
 			// request with no Origin (a non-browser client) or one from its own
 			// /ui/ page (Origin host equals the request host). Those lose the

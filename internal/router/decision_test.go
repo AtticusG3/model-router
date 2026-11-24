@@ -1,6 +1,7 @@
 package router
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -252,6 +253,43 @@ func TestDecisionCalibrationPassthrough(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("reply lost %s", want)
 		}
+	}
+}
+
+// A client that asks for gzip still gets a good reply: the backend's gzipped
+// answer is decoded before the shape check, not refused as malformed.
+func TestDecisionGzipReply(t *testing.T) {
+	backend := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if !strings.Contains(req.Header.Get("Accept-Encoding"), "gzip") {
+			_, _ = io.WriteString(w, kevReply)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		zw := gzip.NewWriter(w)
+		_, _ = io.WriteString(zw, kevReply)
+		_ = zw.Close()
+	})
+	_, h := speechNode(t, "stanzas:"+kevStanza(""), backend)
+	req := httptest.NewRequest(http.MethodPost, "/v1/systemone", strings.NewReader(kevRequest))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != kevReply {
+		t.Fatalf("status %d body %q, want the decoded reply", rec.Code, rec.Body.String())
+	}
+}
+
+// A null confidence is absent, not 0: it must not pin the row's lowest.
+func TestDecisionStatsNullConfidence(t *testing.T) {
+	d := decisionStats([]byte(kevRequest), []byte(`{"answers":{"intent":{"type":"choice","choice":"refund","confidence":0.78},"urgent":{"type":"noul","noul":0.98,"confidence":null}}}`))
+	if d == nil || d.Confidence == nil || *d.Confidence != 0.78 {
+		t.Fatalf("stats %+v, want confidence 0.78", d)
+	}
+	d = decisionStats(nil, []byte(`{"answers":{"urgent":{"type":"noul","noul":0.98,"confidence":null}}}`))
+	if d == nil || d.Confidence != nil {
+		t.Fatalf("stats %+v, want no confidence", d)
 	}
 }
 

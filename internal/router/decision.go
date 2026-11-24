@@ -129,9 +129,9 @@ func decisionStats(reqBody, respBody []byte) *DecisionStats {
 		var typ string
 		_ = json.Unmarshal(a["type"], &typ)
 		parts = append(parts, name+"="+strings.Trim(string(a[typ]), `"`))
-		var c float64
-		if json.Unmarshal(a["confidence"], &c) == nil && (d.Confidence == nil || c < *d.Confidence) {
-			d.Confidence = &c
+		var c *float64 // a JSON null stays nil: absent, not 0
+		if json.Unmarshal(a["confidence"], &c) == nil && c != nil && (d.Confidence == nil || *c < *d.Confidence) {
+			d.Confidence = c
 		}
 	}
 	d.Outcome = clipRunes(strings.Join(parts, ", "), 200)
