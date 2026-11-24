@@ -1,6 +1,6 @@
 # Model Router: SPEC
 
-> **Last reviewed:** 2026-11-22
+> **Last reviewed:** 2026-11-25
 
 Internal tool. Not a public repo. Replaces llama-swap fleet-wide (Nomad, Buster,
 Nugget, Digger, Gareth's homelab). One static binary, same build on every node.
@@ -202,6 +202,12 @@ stanzas:
     path_rewrite:          # optional; the backend's own path for a client path
       - {from: /v1/audio/transcriptions, to: /inference}
 
+  - model_id: kev-9b
+    command: "/opt/ai/bin/llama-server --model /opt/ai/models/decision/Kev-9B-BF16.gguf --port {port}"
+    vram_mb: 22000
+    api_type: decision
+    decision_style: systemone  # decision only; systemone (the default) is the one value
+
 pools:
   embed-pool:
     strategy: spillover    # the only strategy
@@ -234,7 +240,7 @@ with neither matches JSON field `model`. The matcher always understands
 stanzas may share one `path_prefix`; at most one of them is `path_default`.
 
 `api_type` is one of `chat`, `embedding`, `rerank`, `image`, `speech`,
-`transcription`, `realtime`, `video`, `audio_gen`. Empty means `chat`. An
+`transcription`, `realtime`, `video`, `audio_gen`, `decision`. Empty means `chat`. An
 unknown value is a load error that lists the valid values, so a typo is caught
 by `-check` instead of silently hiding the model. `-check` prints the type per
 stanza.
@@ -459,6 +465,7 @@ API paths:
 | `image` | `/v1/images/*`, `/sdapi/v1/*` |
 | `embedding` | `/v1/embeddings` |
 | `rerank` | `/v1/rerank` |
+| `decision` | `/v1/systemone` (and its `/permute` and `/separate` variants) |
 
 When a request reaches one of those paths with no `model`, the router serves it
 with the stanza of that type marked `path_default: true`, or with the only
@@ -511,6 +518,11 @@ a library voice: `ref_audio` (the default) sends a `data:audio/wav;base64,...`
 URI plus `ref_text`, and `speaker_ref_b64` sends raw base64 plus `lang`. An
 unknown value, or `clone_mode` on another api_type, is a load error. See Voice
 library under Speech.
+
+`decision_style` (a decision stanza only) is the wire contract the backend
+speaks. `systemone` (the default, and the only value) is the System One API
+passed through unchanged. An unknown value, or `decision_style` on another
+api_type, is a load error that names the stanza. See Decision models.
 
 Before a request goes to a peer, its model field (the peer's `body_field`) is
 set to the peer's id in JSON, urlencoded and multipart bodies, and so is a
@@ -907,6 +919,41 @@ rewrite:
   a local instance. Activity and metrics keep the client's path. A peer gets
   the client's path and applies its own rewrite.
 
+## Decision models
+
+`api_type: decision` serves a prefill-only decision model: a state and named,
+typed questions in, a probability per option out, no generated text. The
+contract is the System One API, `POST /v1/systemone`, passed through unchanged
+([ADR 0004](docs/adr/0004-decision-models-pass-system-one-through.md)).
+llama-server serves Kev-9B and d1-Omni-2B on that route from a GGUF; the
+candidates and their licences are in
+[docs/research/decision-models.md](docs/research/decision-models.md).
+`configs/kev-9b.example.yaml` is the example stanza.
+
+- **Routing.** By the JSON `model` field (id or alias), else the
+  `path_default` decision stanza, else the only one. `peer/model`, slot spill
+  and peer spill work as for any stanza; the peer's model field is rewritten
+  and nothing else.
+- **Request check.** On a local decision stanza, `POST /v1/systemone` must be
+  `application/json`, a JSON object with a `state` and a non-empty
+  `questions` object whose entries each carry a `type`. Anything else is a
+  `400` naming the model and the fault, sent before the model is loaded. The
+  values (`choice`, `score`, `noul`, options, rubrics) are the backend's to
+  judge. The body reaches the backend byte for byte.
+- **Reply check.** A `2xx` reply must be a JSON object with an `answers`
+  object (up to 1 MB); anything else is a `502` naming the model. A good reply
+  reaches the client byte for byte, so `probabilities`, `confidence`, `noul`,
+  `usage` and any latency field the backend adds survive unchanged. Any other
+  status, `402` and `403` included, reaches the client once: no retry and no
+  peer walk.
+- **Other routes.** `/v1/systemone/permute` and `/v1/systemone/separate` route
+  to the decision stanza but are not checked.
+- **Activity.** A `2xx` `/v1/systemone` row carries `decision`: `questions`
+  (the count sent), `outcome` (`name=answer` per answer, by name, the value as
+  the model wrote it) and `confidence` (the lowest any answer reported, absent
+  when none did). The row keeps its token stats. Bodies are captured like any
+  other JSON row.
+
 ## Placement
 
 `device` says which GPUs a stanza may use:
@@ -1202,7 +1249,8 @@ id, state, length; the submit response only), realtime (one row per session,
 written when the websocket closes, with frames each way and the close code),
 and `admin` for `POST /v1/audio/voices` and `DELETE /v1/audio/voices/{id}`.
 `/metrics` adds `model_router_media_requests_total` and
-`model_router_media_seconds_total` per `api_type`.
+`model_router_media_seconds_total` per `api_type`. A decision row carries a
+`decision` summary next to its token stats (see Decision models).
 It resets on restart. Authorization and cookie headers are not stored.
 
 **Catalog metadata.** Catalog rows are filled from the model's own repo on

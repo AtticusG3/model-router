@@ -4,6 +4,10 @@ The mesh that places a request on a node which can run the named model.
 
 ## Language
 
+**Decision model**:
+A model that reads a state and named, typed questions in one forward pass and returns a probability per option instead of generated text; a stanza serves one as `api_type: decision`.
+_Avoid_: classifier, judge, chat model
+
 **Headroom**:
 Memory on each GPU that admission will not book.
 _Avoid_: reservation, reserve, overhead, margin

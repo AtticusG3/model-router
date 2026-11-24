@@ -759,7 +759,7 @@ func TestDecisionConfigValidation(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ yaml, want string }{
-		{"api_type: decision, decision_style: openai", `stanza "kev-9b": decision_style "openai" is not valid; must be one of systemone`},
+		{"api_type: decision, decision_style: native", `stanza "kev-9b": decision_style "native" is not valid; must be one of systemone`},
 		{"api_type: chat, decision_style: systemone", `stanza "kev-9b": decision_style is only valid with api_type: decision`},
 		{"api_type: decisions", `stanza "kev-9b": api_type "decisions" is not valid`},
 	} {
