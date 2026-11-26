@@ -12,6 +12,12 @@ listen: 127.0.0.1:18080
 start_port: 5801
 reserved_ports: [8081, 8082]
 
+catalog:
+  # Hub links: the stanza's hf_repo gives the repo; the hub fills in owner,
+  # params, licence and the icon, and the cache keeps those across restarts.
+  hub: huggingface
+  cache_file: /opt/ai/config/hub-cache.json
+
 telemetry:
   poll_seconds: 2
   peer_sync_seconds: 5
@@ -22,6 +28,7 @@ preload: []
 stanzas:
   - model_id: qwen2.5-1.5b-instruct
     name: "Qwen2.5 1.5B Instruct (intent router)"
+    hf_repo: Qwen/Qwen2.5-1.5B-Instruct
     aliases: [llm-intent-router-waldron, intent-model, intent-router]
     command: >
       /opt/ai/bin/llama-server
@@ -146,6 +153,7 @@ stanzas:
   - model_id: krea-2-turbo
     capabilities: [img2img]
     name: "Krea 2.0 Turbo"
+    hf_repo: krea/Krea-2-Turbo
     command: >
       /opt/ai/bin/sd-server
       --diffusion-model /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/sd-cpp-models/krea2/Krea-2-Turbo-Q8_0.gguf
@@ -168,8 +176,9 @@ stanzas:
     port: 5821
 
   - model_id: z-anime-turbo
-    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
+    capabilities: []  # img2img off until #203 is fixed: Z-Image img2img crashes sd-server
     name: "Z-Anime Turbo (8-step GGUF)"
+    hf_repo: SeeSee21/Z-Anime
     aliases: [z-anime, z-anime-waldron]
     command: >
       /opt/ai/bin/sd-server
@@ -237,8 +246,9 @@ stanzas:
     port: 5824
 
   - model_id: z-image-juggernaut-fast
-    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
+    capabilities: []  # img2img off until #203 is fixed: Z-Image img2img crashes sd-server
     name: "Waldron Juggernaut Z Fast (4-step GGUF)"
+    hf_repo: Tongyi-MAI/Z-Image-Turbo
     aliases: [juggernaut-z-waldron]
     command: >
       /opt/ai/bin/sd-server
@@ -264,8 +274,9 @@ stanzas:
     port: 5825
 
   - model_id: z-image
-    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
+    capabilities: []  # img2img off until #203 is fixed: Z-Image img2img crashes sd-server
     name: "Waldron Z Image base (Q8 GGUF)"
+    hf_repo: Tongyi-MAI/Z-Image-Turbo
     aliases: [z-image-waldron]
     command: >
       /opt/ai/bin/sd-server
@@ -293,6 +304,7 @@ stanzas:
   - model_id: flux2-klein
     capabilities: [img2img]
     name: "Flux.2 Klein (Waldron)"
+    hf_repo: black-forest-labs/FLUX.2-klein-9B
     aliases: [flux2-klein-waldron]
     command: >
       /opt/ai/bin/sd-server
@@ -318,6 +330,7 @@ stanzas:
   - model_id: flux3-klein
     capabilities: [img2img, inpaint]
     name: "Flux.3 Image Klein"
+    hf_repo: black-forest-labs/flux-3-image-klein
     aliases: [flux3-klein-waldron]
     command: >
       /opt/ai/bin/sd-server
@@ -345,6 +358,7 @@ stanzas:
   - model_id: fibo-2.0-edit-turbo
     capabilities: [img2img, inpaint]
     name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
+    hf_repo: briaai/Fibo-2.0-edit-turbo
     aliases: [fibo-2.0, fibo-edit-turbo]
     command: >
       /opt/ai/bin/sd-router-shim {port} --
@@ -403,6 +417,7 @@ stanzas:
 
   - model_id: qwen3.8-flash-next-iq2_xs
     name: "Qwen3.8 Flash-Next 125B A6B IQ2_XS (Strata, 256k, uncensored cvec)"
+    hf_repo: Qwen/Qwen3.8-Flash-Next
     aliases: [flash-next-iq2xs, qwen38-flash-next-iq2xs, qwen3.8-flash-next-iq2-xs]
     command: >
       /srv/dev-disk-by-uuid-abf69297-f944-4276-b8b1-5ef03fcdc8e8/strata-0.2.10/.venv/bin/python
@@ -427,10 +442,6 @@ peers:
   - name: buster
     kind: router
     base_url: http://203.0.113.77:18080
-    models: [qwen38-flash-next, qwen3-0.6b-instruct, qwen3-embedding-4b, jina-reranker-v3.5,
-             krea-2-turbo, krea-character-creator, krea2-ostris-edit, z-anime-turbo, ideogram4,
-             qwen-image-2.1, flux3-klein, fibo-2.0-edit-turbo]
   - name: nomad
     kind: router
     base_url: http://203.0.113.127:8081
-    models: [qwen3.5-9b]

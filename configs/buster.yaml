@@ -52,22 +52,29 @@ reserved_ports: [8081, 6333, 18095, 18096, 18097, 8082, 18099, 18100,
                  5939, 5940, 5941, 5942, 5943, 5944, 5945, 5946, 5947,
                  5948, 5949]
 
+catalog:
+  # Hub links: the stanza's hf_repo gives the repo; the hub fills in owner,
+  # params, licence and the icon, and the cache keeps those across restarts.
+  hub: huggingface
+  cache_file: /opt/ai/config/hub-cache.json
+
 telemetry:
   poll_seconds: 2
   peer_sync_seconds: 5
   peer_stale_seconds: 15
 
-preload: [qwen3-embedding-4b, qwen38-flash-next]
+preload: [qwen38-flash-next]
 
 stanzas:
-  - model_id: qwen38-flash-next
+  - model_id: qwen38-flash-next-v30
     # v3.1 (Q4_XS, 4 shards) was rolled back to v3.0 on 13 Nov 2026: tool calling
     # failed on the v3.1 quant, suspected to be the Q2 tensors packed inside a
     # Q4_XS build. Do not point this stanza at v3.1 again without re-testing tool
     # calls end to end. The v3.1 pack and model dir are deleted; only v3.0 remains.
     # Name change takes effect on the next model-router restart, not on reload.
     name: "Qwen3.8 Flash-Next 125B A6B UD-IQ4_XS Dynamic v3.0 (Strata-V100, 256k, dual V100)"
-    aliases: [qwen3.8-flash-next]
+    hf_repo: Qwen/Qwen3.8-Flash-Next
+    aliases: [flash-next-v30]
     command: >
       taskset -c 14-26,42-54
       /home/kevyn/infra/Strata-V100-102a14df/.venv/bin/python
@@ -89,8 +96,41 @@ stanzas:
     unlisted: false
     port: 5927
 
+  # Swift 1.5 Qwen3.8 Flash-Next (GSQ-RCO IQ3_S, 83.7 GB, 2 shards) on the dual
+  # V100s: a second 125B-A6B for the same cards as qwen38-flash-next. The two
+  # cannot be resident together (each takes both V100s), so this stanza is NOT
+  # preloaded and keeps ttl 0 + pin false: whichever model is asked for takes the
+  # cards and the other reloads on its next request. No --mtp (the IQ3_S shards
+  # ship zero predict tensors) and no Huihui control vector (that refusal
+  # direction is tuned for qwen38-flash-next, not this fine-tune).
+  # Its PLE (n-gram) table is served from the NVMe via --ple-gguf -- the shards
+  # themselves are on the sda XFS device, and PLE reads are unbuffered and sit on
+  # the token path. Vision: Swift's own mmproj on the 3090 (vision.cuda_device 0).
+  - model_id: qwen38-flash-next
+    name: "Swift 1.5 Qwen3.8 Flash-Next 125B A6B GSQ-RCO IQ3_S (Strata-V100, 256k, dual V100)"
+    hf_repo: ukisai/Swift-1.5-Qwen3.8-Flash-Next-GSQ-RCO-GGUF
+    aliases: [swift15-iq3s, swift15, swift-1.5-qwen3.8-flash-next, qwen3.8-flash-next]
+    command: >
+      taskset -c 14-26,42-54
+      /home/kevyn/infra/Strata-V100-102a14df/.venv/bin/python
+      /home/kevyn/infra/Strata-V100-102a14df/serve/server.py
+      --engine strata --config /home/kevyn/infra/Strata-V100-102a14df/deploy/swift15-iq3s.json
+      --port {port}
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID"]
+    vram_mb: 55000
+    device: "0,1"
+    spin_up_seconds: 420
+    api_type: chat
+    match: {body_field: model}
+    health_check: /health
+    idle_ttl_seconds: 0
+    pin: true
+    unlisted: false
+    port: 5928
+
   - model_id: qwen3-0.6b-instruct
     name: "Qwen3 0.6B Instruct (intent)"
+    hf_repo: Qwen/Qwen3-0.6B
     aliases: [intent-model, intent-router]
     command: >
       /opt/ai/bin/llama-server
@@ -116,6 +156,7 @@ stanzas:
 
   - model_id: qwen3-embedding-4b
     name: "Qwen3 Embedding 4B"
+    hf_repo: Qwen/Qwen3-Embedding-4B
     aliases: [embed-pool]
     command: >
       /opt/ai/bin/llama-server
@@ -139,6 +180,7 @@ stanzas:
 
   - model_id: jina-reranker-v3.5
     name: "Jina Reranker v3.5"
+    hf_repo: jinaai/jina-reranker-v3.5
     aliases: [reranker-pool]
     command: >
       /opt/ai/bin/llama-server
@@ -163,6 +205,7 @@ stanzas:
   - model_id: krea-2-turbo
     capabilities: [img2img]
     name: "Krea 2.0 Turbo (text-to-image, Q8_0)"
+    hf_repo: krea/Krea-2-Turbo
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
       --listen-ip 127.0.0.1
@@ -246,8 +289,9 @@ stanzas:
     port: 18100
 
   - model_id: z-anime-turbo
-    # No img2img until a patched sd-server includes Z-Image ref tokens in PE (#203).
+    capabilities: []  # img2img off until #203 is fixed: Z-Image img2img crashes sd-server
     name: "Z-Anime Turbo (8-step distill)"
+    hf_repo: SeeSee21/Z-Anime
     aliases: [z-anime]
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -277,6 +321,7 @@ stanzas:
   - model_id: ideogram4
     capabilities: [img2img]
     name: "Ideogram 4"
+    hf_repo: ideogram-ai/ideogram-4-fp8
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
       --listen-ip 127.0.0.1
@@ -308,6 +353,7 @@ stanzas:
   - model_id: qwen-image-2.1
     capabilities: [img2img, inpaint]
     name: "Qwen Image 2.1 (official Q8_0, t2i + edit)"
+    hf_repo: Qwen/Qwen-Image-2.1
     aliases: [qwen-image-2.1-uncensored, qwen21-uncensored]
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -346,6 +392,7 @@ stanzas:
   - model_id: flux3-klein
     capabilities: [img2img, inpaint]
     name: "FLUX.3 Image Klein (distilled 16-step, Q8_0, t2i + edit)"
+    hf_repo: black-forest-labs/flux-3-image-klein
     aliases: [flux3, flux-3-klein]
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build/bin/sd-server
@@ -382,6 +429,7 @@ stanzas:
   - model_id: fibo-2.0-edit-turbo
     capabilities: [img2img, inpaint]
     name: "Fibo 2.0 Edit Turbo (INT8 ConvRot, 4-step edit)"
+    hf_repo: briaai/Fibo-2.0-edit-turbo
     aliases: [fibo-2.0, fibo-edit-turbo]
     command: >
       /home/kevyn/infra/stable-diffusion.cpp-fibo/build-sm86/bin/sd-server
@@ -425,6 +473,7 @@ stanzas:
   # router's match resolves the stanza and the value is otherwise unused.
   - model_id: whisper-large-v3-turbo
     name: "Whisper large-v3 Turbo (ggml Q5_0, STT)"
+    hf_repo: openai/whisper-large-v3-turbo
     aliases: [whisper-1, stt, transcription]
     command: >
       /opt/ai/bin/whisper-server
@@ -457,6 +506,7 @@ stanzas:
   # splitter drops double quotes.
   - model_id: qwen3-tts-1.7b
     name: "Qwen3-TTS 1.7B Base (voice clone, vLLM-Omni, speech)"
+    hf_repo: Qwen/Qwen3-TTS-12Hz-1.7B-Base
     command: >
       /opt/ai/venv-vllm-omni/bin/vllm serve /opt/ai/models/tts/Qwen3-TTS-12Hz-1.7B-Base
       --omni
@@ -533,6 +583,7 @@ stanzas:
   # + transformers 5.22.2 + huggingface_hub 2.4.0 generate normally.
   - model_id: kitten-tts-2
     name: "KittenTTS 2 (1.7B ternary, 115 voices, clone from 5-30 s)"
+    hf_repo: KittenML/kitten-tts-2
     command: >
       /usr/bin/env VIRTUAL_ENV=/opt/ai/venv-kitten
       PATH=/opt/ai/venv-kitten/bin:/usr/local/bin:/usr/bin:/bin
@@ -560,6 +611,7 @@ stanzas:
   # video/mp4) -- a WebM with PCM audio plays silent in browsers (#2233).
   - model_id: ltx-2.5-video
     name: "LTX-2.5 22B distilled (text/image to audio-video, sd.cpp)"
+    hf_repo: Lightricks/LTX-2.5
     command: >
       /home/kevyn/infra/stable-diffusion.cpp/build-video/bin/sd-server
       --diffusion-model /opt/ai/models/video/ltx-2.5/distilled/ltx-2.5-22b-distilled-Q5_K_M.gguf
@@ -601,6 +653,7 @@ stanzas:
   # need a second venv on cu128.
   - model_id: ace-step-music
     name: "ACE-Step 1.5 turbo (music, 10-600 s, 48 kHz stereo)"
+    hf_repo: ACE-Step/Ace-Step1.5
     command: >
       /usr/bin/env PORT={port} /home/kevyn/projects/model-router/deploy/acestep-shim/run.sh
     env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES=0", "HF_HOME=/opt/ai/hf/acestep"]
@@ -615,13 +668,47 @@ stanzas:
     slots: 1
     unlisted: false
     port: 5941
+  # SenseNova-U1.6 8B-MoT — text-to-image / image-editing (Apache-2.0), served by a local
+  # adapter over the reference SenseNova-U1 python runtime (~/projects/sensenova-u1-adapter),
+  # not by llama.cpp or sd.cpp. The official server route (LightLLM+LightX2V) is an
+  # H100-class Docker stack; this is the contained equivalent for one card.
+  # INT8 ConvRot W8A8 (18.87 GB) is the variant that fits a 24 GB 3090: its matmul is
+  # torch._int_mm, i.e. plain INT8 tensor cores. FP8 would need sm_89+ (the 3090 is sm_86).
+  # It needs ~19 GB of weights, so admission evicts the 3090's small residents to fit it;
+  # they reload on demand afterwards. device "0" pins it to the 3090 (the V100s stay with
+  # qwen38-flash-next). Traces to POST /sdapi/v1/txt2img; health is GET /v1/models.
+  - model_id: sensenova-u1.6-8b-mot
+    name: "SenseNova-U1.6 8B-MoT (text-to-image, INT8 ConvRot W8A8, RTX 3090)"
+    hf_repo: sensenova/SenseNova-U1.6-8B-MoT-Native
+    aliases: [sensenova-u1.6, sensenova-t2i]
+    command: >
+      /home/kevyn/projects/sensenova-u1-adapter/runtime/.venv/bin/python
+      /home/kevyn/projects/sensenova-u1-adapter/adapter/sensenova_server.py
+      --host 127.0.0.1 --port {port}
+      --model-path /home/kevyn/models/sensenova-u1.6-8b-mot-native/SenseNova-U1.6-INT8-ConvRot-W8A8.safetensors
+    env: ["CUDA_DEVICE_ORDER=PCI_BUS_ID", "CUDA_VISIBLE_DEVICES={gpu}"]
+    vram_mb: 22000
+    device: "0"
+    spin_up_seconds: 300
+    api_type: image
+    # The playground's image tab gates Edit on "img2img" and Outpaint on "inpaint"
+    # (internal/router/ui/app.js imageModeState). Without these the stanza
+    # publishes capabilities: [] and both modes are disabled in the UI even
+    # though the adapter serves them. The adapter's own /v1/models advertises
+    # [txt2img, img2img, edit, inpaint, outpaint]; the router only republishes
+    # what the stanza declares, so this list must be kept in step by hand.
+    capabilities: [img2img, inpaint]
+    match: {path_prefix: /sdapi/v1}
+    health_check: /v1/models
+    idle_ttl_seconds: 300
+    unlisted: false
+    port: 5929
+
 
 peers:
   - name: gareths-homelab
     kind: router
     base_url: http://203.0.113.44:8081
-    models: [qwen2.5-1.5b-instruct, qwen3.6-35b-a3b-genesis-hermes, agents-a1-mini, krea-2-turbo, z-anime-turbo]
   - name: nomad
     kind: router
     base_url: http://10.99.0.202:8081
-    models: [qwen3.5-9b]

@@ -10,6 +10,8 @@ Tags: `v0.1.0` (back-filled from the merges on `master` up to 2026-11-22, re-poi
 
 ### Changed
 
+- Tracked configs for buster, gareths-homelab, nomad and digger were regenerated from the live files. They keep `catalog:` and `hf_repo:`, drop the stale `peers[].models` lists, and digger matches its live 8GB two-stanza setup (`qwen3-0.6b-instruct`, `qwen3-vl-8b`). Buster gains `qwen38-flash-next-v30` and `sensenova-u1.6-8b-mot`. The normalised address-blind diff against each live file is empty (#223).
+- `docs/vram-fit-ladder.md`: the `model_id` catalog now includes those two buster stanzas. The Krea 2 and Z-Image research pages no longer treat digger's old community fine-tunes as present in the tracked fleet configs (#223).
 - Kev-9B smoke test on buster's RTX 3090 passed (`111.6 ms` p50 for 3 questions, `35.4 ms` p50 for 1 choice question, `16,532 MiB` VRAM). Updated `configs/kev-9b.example.yaml`, `deploy/backends.md`, `docs/research/decision-models.md`, ADR 0004, `SPEC.md` and `README.md` with the measured numbers, verified GGUF hash/revision, and the requirement to use `/home/kevyn/infra/llama.cpp-olala/build/bin/llama-server` because `/opt/ai/bin/llama-server` (`llama.cpp-unified`) lacks `/v1/systemone` (Refs #225).
 - Deploy docs now describe the fleet they deploy to: the four nodes that run the router, the binary/config pairing rule with its real failure message, the tracked-vs-live diff recipe, and a flowchart for the binary upgrade. The `model_id` catalog and the VRAM ladder's hardware note follow the live configs (#222).
 

@@ -62,6 +62,11 @@ func TestTrackedFilesCarryNoRealAddresses(t *testing.T) {
 			if skipDirs[info.Name()] {
 				return filepath.SkipDir
 			}
+			// Overlay dir is gitignored and holds real addresses after
+			// deploy/overlay-split.py. CI never has it; a local run might.
+			if filepath.ToSlash(rel) == "configs/local" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		if info.Size() > 2<<20 {

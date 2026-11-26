@@ -311,20 +311,24 @@ func TestValidCatalogFilesParse(t *testing.T) {
 // TestTrackedCaptionStanzasUseTheProfile pins the tracked stanzas each family
 // ticket enabled to their caption with an enhancer, and the Krea 2 and Qwen
 // edit variants the #207 and #208 research left off to no caption.
-// flux2-klein (#209) and flux3-klein (#210) are each in the two tracked
-// configs that carry them.
+// After #223, digger's tracked file matches its live 8GB two-stanza setup, so
+// z-anime-turbo and krea-2-turbo are each on buster and gareths-homelab, and
+// flux2-klein remains only on gareths-homelab. flux3-klein (#210) is still in
+// the two tracked configs that carry it. nugget still has unenhanced
+// z-anime-turbo and krea-2-turbo copies; that node was offline and was not
+// re-synced.
 func TestTrackedCaptionStanzasUseTheProfile(t *testing.T) {
 	files, _ := filepath.Glob("../../configs/*.yaml")
 	cases := []struct {
 		model, caption string
 		want           int
 	}{
-		{"z-anime-turbo", "z-anime", 3},
-		{"krea-2-turbo", "krea2", 3},
+		{"z-anime-turbo", "z-anime", 2},
+		{"krea-2-turbo", "krea2", 2},
 		{"fibo-2.0-edit-turbo", "fibo-2.0", 2},
 		{"krea-character-creator", "", 0},
 		{"krea2-ostris-edit", "", 0},
-		{"flux2-klein", "flux2-klein", 2},
+		{"flux2-klein", "flux2-klein", 1},
 		{"flux3-klein", "flux3-klein", 2},
 		{"qwen-image-2.1", "qwen-image-2.1", 1},
 		{"qwen-image-edit-2511", "", 0},
