@@ -231,50 +231,63 @@ it puts real addresses back into git, which is what #184/#195 removed. The
 ## 8. Decision models
 
 A decision model answers `POST /v1/systemone` (state plus named, typed
-questions in, probabilities out). The sources say Kev-9B runs in stock
-llama-server from a GGUF with a build that has llama.cpp PR #29818 (October
-2026 or newer); that is unverified until the steps below have run. It is
-a static binary in `/opt/ai/bin`, so there is no venv. Run the smoke test on
-the 24 GB RTX 3090 node: the BF16 file does not fit a 16 GB card.
+questions in, probabilities out). Upstream llama.cpp added `/v1/systemone` in
+PR #29818, and the smoke test on buster's RTX 3090 confirmed Kev-9B runs from a
+GGUF with no extra flag.
+
+On buster, `/opt/ai/bin/llama-server` points to `llama.cpp-unified`
+(`10881` / `1b7891845`), which does **not** include `/v1/systemone`. Use
+`/home/kevyn/infra/llama.cpp-olala/build/bin/llama-server` (`0.5.0-dev`, commit
+`55c22dc`) until `/opt/ai/bin/llama-server` is rebuilt on a post-PR-#29818
+base. Run the smoke test on the 24 GB RTX 3090 node: the BF16 file (17.9 GB,
+16,532 MiB VRAM used) does not fit a 16 GB card.
 
 | Item | Value |
 |---|---|
 | Card | `jaredpalmer/kev-9b`, revision `b5d8c18e` (v2, Kev 1.0) |
-| Weights | BF16 GGUF from `ggml-org/Kev-9B-GGUF`, by hand into `/opt/ai/models/decision/` |
+| Weights | `Kev-9B-BF16.gguf` (17,924,897,248 B, sha256 `7097686ceab17858c478644e14bee187b5bec775fe4fd6a14aaf02715a903f0a`) in `/opt/ai/models/decision/` |
+| Binary | `/home/kevyn/infra/llama.cpp-olala/build/bin/llama-server` (`0.5.0-dev`, commit `55c22dc`; `/opt/ai/bin/llama-server` lacks `/v1/systemone`) |
 | Stanza | `configs/kev-9b.example.yaml` |
-| p50 decision latency | ⚪ not measured yet: fill in after the steps below |
-| GGUF revision vs `b5d8c18e` | ⚪ not checked yet |
+| p50 decision latency | 🟢 `0.1116` s (111.6 ms) warm 3-question (`choice` + `score` + `noul`, batch 1, p95 `0.1124` s, N=25; `0.3282` s cold first pass); `0.0354` s (35.4 ms) warm single-question `choice` (p95 `0.0356` s, N=25); `16,532 MiB` VRAM on buster RTX 3090 |
+| GGUF revision vs `b5d8c18e` | 🟢 `.src_sha` is `db029f08` ("Kev 1.0 model card (weights unchanged)"), matching `b5d8c18e` weights |
 
 > **NOTICE:** Stop or evict whatever holds the card first. The router does
 > not download weights, so a missing file fails the start, not the request.
 
 ```bash
-# 1. the build knows decision models (the PR landed 2026-10-02)
-/opt/ai/bin/llama-server --version
+# 1. check the olala build (includes server-decision.cpp / /v1/systemone)
+/home/kevyn/infra/llama.cpp-olala/build/bin/llama-server --version
 
-# 2. start it by hand on a spare port and wait for /health
-/opt/ai/bin/llama-server --model /opt/ai/models/decision/Kev-9B-BF16.gguf \
-  --port 5960 --host 127.0.0.1 --n-gpu-layers 999 --ctx-size 16384 --parallel 1 &
+# 2. start it by hand on a spare port pinned to the RTX 3090 and wait for /health
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 \
+  /home/kevyn/infra/llama.cpp-olala/build/bin/llama-server \
+  --model /opt/ai/models/decision/Kev-9B-BF16.gguf \
+  --port 5960 --host 127.0.0.1 --n-gpu-layers 999 --ctx-size 16384 --parallel 1 --flash-attn on &
 until curl -sf http://127.0.0.1:5960/health; do sleep 2; done
 
-# 3. one decision (made-up state)
+# 3. one decision covering choice, score and noul (made-up state)
 curl -s http://127.0.0.1:5960/v1/systemone -H 'Content-Type: application/json' -d '{
   "model": "kev-9b",
   "state": "Order A-1001 arrived with a cracked lid; the customer asks for their money back.",
   "questions": {
-    "intent": {"type": "choice", "options": ["refund", "replace", "other"]},
+    "intent": {
+      "type": "choice",
+      "instructions": "Which outcome fits this customer message?",
+      "criteria": {"refund": null, "replace": null, "other": null}
+    },
+    "urgency": {
+      "type": "score",
+      "instructions": "How urgent is this request?",
+      "criteria": ["low", "medium", "high", "critical"]
+    },
     "urgent": {"type": "noul", "instructions": "The customer needs an answer today."}
   }}'
 
-# 4. stop the hand-started server, copy the kev-9b stanza into the node
-#    config, save step 3's body as decision.json, send it once to load the
-#    model, then time 50 warm decisions through the router and take the median
-for i in $(seq 50); do
+# 4. stop the hand-started server; when rolling out to a node config, copy the
+#    kev-9b stanza in, save step 3's body as decision.json, send it once to load
+#    the model, then time warm decisions through the router and take the median
+for i in $(seq 25); do
   curl -s -o /dev/null -w '%{time_total}\n' http://127.0.0.1:18080/v1/systemone \
     -H 'Content-Type: application/json' -d @decision.json
-done | sort -n | sed -n 25p
+done | sort -n | sed -n 13p
 ```
-
-Write the p50 (seconds, batch 1, warm) and `nvidia-smi` memory use into the
-table above and into the
-[research page](../docs/research/decision-models.md#latency-claims-and-what-they-measure).
