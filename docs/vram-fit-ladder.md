@@ -2,7 +2,7 @@
 
 # VRAM fit ladder
 
-> **Type:** Reference · **Audience:** operators writing stanzas · **Last reviewed:** 2026-11-22
+> **Type:** Reference · **Audience:** operators writing stanzas · **Last reviewed:** 2026-11-26
 
 How to write a stanza for a given weight file so the fleet shares one
 `model_id` per model (different quants of the same weight family are the
@@ -155,7 +155,8 @@ done
 ```
 
 nugget is offline (no ping reply, 2026-11-22), so its column is missing; its
-installed config still carries the V100 LLM stanzas.
+installed config still carries the V100 LLM stanzas. Rechecked against the
+live configs on 2026-11-26 (#223).
 
 | `model_id` | Nodes |
 |---|---|
@@ -184,6 +185,8 @@ installed config still carries the V100 LLM stanzas.
 | `qwen3.6-35b-a3b-nvfp4` | gareths-homelab |
 | `qwen3.8-flash-next-iq2_xs` | gareths-homelab |
 | `qwen38-flash-next` | buster |
+| `qwen38-flash-next-v30` | buster |
+| `sensenova-u1.6-8b-mot` | buster |
 | `sdxl-juggernaut-xi` | gareths-homelab |
 | `sdxl-lightning` | gareths-homelab |
 | `voice-cascade` | buster |
@@ -194,8 +197,9 @@ installed config still carries the V100 LLM stanzas.
 
 Ids that used to be fleet-wide (`agents-a1`, `qwen3.8-27b`,
 `ornith-1.0-35b-heretic`, `ornith-1.5-35b-a3b-bigbang`) are not listed by any
-reachable node on 2026-11-22. Buster's LLM stanzas were replaced by
-`qwen38-flash-next`; digger was pruned to two stanzas when its card changed.
+reachable node. Buster's main LLM stanza is `qwen38-flash-next`, with
+`qwen38-flash-next-v30` and the SenseNova image stanza beside it; digger stays
+pruned to two stanzas on the 8GB card.
 
 Image-only extras on gareth (`sdxl-lightning`, `sdxl-juggernaut-xi`, `z-image`, …)
 keep their local ids. Do not prefix with a hostname or `-waldron` as the identity.

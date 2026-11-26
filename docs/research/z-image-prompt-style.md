@@ -2,7 +2,7 @@
 
 # Z-Image prompt style
 
-> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-22
+> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-26
 
 Date of reading: 2026-11-22. Part of #204, issue #205. Feeds the `z-image`
 prompt profile (`internal/router/imageprompt_zimage.go`).
@@ -121,7 +121,7 @@ and the ideogram4 JSON template would be read as literal text.
 |---|---|---|---|
 | `z-image` | Z-Image base | on | The base family. |
 | `z-image-juggernaut-fast` | Juggernaut Z Fast, a fine-tune of Z-Image base ([HF][jugg-hf]) | on | Its guide asks for the same natural-language scene description, with exact text quoted ([guide][jugg-guide], [Civitai][jugg-civitai], [API docs][jugg-fast]). |
-| `z-image-redcraft` | RedCraft, a Z-Image-Turbo checkpoint ([listing][redcraft]) | off | No prompt guide from its author was found, and its model file sits outside the Z-Image folder in the stanza `(verify)`. Enable once its prompt style is confirmed. |
+| `z-image-redcraft` (removed from tracked fleet configs in #223) | RedCraft, a Z-Image-Turbo checkpoint previously on digger ([listing][redcraft]) | off | No prompt guide from its author was found, and its model file sat outside the Z-Image folder in the stanza `(verify)`. Enable once its prompt style is confirmed if it returns. |
 | `z-anime-turbo` | Z-Anime, a fine-tune of Z-Image | off | Separate ticket (#206). |
 
 The local stanzas load community fine-tunes of the base text encoder rather

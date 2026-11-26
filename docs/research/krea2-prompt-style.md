@@ -2,7 +2,7 @@
 
 # Krea 2 prompt style
 
-> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-22
+> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-26
 
 Date of reading: 2026-11-22. Part of #204, issue #207. Feeds the `krea2`
 prompt profile (`internal/router/imageprompt_krea2.go`).
@@ -129,7 +129,7 @@ read as literal text.
 | `krea-2-turbo` | Krea 2 Turbo, plain txt2img | `krea2` |
 | `krea-character-creator` | Turbo with QuadView and Identity Edit LoRAs | none |
 | `krea2-ostris-edit` | Ostris reference-image edit pipeline | none |
-| Krea 2 fine-tunes in the tracked configs | Community fine-tunes with a community text encoder | none `(verify)` |
+| Krea 2 fine-tunes (removed from tracked fleet configs in #223) | Community fine-tunes with a community text encoder, previously on digger's 24GB config | none `(verify)` |
 
 **Character creator.** QuadView is an edit LoRA that turns a reference image
 into a character sheet, with one fixed trigger prompt that works best used
@@ -144,12 +144,13 @@ tracked stanza is a separate edit server matched on the body's `model` field,
 used for edits with an Identity Edit LoRA. Its prompts are edit
 instructions, so it gets no `image_pipeline` and stays unenhanced.
 
-**Fine-tunes.** The tracked configs also carry Krea 2 community fine-tunes
+**Fine-tunes.** Digger's old 24GB config carried Krea 2 community fine-tunes
 (RedCraft, DarkBeast 2 and 3, Kreamagine) that load a different community
-text encoder. One fine-tune's listing shows prose example prompts
-([DarkBeast][darkbeast]), but no card found says whether they keep the base
-prompt style or need trigger words. They are left off until someone confirms
-it `(verify)`.
+text encoder. Those stanzas left the tracked fleet configs when digger was
+pruned to two small models on the 8GB card (#223). One fine-tune's listing
+shows prose example prompts ([DarkBeast][darkbeast]), but no card found says
+whether they keep the base prompt style or need trigger words. Leave the
+profile off if they return, until someone confirms it `(verify)`.
 
 ## 4. Golden example
 
@@ -179,7 +180,9 @@ which also covers the verbatim fallback, `enhance_prompt: false` and img2img.
 - Reply check: the Z-Image check (non-empty, not a JSON object, every
   double-quoted span of the original kept word for word).
 - Fallback: the original prompt verbatim, `X-SD-Shim-Prompt-Source: original`.
-- Enabled on the three tracked `krea-2-turbo` stanzas named in #207.
+- Enabled on the tracked `krea-2-turbo` stanzas on buster and gareths-homelab.
+  nugget's last tracked copy still has one, but that node was offline and was
+  not re-synced in #223.
 
 See [`SPEC.md`](../../SPEC.md) for the shared skip rules, budget and headers.
 
