@@ -34,6 +34,7 @@ var pathAPITypes = []struct{ prefix, apiType string }{
 	{"/sdapi/v1/", config.APITypeImage},
 	{"/v1/embeddings", config.APITypeEmbedding},
 	{"/v1/rerank", config.APITypeRerank},
+	{"/v1/systemone", config.APITypeDecision},
 }
 
 // ambiguousTypeError is a model-less request whose path maps to an api_type

@@ -184,7 +184,8 @@ PROBE_TIMEOUT=600 PROBE_HEALTH=/health \
 ```
 
 `TYPE` is an `api_type`: `chat`, `embedding`, `rerank`, `image`, `speech`,
-`transcription`, `realtime`, `video`, `audio_gen`. `MODEL` defaults to
+`transcription`, `realtime`, `video`, `audio_gen` (`decision` is not a probe
+type yet; use the curl steps in §8). `MODEL` defaults to
 `probe`. `PROBE_HEALTH` overrides the health path (defaults follow the
 research notes: `/v1/audio/health` for transcription, `/docs` for realtime,
 `/sdapi/v1/sd-models` for video, `/health` otherwise). The tiny request is one
@@ -226,3 +227,54 @@ deploy/overlay-split.py --node <node> --check configs/<node>.yaml
 A bare `cp /opt/ai/config/model-router.yaml configs/<node>.yaml` is now a bug:
 it puts real addresses back into git, which is what #184/#195 removed. The
 `internal/config` guard test fails the build if one gets committed.
+
+## 8. Decision models
+
+A decision model answers `POST /v1/systemone` (state plus named, typed
+questions in, probabilities out). The sources say Kev-9B runs in stock
+llama-server from a GGUF with a build that has llama.cpp PR #29818 (October
+2026 or newer); that is unverified until the steps below have run. It is
+a static binary in `/opt/ai/bin`, so there is no venv. Run the smoke test on
+the 24 GB RTX 3090 node: the BF16 file does not fit a 16 GB card.
+
+| Item | Value |
+|---|---|
+| Card | `jaredpalmer/kev-9b`, revision `b5d8c18e` (v2, Kev 1.0) |
+| Weights | BF16 GGUF from `ggml-org/Kev-9B-GGUF`, by hand into `/opt/ai/models/decision/` |
+| Stanza | `configs/kev-9b.example.yaml` |
+| p50 decision latency | ⚪ not measured yet: fill in after the steps below |
+| GGUF revision vs `b5d8c18e` | ⚪ not checked yet |
+
+> **NOTICE:** Stop or evict whatever holds the card first. The router does
+> not download weights, so a missing file fails the start, not the request.
+
+```bash
+# 1. the build knows decision models (the PR landed 2026-10-02)
+/opt/ai/bin/llama-server --version
+
+# 2. start it by hand on a spare port and wait for /health
+/opt/ai/bin/llama-server --model /opt/ai/models/decision/Kev-9B-BF16.gguf \
+  --port 5960 --host 127.0.0.1 --n-gpu-layers 999 --ctx-size 16384 --parallel 1 &
+until curl -sf http://127.0.0.1:5960/health; do sleep 2; done
+
+# 3. one decision (made-up state)
+curl -s http://127.0.0.1:5960/v1/systemone -H 'Content-Type: application/json' -d '{
+  "model": "kev-9b",
+  "state": "Order A-1001 arrived with a cracked lid; the customer asks for their money back.",
+  "questions": {
+    "intent": {"type": "choice", "options": ["refund", "replace", "other"]},
+    "urgent": {"type": "noul", "instructions": "The customer needs an answer today."}
+  }}'
+
+# 4. stop the hand-started server, copy the kev-9b stanza into the node
+#    config, save step 3's body as decision.json, send it once to load the
+#    model, then time 50 warm decisions through the router and take the median
+for i in $(seq 50); do
+  curl -s -o /dev/null -w '%{time_total}\n' http://127.0.0.1:18080/v1/systemone \
+    -H 'Content-Type: application/json' -d @decision.json
+done | sort -n | sed -n 25p
+```
+
+Write the p50 (seconds, batch 1, warm) and `nvidia-smi` memory use into the
+table above and into the
+[research page](../docs/research/decision-models.md#latency-claims-and-what-they-measure).

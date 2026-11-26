@@ -15,6 +15,7 @@ Tags: `v0.1.0` (back-filled from the merges on `master` up to 2026-11-22, re-poi
 ### Added
 
 - `deploy/swap-over.md`: "Config and binary move together" and "Check a tracked config against a live node" (#222).
+- `api_type: decision` with `decision_style: systemone`: decision models (Kev-9B as the fixture) are served on `POST /v1/systemone`, passed through unchanged. A malformed request is a 400 and a malformed reply a 502, both naming the model; probabilities and confidence reach the client byte for byte, and a 402 or 403 is never retried. A model-less `/v1/systemone` request takes the decision default. The Playground has a Decision tab, Activity rows show each answer and the lowest confidence, and `cmd/fake-model` answers `/v1/systemone`. Example stanza `configs/kev-9b.example.yaml`; research in `docs/research/decision-models.md`, design in ADR 0004. No node config changes (#225).
 
 ## [0.3.0] - 2026-11-22
 

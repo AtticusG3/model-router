@@ -3,6 +3,7 @@ package router
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1437,6 +1438,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	req = withRequestedID(req, ref.Raw)
+	// A bad System One envelope is refused before any route (local, pool or
+	// peer) can cold-start a model or spill.
+	if req.Method == http.MethodPost && req.URL.Path == systemOnePath {
+		if err := checkSystemOneRequest(req, cmp.Or(ref.Raw, ref.Local)); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if ref.Pool != "" {
 		r.servePool(w, req, ref.Pool)
 		return
@@ -2007,6 +2016,9 @@ func (r *Router) proxyLocalHeld(w http.ResponseWriter, req *http.Request, key st
 			defer cancel()
 			req = req.WithContext(ctx)
 		}
+		if isSystemOne(req, s) {
+			req = req.WithContext(context.WithValue(req.Context(), decisionReplyKey{}, s.ModelID))
+		}
 	}
 	r.proxyJobAware(w, req, Target{Local: key}, m.proxy(), key, r.node)
 	return nil
@@ -2253,6 +2265,11 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 				r.URL.Path, r.URL.RawPath = p, ""
 			}
 			r.URL.RawQuery = req.URL.RawQuery
+			// The System One reply check reads the body, so let the Transport
+			// negotiate gzip itself and hand back a decoded reply.
+			if _, ok := req.Context().Value(decisionReplyKey{}).(string); ok {
+				r.Header.Del("Accept-Encoding")
+			}
 			// This router is the browser trust boundary. It vouches only for a
 			// request with no Origin (a non-browser client) or one from its own
 			// /ui/ page (Origin host equals the request host). Those lose the
@@ -2288,6 +2305,9 @@ func (r *Router) proxyToWriter(w http.ResponseWriter, req *http.Request, baseURL
 			}
 			http.Error(w, "upstream error: "+err.Error(), http.StatusBadGateway)
 		},
+	}
+	if model, ok := req.Context().Value(decisionReplyKey{}).(string); ok {
+		proxy.ModifyResponse = checkDecisionReply(model)
 	}
 	// Tell any fronting proxy (nginx on gareth) not to buffer SSE.
 	w.Header().Set("X-Accel-Buffering", "no")

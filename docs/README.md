@@ -2,7 +2,7 @@
 
 # model-router docs
 
-> **Type:** Reference (index) · **Audience:** everyone · **Last reviewed:** 2026-11-22 · **Owner:** @kevyn
+> **Type:** Reference (index) · **Audience:** everyone · **Last reviewed:** 2026-11-25 · **Owner:** @kevyn
 
 ## Start here
 
@@ -43,7 +43,7 @@ flowchart TD
   classDef stop fill:#b71c1c,stroke:#7f0000,color:#ffffff
 ```
 
-Simplified: `on_failure` retries after an admit timeout and edge cases are left out. The detail behind each box is in [SPEC.md](../SPEC.md) and the three decision records below.
+Simplified: `on_failure` retries after an admit timeout and edge cases are left out. The detail behind each box is in [SPEC.md](../SPEC.md) and the decision records below.
 
 ## All pages
 
@@ -51,8 +51,8 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 
 | Section | Page | Type | Status | Last reviewed |
 |---|---|---|---|---|
-| Repo root | [README](../README.md) | Reference | 🟢 current | 2026-11-22 |
-| Repo root | [SPEC](../SPEC.md) | Explanation | 🟢 current | 2026-11-22 |
+| Repo root | [README](../README.md) | Reference | 🟢 current | 2026-11-25 |
+| Repo root | [SPEC](../SPEC.md) | Explanation | 🟢 current | 2026-11-25 |
 | Repo root | [PLAN](../PLAN.md) | Explanation | 🟡 needs review (hardware table predates the 2026-11-22 fleet) | 2026-11-22 |
 | Repo root | [Glossary](../GLOSSARY.md) | Reference | 🟢 current | n/a |
 | Repo root | [CHANGELOG](../CHANGELOG.md) | Reference | 🟢 current | 2026-11-22 |
@@ -67,6 +67,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Decisions | [0001 Start cooldown is not a crash restart](adr/0001-start-cooldown-is-not-a-crash-restart.md) | Explanation | 🟢 current | 2026-11-22 |
 | Decisions | [0002 Headroom is MB the node will not book](adr/0002-headroom-is-mb-the-node-will-not-book.md) | Explanation | 🟢 current | 2026-11-22 |
 | Decisions | [0003 A failed load tries the next router peer](adr/0003-a-failed-load-tries-the-next-router-peer.md) | Explanation | 🟢 current | 2026-11-22 |
+| Decisions | [0004 Decision models pass System One through](adr/0004-decision-models-pass-system-one-through.md) | Explanation | 🟢 current | 2026-11-25 |
 | Research | [Open-source model-router landscape](research/oss-model-router-landscape.md) | Explanation | 🟢 current (read 2026-10-25) | 2026-11-22 |
 | Research | [Speech-to-text backends](research/stt-backends.md) | Explanation | 🟢 current (read 2026-11-20) | 2026-11-22 |
 | Research | [Text-to-speech backends](research/tts-backends.md) | Explanation | 🟢 current (read 2026-11-20) | 2026-11-22 |
@@ -81,6 +82,7 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 | Research | [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
 | Research | [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md) | Explanation | 🟢 current (read 2026-11-22) | 2026-11-22 |
+| Research | [Decision models](research/decision-models.md) | Explanation | 🟡 current (read 2026-11-25), smoke test not run | 2026-11-25 |
 | Agent setup | [Issue tracker](agents/issue-tracker.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Triage labels](agents/triage-labels.md) | Reference | 🟢 current | 2026-11-22 |
 | Agent setup | [Domain docs](agents/domain.md) | Reference | 🟢 current | 2026-11-22 |
@@ -96,11 +98,14 @@ Legend: 🟢 current · 🟡 needs review · 🔴 known wrong · 🔵 planned
 - [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md): the research behind the `fibo-2.0` caption profile.
 - [FLUX.3 Klein prompt style](research/flux3-klein-prompt-style.md): the research behind the `flux3-klein` caption profile.
 - [Qwen-Image 2.1 prompt style](research/qwen-image-2.1-prompt-style.md): the research behind the `qwen-image-2.1` caption profile.
+- [Decision models](research/decision-models.md): the research behind `api_type: decision`.
 
 ## Linked from
 
 <!-- backlinks:start -->
 - [A failed load tries the next router peer](adr/0003-a-failed-load-tries-the-next-router-peer.md)
+- [Decision models](research/decision-models.md)
+- [Decision models pass System One through](adr/0004-decision-models-pass-system-one-through.md)
 - [Domain Docs](agents/domain.md)
 - [Fibo 2.0 prompt style](research/fibo-2.0-prompt-style.md)
 - [FLUX.2 Klein prompt style](research/flux2-klein-prompt-style.md)

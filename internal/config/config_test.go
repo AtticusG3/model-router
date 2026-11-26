@@ -746,6 +746,37 @@ func TestAPITypeValidation(t *testing.T) {
 	}
 }
 
+// A decision stanza declares the wire contract it speaks; -check names the
+// stanza when that contract is unknown or set on a non-decision stanza.
+func TestDecisionConfigValidation(t *testing.T) {
+	for _, extra := range []string{"", ", decision_style: systemone"} {
+		cfg, err := Parse([]byte("stanzas:\n  - {model_id: kev-9b, command: x, api_type: decision" + extra + "}\n"))
+		if err != nil {
+			t.Fatalf("decision stanza%s rejected: %v", extra, err)
+		}
+		if got := cfg.Stanza("kev-9b").APIType; got != "decision" {
+			t.Fatalf("api_type = %q, want decision", got)
+		}
+	}
+	for _, tc := range []struct{ yaml, want string }{
+		{"api_type: decision, decision_style: native", `stanza "kev-9b": decision_style "native" is not valid; must be one of systemone`},
+		{"api_type: chat, decision_style: systemone", `stanza "kev-9b": decision_style is only valid with api_type: decision`},
+		{"api_type: decisions", `stanza "kev-9b": api_type "decisions" is not valid`},
+	} {
+		_, err := Parse([]byte("stanzas:\n  - {model_id: kev-9b, command: x, " + tc.yaml + "}\n"))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", tc.yaml, err, tc.want)
+		}
+	}
+	cfg, err := Load("../../configs/kev-9b.example.yaml")
+	if err != nil {
+		t.Fatalf("tracked decision example: %v", err)
+	}
+	if s := cfg.Stanza("kev-9b"); s == nil || s.APIType != "decision" {
+		t.Fatalf("kev-9b.example.yaml: kev-9b stanza = %+v, want api_type decision", s)
+	}
+}
+
 func TestPeerSpillValidation(t *testing.T) {
 	cfg, err := Parse([]byte("stanzas:\n  - {model_id: a, command: x}\n"))
 	if err != nil {

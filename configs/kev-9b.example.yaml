@@ -1,0 +1,34 @@
+# kev-9b -- example decision stanza (#225). Not a node config: no node loads
+# this file. Copy the stanza into a node's config when the rollout ticket runs.
+#
+# Kev-9B is a prefill-only decision model (System One API, POST /v1/systemone).
+# The sources say llama-server serves it from a GGUF since upstream llama.cpp
+# PR #29818, picking decision mode from the GGUF metadata with no extra flag.
+# Unverified: the smoke test in deploy/backends.md has not run yet.
+# Weights: the BF16 file from the ggml-org/Kev-9B-GGUF repo, downloaded by hand
+# (the router never downloads at request time). File name and vram_mb are
+# estimates until the smoke test in deploy/backends.md is run (verify).
+# Research and verdicts: docs/research/decision-models.md. Design: docs/adr/0004.
+
+listen: 127.0.0.1:8081
+start_port: 5901
+
+stanzas:
+  - model_id: kev-9b
+    name: "Kev 9B (decision, System One)"
+    params: 9B
+    hf_repo: ggml-org/Kev-9B-GGUF
+    aliases: [kev]
+    command: >
+      /opt/ai/bin/llama-server
+      --model /opt/ai/models/decision/Kev-9B-BF16.gguf
+      --port {port} --host 127.0.0.1
+      --n-gpu-layers 999
+      --ctx-size 16384 --parallel 1
+      --flash-attn on
+    vram_mb: 22000
+    spin_up_seconds: 120
+    api_type: decision
+    decision_style: systemone
+    health_check: /health
+    idle_ttl_seconds: 900

@@ -6,7 +6,7 @@ entirely from a YAML config. See `SPEC.md` (goals/architecture), `PLAN.md` (flee
 `docs/vram-fit-ladder.md` (shared `model_id`s and how to fit a weight on a GPU).
 The full docs map is [docs/README.md](docs/README.md).
 
-> **Last reviewed:** 2026-11-22
+> **Last reviewed:** 2026-11-25
 
 ## What it does
 
@@ -378,8 +378,8 @@ without evicting. Extra copies get ports above the highest stanza port
 (`-check` lists them), and each one idles out on its own.
 
 `api_type` is validated against a fixed vocabulary: `chat`, `embedding`,
-`rerank`, `image`, `speech`, `transcription`, `realtime`, `video`, `audio_gen`.
-An empty value means `chat`; anything else fails `-check` and lists the valid
+`rerank`, `image`, `speech`, `transcription`, `realtime`, `video`, `audio_gen`,
+`decision`. An empty value means `chat`; anything else fails `-check` and lists the valid
 values, so a typo like `transcribe` is caught at load. `-check` prints the type
 per stanza.
 
@@ -455,10 +455,35 @@ the `api_type` that path serves: `/v1/audio/speech` and `/v1/audio/voices` → `
 `/v1/audio/transcriptions` and `/v1/audio/translations` → `transcription`,
 `/v1/realtime` → `realtime`, `/v1/videos` → `video`,
 `/v1/audio/generations` → `audio_gen`, `/v1/images/*` and `/sdapi/v1/*` →
-`image`, `/v1/embeddings` → `embedding`, `/v1/rerank` → `rerank`. That type's
+`image`, `/v1/embeddings` → `embedding`, `/v1/rerank` → `rerank`,
+`/v1/systemone` → `decision`. That type's
 `path_default: true` stanza (or its only stanza) is used; several candidates and
 no default is a `400` that names them. Only one stanza per `api_type` may be
 `path_default`; `-check` rejects a second.
+
+### Decision models
+
+An `api_type: decision` stanza serves a decision model (a state and named,
+typed questions in, a probability per option out, no text) on the System One
+API, `POST /v1/systemone`. The sources say llama-server serves Kev-9B that
+way from a GGUF; that is unverified until the smoke test in
+`deploy/backends.md` runs.
+`decision_style: systemone` is the default and the only value; anything else,
+or the key on another `api_type`, fails `-check` with the stanza named.
+
+| What the router does | Result |
+|---|---|
+| Body is not a JSON object with `state` and named, typed `questions` | `400` naming the model, before any load, on every route (stanza, alias, pool, peer) |
+| Backend answers `2xx` without an `answers` object | `502` naming the model |
+| Backend answers `2xx` with answers | client gets the backend's bytes unchanged |
+| Backend answers `402`, `403` or anything else | passed through once, never retried; only a pool tries its next target on a `5xx`, as for any pool |
+
+The Playground **Decision** tab lists decision stanzas only and sends the
+System One body as typed. Activity rows show the question count, each answer
+and the lowest confidence. Example stanza: `configs/kev-9b.example.yaml`.
+Smoke test: [deploy/backends.md](deploy/backends.md#8-decision-models).
+Candidates and licences:
+[docs/research/decision-models.md](docs/research/decision-models.md).
 
 ### Speech
 
