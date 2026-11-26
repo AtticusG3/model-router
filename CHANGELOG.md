@@ -10,6 +10,7 @@ Tags: `v0.1.0` (back-filled from the merges on `master` up to 2026-11-22, re-poi
 
 ### Changed
 
+- Kev-9B smoke test on buster's RTX 3090 passed (`111.6 ms` p50 for 3 questions, `35.4 ms` p50 for 1 choice question, `16,532 MiB` VRAM). Updated `configs/kev-9b.example.yaml`, `deploy/backends.md`, `docs/research/decision-models.md`, ADR 0004, `SPEC.md` and `README.md` with the measured numbers, verified GGUF hash/revision, and the requirement to use `/home/kevyn/infra/llama.cpp-olala/build/bin/llama-server` because `/opt/ai/bin/llama-server` (`llama.cpp-unified`) lacks `/v1/systemone` (Refs #225).
 - Deploy docs now describe the fleet they deploy to: the four nodes that run the router, the binary/config pairing rule with its real failure message, the tracked-vs-live diff recipe, and a flowchart for the binary upgrade. The `model_id` catalog and the VRAM ladder's hardware note follow the live configs (#222).
 
 ### Added

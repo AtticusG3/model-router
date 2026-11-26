@@ -2,7 +2,7 @@
 
 # Decision models
 
-> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-25 · **Owner:** @kevyn
+> **Type:** Explanation · **Audience:** maintainers · **Last reviewed:** 2026-11-26 · **Owner:** @kevyn
 
 Phase 0 for #225: what each named decision model is, whether it resolves to
 real weights or a real API, and whether this fleet can serve it. Sources were
@@ -113,6 +113,7 @@ independent CLINC-150 result is the one to plan around: gate on Kev's
 | 32.8 ms | Laya multilingual (322M) | single-pass classification | Tesla T4 | not stated, read as batch 1 (verify) |
 | 39.5 ms, "about 33 ms" | Laya English (421M) | single-pass classification; 33 ms is the headline | Tesla T4 | not stated (verify) |
 | 590 ms median, 798 ms p95 | Kev-9B | per decision, read from a cost-against-latency figure (verify the column meaning) | hosted notebook GPU, model unknown | median and p95 |
+| 111.6 ms p50, 112.4 ms p95 (328.2 ms cold first pass); 35.4 ms p50 single `choice` | Kev-9B (`Kev-9B-BF16.gguf`) | `POST /v1/systemone` (3 questions: `choice`, `score`, `noul`; and 1 `choice`) | buster RTX 3090 24 GB (`16,532 MiB` VRAM, `llama.cpp-olala` `55c22dc`) | batch 1, warm (N=25) |
 | 33 ms median, 822 ms p95 | Span-02 | Jev Decision Index run, reasoning on when unsure | one RTX PRO 6000, vendor engine | median and p95 |
 
 None of these numbers is comparable with another: different models, cards,
@@ -139,17 +140,20 @@ decision models.
 
 | Candidate | llama-server | vLLM / SGLang | Hosted | Fits |
 |---|---|---|---|---|
-| Kev-9B | 🟡 claimed, GGUF since PR #29818 (October 2026 builds); smoke test not run (verify) | not needed | no | BF16 on the 24 GB RTX 3090 node; Q4_K_M (about 7 GB) on any 12 GB card |
+| Kev-9B | 🟢 verified on `llama.cpp-olala` (`55c22dc`, includes PR #29818); `/opt/ai/bin/llama-server` (`llama.cpp-unified` `10881`) lacks `/v1/systemone` | not needed | no | BF16 (`16,532 MiB` VRAM) on the 24 GB RTX 3090 node; Q4_K_M (about 7 GB) on any 12 GB card |
 | NeoHorse-Jev-4B | 🟡 only its own llama.cpp-based runtime | 🟢 yes | a client library targets one | 4B, any 16 GB card (verify) |
 | Laya | 🟡 listed in PR #29818 (verify) | n/a | no | well under 2 GB |
 | d1-Omni-2B | 🟢 b11960 or newer, partial | n/a | no | 2B, any card |
 | OpenJev | 🔴 unresolved | 🔴 | 🔴 | unknown |
 | Span-02 | n/a | n/a | 🟢 Respan, paid | n/a |
 
-The sources say Kev, d1 and (per the PR) Laya load in stock llama-server,
-which already runs under the router on every node. Until the Kev smoke test
-runs, the #225 assumption that none of them are llama-server backends stands
-(verify). The passthrough design
+The Kev-9B smoke test on buster's RTX 3090 confirmed that `llama.cpp-olala`
+(`0.5.0-dev`, commit `55c22dc`, which includes PR #29818) serves
+`Kev-9B-BF16.gguf` on `POST /v1/systemone` for `choice`, `score` and `noul`.
+However, `/opt/ai/bin/llama-server` (`llama.cpp-unified`, `10881`) on buster
+does not include `/v1/systemone`, so decision stanzas need the `llama.cpp-olala`
+binary until `/opt/ai/bin/llama-server` is rebuilt on a post-PR-#29818 base.
+The passthrough design
 ([ADR 0004](../adr/0004-decision-models-pass-system-one-through.md)) rests on
 the published System One contract, not on llama-server.
 
@@ -159,8 +163,8 @@ the published System One contract, not on llama-server.
 |---|---|
 | `api_type: decision`, `decision_style: systemone` | 🟢 shipped |
 | `kev-9b` example stanza (`configs/kev-9b.example.yaml`) | 🟢 shipped, loaded by no node |
-| Real-weights smoke test and p50 on the 24 GB node | ⚪ commands written, not run (no GPU access in this change) |
-| GGUF file name and the Kev revision it was converted from | ⚪ not checked (verify against `b5d8c18e`) |
+| Real-weights smoke test and p50 on the 24 GB node | 🟢 passed on buster RTX 3090 via `llama.cpp-olala` (`16,532 MiB` VRAM; `111.6 ms` p50 3-question, `35.4 ms` p50 1-question) |
+| GGUF file name and the Kev revision it was converted from | 🟢 `Kev-9B-BF16.gguf`, `.src_sha` `db029f08` (weights unchanged from `b5d8c18e`) |
 | NeoHorse, Laya, d1 stanzas | ⚪ later ticket, one per model |
 | OpenJev | 🔴 blocked on the licence conflict |
 | Span-02 peer | ⚪ needs a path shim and a billing decision |
