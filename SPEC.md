@@ -203,8 +203,8 @@ stanzas:
       - {from: /v1/audio/transcriptions, to: /inference}
 
   - model_id: kev-9b
-    command: "/opt/ai/bin/llama-server --model /opt/ai/models/decision/Kev-9B-BF16.gguf --port {port}"
-    vram_mb: 22000
+    command: "/home/kevyn/infra/llama.cpp-olala/build/bin/llama-server --model /opt/ai/models/decision/Kev-9B-BF16.gguf --port {port}"
+    vram_mb: 17000
     api_type: decision
     decision_style: systemone  # decision only; systemone (the default) is the one value
 
@@ -925,8 +925,10 @@ rewrite:
 typed questions in, a probability per option out, no generated text. The
 contract is the System One API, `POST /v1/systemone`, passed through unchanged
 ([ADR 0004](docs/adr/0004-decision-models-pass-system-one-through.md)).
-The sources say llama-server serves Kev-9B and d1-Omni-2B on that route from
-a GGUF (unverified until the Kev smoke test runs); the
+The buster RTX 3090 smoke test confirmed `llama.cpp-olala` (`55c22dc`) serves
+Kev-9B on that route from a GGUF, while `/opt/ai/bin/llama-server`
+(`llama.cpp-unified`, `10881`) lacks `/v1/systemone` (d1-Omni-2B remains
+untested on GPU); the
 candidates and their licences are in
 [docs/research/decision-models.md](docs/research/decision-models.md).
 `configs/kev-9b.example.yaml` is the example stanza.
